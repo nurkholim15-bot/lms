@@ -1,0 +1,512 @@
+package usecases
+
+import (
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/Knetic/govaluate"
+
+	"lms-backend/models"
+	"lms-backend/repositories"
+)
+
+type ApplicationUseCase interface {
+	GetAllApplications() ([]models.LoanApplication, error)
+	SimulateApplication(req SubmitApplicationRequest) (SimulationResult, error)
+	SubmitApplication(req SubmitApplicationRequest) (*models.LoanApplication, error)
+	ApproveApplication(applicationNo int64, approvedAmount float64, notes string) error
+	ProcessApproval(applicationNo int64, action string, notes string, updatedUser string) error
+	GetLoanTrackings(applicationNo int64) ([]models.LoanTracking, error)
+	DisburseApplication(applicationNo int64, req DisburseRequest, updatedUser string) error
+}
+
+type applicationUseCase struct {
+	appRepo     repositories.ApplicationRepository
+	productRepo repositories.ProductRepository
+	paramRepo   repositories.ParameterRepository
+}
+
+func NewApplicationUseCase(ar repositories.ApplicationRepository, pr repositories.ProductRepository, pRepo repositories.ParameterRepository) ApplicationUseCase {
+	return &applicationUseCase{appRepo: ar, productRepo: pr, paramRepo: pRepo}
+}
+
+type SubmitApplicationRequest struct {
+	MemberNo        int64   `json:"member_no"`
+	ProductID       int64   `json:"product_id"`
+	RequestedAmount float64 `json:"requested_amount"`
+	Tenor           int     `json:"tenor"`
+}
+
+type SimulationResult struct {
+	PrincipalPerMonth float64 `json:"principal_per_month"`
+	InterestPerMonth  float64 `json:"interest_per_month"`
+	AdminFee          float64 `json:"admin_fee"`
+	TotalInstallment  float64 `json:"total_installment"`
+	TotalLoanCost     float64 `json:"total_loan_cost"`
+	Tenor             int     `json:"tenor"`
+	InterestRate      float64 `json:"interest_rate"`
+	CreditLimit       float64 `json:"credit_limit"`
+}
+
+// Helper to resolve employee_id and name dynamically from lms_sch.employees
+func (u *applicationUseCase) resolveUserInfo(userKey string) (string, string) {
+	userKey = strings.TrimSpace(userKey)
+	if userKey == "" {
+		userKey = "10101"
+	}
+
+	var emp models.Employee
+	empIdInt, errConv := strconv.ParseInt(userKey, 10, 64)
+	if errConv == nil && empIdInt > 0 {
+		if err := u.appRepo.GetDB().Where("employee_id = ?", empIdInt).First(&emp).Error; err == nil && emp.Name != "" {
+			return strconv.FormatInt(emp.EmployeeID, 10), emp.Name
+		}
+	}
+
+	if err := u.appRepo.GetDB().Where("name ILIKE ? OR CAST(employee_id AS VARCHAR) = ?", "%"+userKey+"%", userKey).First(&emp).Error; err == nil && emp.Name != "" {
+		return strconv.FormatInt(emp.EmployeeID, 10), emp.Name
+	}
+
+	var defaultEmp models.Employee
+	if err := u.appRepo.GetDB().Where("employee_id = 10101").First(&defaultEmp).Error; err == nil && defaultEmp.Name != "" {
+		return "10101", defaultEmp.Name
+	}
+
+	return userKey, userKey
+}
+
+// Helper to get parameter value safely
+func (u *applicationUseCase) getParamVal(key string, defaultVal string) string {
+	param, err := u.paramRepo.FindByKey(key)
+	if err != nil {
+		return defaultVal
+	}
+	return param.KeyValue
+}
+
+func (u *applicationUseCase) runSimulation(req SubmitApplicationRequest, product models.LoanProduct) (SimulationResult, error) {
+	db := u.appRepo.GetDB()
+
+	var member models.Member
+	if err := db.Where("employee_id = ?", req.MemberNo).First(&member).Error; err != nil {
+		return SimulationResult{}, fmt.Errorf("member not found")
+	}
+
+	var employee models.Employee
+	if err := db.Where("employee_id = ?", member.EmployeeID).First(&employee).Error; err != nil {
+		return SimulationResult{}, fmt.Errorf("employee not found")
+	}
+
+	var category models.EmployeeCategory
+	if err := db.Where("category_code = ?", employee.CategoryCode).First(&category).Error; err != nil {
+		return SimulationResult{}, fmt.Errorf("employee category not found")
+	}
+
+	// 1. Fetch Global Parameters
+	minAdminFeeStr := u.getParamVal("LOAN_MIN_ADMIN_FEE", "0")
+	adminFormulaStr := u.getParamVal("LOAN_ADMIN_FORMULA", "0")
+	limitFormulaStr := u.getParamVal("LOAN_LIMIT_FORMULA", "REQUESTED_AMOUNT") // Default: no limit
+
+	// Evaluate Limits (Real Salary)
+	salary := employee.Salary
+	currentDay := float64(time.Now().Day())
+	
+	params := make(map[string]interface{})
+	params["REQUESTED_AMOUNT"] = req.RequestedAmount
+	params["SALARY"] = salary
+	params["salary"] = salary
+	params["TENOR"] = req.Tenor
+	params["DAY"] = currentDay
+	params["Day"] = currentDay
+	params["day"] = currentDay
+
+	// Check Limit
+	limitVal := 0.0
+	limitExpr, err := govaluate.NewEvaluableExpression(limitFormulaStr)
+	if err == nil {
+		limitResult, err := limitExpr.Evaluate(params)
+		if err == nil {
+			if val, ok := limitResult.(float64); ok {
+				limitVal = val
+				
+				// Apply Category Max Limit Constraint
+				if category.MaxLimit > 0 && limitVal > category.MaxLimit {
+					limitVal = category.MaxLimit
+				}
+				
+				if req.RequestedAmount > limitVal {
+					return SimulationResult{}, fmt.Errorf("requested amount exceeds maximum limit of %.2f", limitVal)
+				}
+			}
+		}
+	}
+
+	// Calculate Admin Fee
+	adminFee := 0.0
+	minAdminFee, _ := strconv.ParseFloat(minAdminFeeStr, 64)
+	adminExpr, err := govaluate.NewEvaluableExpression(adminFormulaStr)
+	if err == nil {
+		adminResult, err := adminExpr.Evaluate(params)
+		if err == nil {
+			if val, ok := adminResult.(float64); ok {
+				adminFee = val
+			}
+		}
+	}
+	if adminFee < minAdminFee {
+		adminFee = minAdminFee
+	}
+
+	// 2. Simple Simulation Logic (Pokok + Bunga Flat)
+	principalPerMonth := req.RequestedAmount / float64(req.Tenor)
+	interestPerMonth := (req.RequestedAmount * (product.InterestRate / 100.0))
+	totalInstallment := principalPerMonth + interestPerMonth
+
+	return SimulationResult{
+		PrincipalPerMonth: principalPerMonth,
+		InterestPerMonth:  interestPerMonth,
+		AdminFee:          adminFee,
+		TotalInstallment:  totalInstallment,
+		TotalLoanCost:     totalInstallment*float64(req.Tenor) + adminFee,
+		Tenor:             req.Tenor,
+		InterestRate:      product.InterestRate,
+		CreditLimit:       limitVal,
+	}, nil
+}
+
+func (u *applicationUseCase) SimulateApplication(req SubmitApplicationRequest) (SimulationResult, error) {
+	product, err := u.productRepo.FindByID(req.ProductID)
+	if err != nil {
+		return SimulationResult{}, errors.New("product not found")
+	}
+	return u.runSimulation(req, product)
+}
+
+func (u *applicationUseCase) GetAllApplications() ([]models.LoanApplication, error) {
+	return u.appRepo.FindAll()
+}
+
+func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*models.LoanApplication, error) {
+	// 1. Get Product Details for validation
+	product, err := u.productRepo.FindByID(req.ProductID)
+	if err != nil {
+		return nil, errors.New("product not found")
+	}
+
+	db := u.appRepo.GetDB()
+	var member models.Member
+	if err := db.Where("employee_id = ?", req.MemberNo).First(&member).Error; err != nil {
+		return nil, fmt.Errorf("member not found")
+	}
+
+	// 2. Validate Submission Date (LOAN_START_PERIOD to LOAN_END_PERIOD)
+	startPeriodStr := u.getParamVal("LOAN_START_PERIOD", "1")
+	endPeriodStr := u.getParamVal("LOAN_END_PERIOD", "31")
+	startPeriod, _ := strconv.Atoi(startPeriodStr)
+	endPeriod, _ := strconv.Atoi(endPeriodStr)
+	
+	currentDay := time.Now().Day()
+	if currentDay < startPeriod || currentDay > endPeriod {
+		return nil, fmt.Errorf("pengajuan pinjaman hanya diizinkan antara tanggal %d sampai %d", startPeriod, endPeriod)
+	}
+
+	// 3. Validate Tenor (Override product with Global Max Tenor if smaller)
+	maxTenorStr := u.getParamVal("LOAN_MAX_TENOR", strconv.Itoa(product.MaxTenorMonths))
+	maxTenor, _ := strconv.Atoi(maxTenorStr)
+	if product.MaxTenorMonths < maxTenor {
+		maxTenor = product.MaxTenorMonths
+	}
+	
+	if req.Tenor > maxTenor {
+		return nil, fmt.Errorf("requested tenor exceeds maximum allowed (%d months)", maxTenor)
+	}
+
+	// 4. Run Simulation & get Breakdown
+	simResult, err := u.runSimulation(req, product)
+	if err != nil {
+		return nil, err
+	}
+
+	// 5. Create Application Record
+	now := time.Now()
+	appNo := time.Now().UnixNano() / int64(time.Millisecond) 
+	
+	app := &models.LoanApplication{
+		ApplicationNo:     appNo,
+		MemberNo:          member.MemberNo,
+		ProductID:         req.ProductID,
+		SubmissionDate:    now,
+		RequestedAmount:   req.RequestedAmount,
+		Tenor:             req.Tenor,
+		EligibilityResult: "ELIGIBLE",
+		Status:            "SUBMITTED",
+	}
+
+	err = u.appRepo.Create(app)
+	if err != nil {
+		return nil, err
+	}
+
+	// Save simulation details to loan_simulations table (Multiple Fields)
+	simRecord := &models.LoanSimulation{
+		ApplicationNo:     appNo,
+		MemberNo:          member.MemberNo,
+		ProductID:         req.ProductID,
+		RequestedAmount:   req.RequestedAmount,
+		Tenor:             req.Tenor,
+		PrincipalPerMonth: simResult.PrincipalPerMonth,
+		InterestPerMonth:  simResult.InterestPerMonth,
+		AdminFee:          simResult.AdminFee,
+		TotalInstallment:  simResult.TotalInstallment,
+		TotalLoanCost:     simResult.TotalLoanCost,
+		InterestRate:      simResult.InterestRate,
+		CreditLimit:       simResult.CreditLimit,
+	}
+	err = u.appRepo.GetDB().Create(simRecord).Error
+	if err != nil {
+		fmt.Printf("ERROR inserting to loan_simulations: %v\n", err)
+	}
+
+	// Save initial Tracking entry
+	subUserId, subUserName := u.resolveUserInfo(fmt.Sprintf("%d", member.EmployeeID))
+	tracking := &models.LoanTracking{
+		ApplicationNo: appNo,
+		Status:        "SUBMITTED",
+		UserID:        subUserId,
+		UserName:      subUserName,
+		ActionDate:    now,
+		Notes:         "Pengajuan pinjaman baru disubmit",
+		SLADuration:   "-",
+		IPAddress:     "127.0.0.1",
+		UserAgent:     "Browser/Kopkara LMS",
+	}
+	_ = u.appRepo.GetDB().Create(tracking).Error
+
+	return app, nil
+}
+
+func (u *applicationUseCase) ApproveApplication(applicationNo int64, approvedAmount float64, notes string) error {
+	return u.ProcessApproval(applicationNo, "APPROVED", notes, "10101")
+}
+
+func (u *applicationUseCase) ProcessApproval(applicationNo int64, action string, notes string, updatedUser string) error {
+	app, err := u.appRepo.FindByID(applicationNo)
+	if err != nil {
+		return errors.New("application not found")
+	}
+
+	if notes == "" {
+		return errors.New("catatan approval wajib diisi")
+	}
+
+	now := time.Now()
+	app.ApprovedAt = &now
+
+	// Calculate SLA duration from last tracking record
+	slaStr := "-"
+	var lastTracking models.LoanTracking
+	if err := u.appRepo.GetDB().Where("application_no = ?", app.ApplicationNo).Order("action_date desc").First(&lastTracking).Error; err == nil {
+		duration := now.Sub(lastTracking.ActionDate)
+		hours := int(duration.Hours())
+		mins := int(duration.Minutes()) % 60
+		secs := int(duration.Seconds()) % 60
+		slaStr = fmt.Sprintf("%02d:%02d:%02d", hours, mins, secs)
+	}
+
+	switch action {
+	case "APPROVED", "SETUJU":
+		app.Status = "APPROVED"
+		if app.ApprovedAmount == nil || *app.ApprovedAmount == 0 {
+			app.ApprovedAmount = &app.RequestedAmount
+		}
+		app.ApprovalNotes = notes
+
+		// Create Loan Contract for APPROVED status
+		var sim models.LoanSimulation
+		if err := u.appRepo.GetDB().Where("application_no = ?", app.ApplicationNo).First(&sim).Error; err == nil {
+			contract := models.LoanContract{
+				ApplicationNo:     app.ApplicationNo,
+				MemberNo:          app.MemberNo,
+				ProductID:         app.ProductID,
+				ApprovedAmount:    *app.ApprovedAmount,
+				Tenor:             app.Tenor,
+				PrincipalPerMonth: sim.PrincipalPerMonth,
+				InterestPerMonth:  sim.InterestPerMonth,
+				AdminFee:          sim.AdminFee,
+				TotalInstallment:  sim.TotalInstallment,
+				TotalLoanCost:     sim.TotalLoanCost,
+				ContractDate:      time.Now(),
+				Status:            "ACTIVE",
+			}
+			_ = u.appRepo.GetDB().Create(&contract).Error
+		}
+
+	case "REJECTED", "TOLAK":
+		app.Status = "REJECTED"
+		app.ApprovalNotes = notes
+	case "REVISION_REQUIRED", "REVISI":
+		app.Status = "REVISION_REQUIRED"
+		app.ApprovalNotes = notes
+	default:
+		return errors.New("action invalid: gunakan APPROVED, REJECTED, atau REVISION_REQUIRED")
+	}
+
+	// Create LoanTracking record dynamically from lms_sch.employees
+	appUserId, appUserName := u.resolveUserInfo(updatedUser)
+	tracking := &models.LoanTracking{
+		ApplicationNo: app.ApplicationNo,
+		Status:        app.Status,
+		UserID:        appUserId,
+		UserName:      appUserName,
+		ActionDate:    now,
+		Notes:         notes,
+		SLADuration:   slaStr,
+		IPAddress:     "127.0.0.1",
+		UserAgent:     "Browser/Kopkara LMS",
+	}
+	_ = u.appRepo.GetDB().Create(tracking).Error
+
+	return u.appRepo.Update(&app)
+}
+
+func (u *applicationUseCase) GetLoanTrackings(applicationNo int64) ([]models.LoanTracking, error) {
+	var trackings []models.LoanTracking
+	err := u.appRepo.GetDB().Where("application_no = ?", applicationNo).Order("action_date desc").Find(&trackings).Error
+	return trackings, err
+}
+
+type DisburseRequest struct {
+	BankAccountNo string `json:"bank_account_no"`
+	BankName      string `json:"bank_name"`
+	Notes         string `json:"notes"`
+	UpdatedUser   string `json:"updated_user"`
+}
+
+func (u *applicationUseCase) DisburseApplication(applicationNo int64, req DisburseRequest, updatedUser string) error {
+	app, err := u.appRepo.FindByID(applicationNo)
+	if err != nil {
+		return errors.New("application not found")
+	}
+
+	if app.Status != "APPROVED" {
+		return fmt.Errorf("hanya pengajuan berstatus APPROVED yang dapat dicairkan (status saat ini: %s)", app.Status)
+	}
+
+	now := time.Now()
+
+	// 1. Fetch simulation record
+	var sim models.LoanSimulation
+	if err := u.appRepo.GetDB().Where("application_no = ?", applicationNo).First(&sim).Error; err != nil {
+		return fmt.Errorf("data simulasi pinjaman tidak ditemukan: %v", err)
+	}
+
+	principalAmt := app.RequestedAmount
+	if app.ApprovedAmount != nil && *app.ApprovedAmount > 0 {
+		principalAmt = *app.ApprovedAmount
+	}
+	adminFee := sim.AdminFee
+	disbursementAmt := principalAmt - adminFee
+	if disbursementAmt < 0 {
+		disbursementAmt = principalAmt
+	}
+
+	// Generate loan_no
+	loanNo := time.Now().UnixNano() / int64(time.Millisecond)
+
+	// 2. Create Record in lms_sch.loans
+	loanRecord := &models.Loan{
+		LoanNo:             loanNo,
+		ApplicationNo:      applicationNo,
+		MemberNo:           app.MemberNo,
+		PrincipalAmount:    principalAmt,
+		AdminFee:           adminFee,
+		DisbursementAmount: disbursementAmt,
+		OutstandingAmount:  principalAmt,
+		Status:             "ACTIVE",
+	}
+	if err := u.appRepo.GetDB().Create(loanRecord).Error; err != nil {
+		return fmt.Errorf("gagal membuat rekening pinjaman (loans): %v", err)
+	}
+
+	// 3. Generate Loan Schedules in lms_sch.loan_schedules
+	tenor := app.Tenor
+	if tenor <= 0 {
+		tenor = 1
+	}
+
+	dueDay := 25
+	var dueParam models.GlobalParameter
+	if err := u.appRepo.GetDB().Where("key_name = ?", "LOAN_DUEDATE").First(&dueParam).Error; err == nil && dueParam.KeyValue != "" {
+		if d, errConv := strconv.Atoi(dueParam.KeyValue); errConv == nil && d >= 1 && d <= 28 {
+			dueDay = d
+		}
+	}
+
+	for i := 1; i <= tenor; i++ {
+		dueDate := now.AddDate(0, i, 0)
+		dueDate = time.Date(dueDate.Year(), dueDate.Month(), dueDay, 0, 0, 0, 0, dueDate.Location())
+		periodStr := dueDate.Format("2006-01")
+
+		schedule := &models.LoanSchedule{
+			LoanNo:           loanNo,
+			Period:           periodStr,
+			InstallmentNo:    i,
+			Principal:        sim.PrincipalPerMonth,
+			Interest:         sim.InterestPerMonth,
+			TotalInstallment: sim.TotalInstallment,
+			Status:           "UNPAID",
+			DueDate:          dueDate,
+		}
+		_ = u.appRepo.GetDB().Create(schedule).Error
+	}
+
+	// 4. Update Application Status to DISBURSED
+	app.Status = "DISBURSED"
+	if err := u.appRepo.Update(&app); err != nil {
+		return err
+	}
+
+	// 5. Update Contract Status to DISBURSED
+	u.appRepo.GetDB().Model(&models.LoanContract{}).Where("application_no = ?", applicationNo).Update("status", "DISBURSED")
+
+	// 6. Calculate SLA & Record LoanTracking
+	slaStr := "-"
+	var lastTracking models.LoanTracking
+	if err := u.appRepo.GetDB().Where("application_no = ?", applicationNo).Order("action_date desc").First(&lastTracking).Error; err == nil {
+		duration := now.Sub(lastTracking.ActionDate)
+		hours := int(duration.Hours())
+		mins := int(duration.Minutes()) % 60
+		secs := int(duration.Seconds()) % 60
+		slaStr = fmt.Sprintf("%02d:%02d:%02d", hours, mins, secs)
+	}
+
+	disburseNotes := req.Notes
+	if disburseNotes == "" {
+		disburseNotes = fmt.Sprintf("Dana bersih Rp %s telah dicairkan via %s (No. Rek: %s)",
+			fmt.Sprintf("%.0f", disbursementAmt), req.BankName, req.BankAccountNo)
+	}
+
+	execUserKey := updatedUser
+	if req.UpdatedUser != "" {
+		execUserKey = req.UpdatedUser
+	}
+	disbUserId, disbUserName := u.resolveUserInfo(execUserKey)
+
+	tracking := &models.LoanTracking{
+		ApplicationNo: applicationNo,
+		Status:        "DISBURSED",
+		UserID:        disbUserId,
+		UserName:      disbUserName,
+		ActionDate:    now,
+		Notes:         disburseNotes,
+		SLADuration:   slaStr,
+		IPAddress:     "127.0.0.1",
+		UserAgent:     "Browser/Kopkara LMS",
+	}
+	_ = u.appRepo.GetDB().Create(tracking).Error
+
+	return nil
+}

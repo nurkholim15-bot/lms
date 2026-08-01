@@ -1,0 +1,2732 @@
+import React, { useState, useEffect, useRef } from 'react'
+import axios from 'axios'
+
+// Konfigurasi Role dan Menu
+const MENU_CONFIG = [
+  { id: 'dashboard', label: 'Dashboard', icon: '📊', roles: ['anggota', 'admin', 'hrd'] },
+  { id: 'pengajuan', label: 'Pengajuan Pinjaman', icon: '📝', roles: ['anggota', 'admin'] },
+  { id: 'pinjaman', label: 'Daftar Pinjaman', icon: '💰', roles: ['anggota', 'admin', 'hrd'] },
+  { id: 'approval', label: 'Approval Pinjaman', icon: '✅', roles: ['admin'] },
+  { id: 'payroll', label: 'Potong Gaji (HRD)', icon: '✂️', roles: ['hrd', 'admin'] },
+  { id: 'manual-repayment', label: 'Pelunasan Manual', icon: '💳', roles: ['admin'] },
+  { id: 'products', label: 'Produk Pinjaman', icon: '📦', roles: ['admin', 'anggota', 'hrd'] },
+  { id: 'parameters', label: 'Pengaturan Parameter', icon: '⚙️', roles: ['admin'] },
+  { id: 'master', label: 'Data Master', icon: '🗃️', roles: ['admin'] },
+];
+
+function App() {
+  const fileInputRef = useRef(null);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [masterTab, setMasterTab] = useState('departments');
+  const [expandedParents, setExpandedParents] = useState({ 10: true });
+  const [masterSearchQuery, setMasterSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Autentikasi & Sesi
+  const [authToken, setAuthToken] = useState(localStorage.getItem('karisma_token') || '');
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const savedUser = localStorage.getItem('karisma_user');
+      if (!savedUser) return null;
+      const parsed = JSON.parse(savedUser);
+      return (parsed && (parsed.employee_id || parsed.username || parsed.role)) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }); // { employee_id, name, eligible, role }
+  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
+  const [loginError, setLoginError] = useState('');
+  const [products, setProducts] = useState([]);
+  const [applications, setApplications] = useState([]);
+  const [parameters, setParameters] = useState([]);
+  const getParamVal = (key, defaultVal) => {
+    const p = (parameters || []).find(item => item.key_name === key);
+    return (p && p.key_value !== undefined && p.key_value !== null) ? p.key_value : defaultVal;
+  };
+  const [loading, setLoading] = useState(false);
+  const [simulation, setSimulation] = useState(null);
+  const [dateError, setDateError] = useState('');
+  const [payrollReconciled, setPayrollReconciled] = useState(false);
+  const [importedRows, setImportedRows] = useState([]);
+  const [trackingModalOpen, setTrackingModalOpen] = useState(false);
+  const [trackingList, setTrackingList] = useState([]);
+  const [trackingAppNo, setTrackingAppNo] = useState(null);
+  const [manualForm, setManualForm] = useState({
+    loan_no: '',
+    member_no: '',
+    period: '2026-08',
+    payment_type: 'TRANSFER_BANK',
+    nominal: '',
+    reference_no: '',
+    notes: '',
+    is_full_settlement: false
+  });
+  const [manualLogs, setManualLogs] = useState([]);
+  const [allMembers, setAllMembers] = useState([]);
+  const [selectedMemberFilter, setSelectedMemberFilter] = useState('');
+  const [manualMonth, setManualMonth] = useState('08');
+  const [manualYear, setManualYear] = useState('2026');
+  const [memberSearchQuery, setMemberSearchQuery] = useState('');
+  const [memberPage, setMemberPage] = useState(1);
+  const [loanSearchQuery, setLoanSearchQuery] = useState('');
+  const [loanPage, setLoanPage] = useState(1);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [exportCutoffDate, setExportCutoffDate] = useState('');
+  const [exportCustomFolder, setExportCustomFolder] = useState('');
+  const [productModalOpen, setProductModalOpen] = useState(false);
+  const [productSearchQuery, setProductSearchQuery] = useState('');
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [productForm, setProductForm] = useState({
+    name: '',
+    loan_type: 'FLAT',
+    max_tenor_months: 24,
+    submission_period_start: 1,
+    submission_period_end: 25,
+    max_percentage_salary: 40.0,
+    interest_rate: 1.5,
+    status: 'ACTIVE'
+  });
+
+  const handleOpenTracking = async (applicationNo) => {
+    setTrackingAppNo(applicationNo);
+    try {
+      const response = await axios.get(`http://localhost:8086/api/applications/${applicationNo}/trackings`);
+      setTrackingList(response.data.data || []);
+      setTrackingModalOpen(true);
+    } catch (err) {
+      alert("Gagal mengambil riwayat tracking: " + (err.response?.data?.error || err.message));
+    }
+  };
+
+  // Master Data Generic State
+  const [masterDataList, setMasterDataList] = useState([]);
+  const [masterForm, setMasterForm] = useState({});
+  const [referenceData, setReferenceData] = useState({
+    departments: [],
+    employeeStatuses: [],
+    kopkaraStatuses: [],
+    employeeCategories: [],
+    employees: [],
+    members: [],
+    roles: [],
+    menus: [],
+    role_menus: []
+  });
+
+  // Form State
+  const [form, setForm] = useState({ member_no: 1001, product_id: '', requested_amount: '', tenor: '' });
+  const [paramForm, setParamForm] = useState({ id: 0, key_name: '', key_value: '', description: '' });
+
+  const [userInfo, setUserInfo] = useState(null);
+
+  // Fetch User Info & APM Menus directly from Backend API with SQL filters
+  useEffect(() => {
+    if (currentUser?.employee_id) {
+      axios.get(`http://localhost:8086/api/user-info/${currentUser.employee_id}`)
+        .then(res => {
+          const info = res.data;
+          setUserInfo(info);
+
+          // Pengecekan Keanggotaan: Jika bukan anggota (is_member === false) dan bukan akun superadmin
+          const isSuperAdmin = String(currentUser.username || '').toLowerCase() === 'admin';
+          if (!info.is_member && !isSuperAdmin) {
+            alert("Anda bukan anggota sehingga tidak boleh login");
+            handleLogout("Anda bukan anggota sehingga tidak boleh login");
+          }
+        })
+        .catch(err => console.error("Error fetching user info:", err));
+    } else {
+      setUserInfo(null);
+    }
+  }, [currentUser]);
+
+  // Cek role asli Karyawan dari Database LMS
+  const realEmployee = (currentUser && referenceData.employees.length > 0)
+    ? referenceData.employees.find(e => String(e.employee_id) === String(currentUser.employee_id))
+    : null;
+    
+  let roleId = userInfo ? userInfo.role_id : (realEmployee && realEmployee.role_id ? realEmployee.role_id : null);
+  
+  const realRoleName = userInfo ? userInfo.role_name : (realEmployee && realEmployee.role_id === 1 ? 'Admin' : (realEmployee && realEmployee.role_id === 2 ? 'Anggota' : 'Bukan Anggota'));
+
+  // Menyusun Dynamic Menus dari APM (High performance backend API fallback to frontend state)
+  const allowedMenuIds = referenceData.role_menus
+    .filter(rm => String(rm.role_id) === String(roleId))
+    .map(rm => String(rm.menu_id));
+
+  const visibleMenus = (userInfo && userInfo.menus && userInfo.menus.length > 0) 
+    ? userInfo.menus 
+    : referenceData.menus
+        .filter(m => allowedMenuIds.includes(String(m.menu_id)))
+        .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+  // Update HTML Document Title
+  useEffect(() => {
+    if (!currentUser) {
+      document.title = 'Kopkara LMS - Login';
+      return;
+    }
+    const roleStr = String(realRoleName || 'Anggota');
+    document.title = `Kopkara LMS - ${roleStr.charAt(0).toUpperCase() + roleStr.slice(1)}`;
+  }, [currentUser, realRoleName]);
+
+  // Fungsi untuk memanggil Backend (API Products)
+  const fetchProducts = async () => {
+    setLoading(true);
+    try {
+      const response = await axios.get('http://localhost:8086/api/products');
+      setProducts(response.data.data || []);
+    } catch (error) {
+      console.error("Error fetching products:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getStatusBadge = (status) => {
+    if (status === 'APPROVED' || status === 'DISBURSED') return 'badge badge-success';
+    if (status === 'SUBMITTED' || status === 'REVISION_REQUIRED') return 'badge badge-warning';
+    return 'badge badge-danger';
+  };
+
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '-';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime()) || d.getFullYear() <= 1970) return '-';
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = months[d.getMonth()];
+    const year = d.getFullYear();
+    const hours = String(d.getHours()).padStart(2, '0');
+    const mins = String(d.getMinutes()).padStart(2, '0');
+    const secs = String(d.getSeconds()).padStart(2, '0');
+    return `${day}-${month}-${year} ${hours}:${mins}:${secs}`;
+  };
+
+  const fetchApplications = async () => {
+    try {
+      const response = await axios.get('http://localhost:8086/api/applications');
+      setApplications(response.data.data || []);
+    } catch (error) {
+      console.error("Error fetching applications:", error);
+    }
+  };
+
+  const [payrollSchedules, setPayrollSchedules] = useState([]);
+
+  const fetchPayrollSchedules = async () => {
+    try {
+      const response = await axios.get('http://localhost:8086/api/payroll/schedules');
+      setPayrollSchedules(response.data || []);
+    } catch (error) {
+      console.error("Error fetching payroll schedules:", error);
+    }
+  };
+
+  useEffect(() => {
+    fetchApplications();
+    fetchPayrollSchedules();
+    fetchParameters();
+    fetchProducts();
+    axios.get('http://localhost:8086/api/members/all')
+      .then(res => setAllMembers(res.data.data || []))
+      .catch(err => console.error("Error fetching all members:", err));
+    if (activeTab === 'manual-repayment') {
+      axios.get('http://localhost:8086/api/payroll/deductions')
+        .then(res => setManualLogs(res.data.data || []))
+        .catch(err => console.error("Error fetching deduction logs:", err));
+    }
+  }, [activeTab]);
+
+  const handleProcessApproval = async (applicationNo, action) => {
+    const labels = {
+      APPROVED: 'SETUJU',
+      REJECTED: 'TOLAK',
+      REVISION_REQUIRED: 'REVISI'
+    };
+
+    const notes = window.prompt(`Masukkan Catatan Approval untuk tindakan [${labels[action]}] (Wajib):`);
+    if (notes === null) return; // User canceled
+    if (!notes.trim()) {
+      alert("❌ Catatan approval wajib diisi!");
+      return;
+    }
+
+    try {
+      const activeUserId = currentUser ? String(currentUser.employee_id || '10101') : '10101';
+      await axios.post(`http://localhost:8086/api/applications/${applicationNo}/approve`, {
+        action: action,
+        notes: notes.trim(),
+        updated_user: activeUserId
+      });
+      alert(`Status pengajuan berhasil diubah menjadi [${labels[action]}]!`);
+      fetchApplications();
+    } catch (err) {
+      alert("Gagal memproses approval: " + (err.response?.data?.error || err.message));
+    }
+  };
+
+  const handleDisburse = async (app) => {
+    const memberObj = referenceData.members.find(m => String(m.member_no) === String(app.MemberNo));
+    const defaultBank = memberObj?.bank_name || "BCA";
+    const defaultAcc = memberObj?.bank_account_no || "1234567890";
+
+    const bankName = window.prompt("Masukkan Nama Bank Tujuan Pencairan:", defaultBank);
+    if (!bankName) return;
+    const accountNo = window.prompt(`Masukkan No. Rekening ${bankName} Anggota #${app.MemberNo}:`, defaultAcc);
+    if (!accountNo) return;
+
+    if (window.confirm(`Konfirmasi Pencairan Dana Pengajuan #${app.ApplicationNo} sebesar Rp ${(app.ApprovedAmount || app.RequestedAmount).toLocaleString('id-ID')} via ${bankName} (${accountNo})?`)) {
+      try {
+        const activeUserId = currentUser ? String(currentUser.employee_id || '10101') : '10101';
+        await axios.post(`http://localhost:8086/api/applications/${app.ApplicationNo}/disburse`, {
+          bank_name: bankName,
+          bank_account_no: accountNo,
+          notes: `Dana bersih telah dicairkan via Transfer ${bankName} No. Rek: ${accountNo}`,
+          updated_user: activeUserId
+        });
+        alert("Pencairan dana pinjaman berhasil diproses!");
+        fetchApplications();
+      } catch (err) {
+        alert("Gagal memproses pencairan: " + (err.response?.data?.error || err.message));
+      }
+    }
+  };
+
+  const handleCSVUpload = (e) => {
+    const targetInput = e.target;
+    const file = targetInput.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      const text = evt.target.result;
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+      if (lines.length <= 1) {
+        alert("File CSV kosong atau format header tidak sesuai.");
+        return;
+      }
+
+      const delimiter = lines[0].includes(';') ? ';' : ',';
+      const cleanHeaderStr = (str) => (str || '').replace(/^\uFEFF/, '').replace(/"/g, '').trim().toUpperCase();
+      const headers = lines[0].split(delimiter).map(h => cleanHeaderStr(h));
+      const parsedData = [];
+      const importPayload = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(delimiter).map(c => c.replace(/^"/, '').replace(/"$/, '').trim());
+        if (cols.length >= 2) {
+          const rowObj = {};
+          headers.forEach((h, idx) => {
+            rowObj[h] = cols[idx] || '';
+          });
+
+          const cleanNum = (str) => {
+            if (!str) return 0;
+            const cleaned = String(str).replace(/"/g, '').replace(/[^0-9.,-]/g, '').trim();
+            if (!cleaned) return 0;
+            return parseFloat(cleaned.replace(',', '.')) || 0;
+          };
+
+          const refNo = rowObj['NO_REFERENSI'] || rowObj['NO_REF'] || `LMS-PAY-202608-${i}`;
+          const rawEmpId = rowObj['EMPLOYEE_ID'] || rowObj['EMPLOYEE'] || (refNo.includes('-') ? refNo.split('-').pop() : '110102');
+          const empId = parseInt(rawEmpId) || 110102;
+          const period = rowObj['PERIODE'] || '2026-08';
+          const status = rowObj['STATUS_POTONGAN'] || rowObj['STATUS'] || 'SUCCESS';
+          
+          const rawDeducted = rowObj['NOMINAL_TERPOTONG'] || rowObj['NOMINAL_POTONGAN'] || rowObj['DEDUCTED'] || '0';
+          const rawAmount = rowObj['NOMINAL_TAGIHAN'] || rowObj['NOMINAL_POTONGAN'] || rowObj['AMOUNT'] || '0';
+
+          let deducted = cleanNum(rawDeducted);
+          let amount = cleanNum(rawAmount);
+
+          // If NOMINAL_TERPOTONG is blank/0 but NOMINAL_TAGIHAN is provided, fallback deducted = amount
+          if (deducted === 0 && amount > 0) {
+            deducted = amount;
+          }
+          if (amount === 0 && deducted > 0) {
+            amount = deducted;
+          }
+
+          const keterangan = rowObj['KETERANGAN'] || 'Potongan gaji diproses';
+
+          parsedData.push({
+            refNo: refNo,
+            nik: rowObj['NIK_ADIRA'] || rowObj['NIK'] || '3171012345670001',
+            name: rowObj['NAMA_KARYAWAN'] || rowObj['NAMA'] || `Employee #${cols[1] || i}`,
+            period: period,
+            amount: amount,
+            deducted: deducted,
+            status: status,
+            keterangan: keterangan
+          });
+
+          const rawLoanNo = rowObj['LOAN_NO'] || rowObj['LOAN_ID'] || rowObj['NO_LOAN'] || '0';
+          const loanNo = parseInt(rawLoanNo) || 0;
+
+          importPayload.push({
+            ref_no: refNo,
+            employee_id: empId,
+            loan_no: loanNo,
+            period: period,
+            nominal_original: amount,
+            deducted: deducted,
+            status: status,
+            keterangan: keterangan
+          });
+        }
+      }
+
+      setImportedRows(parsedData);
+      setPayrollReconciled(true);
+
+      // Call Backend to update lms_sch.loan_schedules & insert lms_sch.payroll_deductions!
+      try {
+        const activeUserName = currentUser ? String(currentUser.employee_id || '10101') : '10101';
+        const res = await axios.post('http://localhost:8086/api/payroll/import', {
+          file_name: file.name,
+          updated_user: activeUserName,
+          rows: importPayload
+        });
+        fetchPayrollSchedules();
+        fetchApplications();
+        alert(`✅ Berhasil mengimpor file [${file.name}] dari folder komputer Anda!\n\n${res.data.message}`);
+      } catch (err) {
+        console.error("Error updating DB schedule status:", err);
+        const errMsg = err.response?.data?.error || err.message;
+        if (errMsg.includes("sudah pernah diupdate")) {
+          alert(`⚠️ Notifikasi Import: File import [${file.name}] sudah pernah diupdate.`);
+        } else {
+          alert(`❌ Gagal mengimpor file [${file.name}]: ${errMsg}`);
+        }
+      } finally {
+        if (targetInput) targetInput.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handlePrintContract = (app) => {
+    const amtStr = (app.ApprovedAmount || app.RequestedAmount).toLocaleString('id-ID');
+    const contractWin = window.open('', '_blank');
+    contractWin.document.write(`
+      <html>
+        <head>
+          <title>Surat Perjanjian Kredit & Kontrak Pinjaman #${app.ApplicationNo}</title>
+          <style>
+            body { font-family: sans-serif; padding: 40px; line-height: 1.6; color: #1e293b; }
+            .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 16px; margin-bottom: 24px; }
+            .section { margin-bottom: 20px; }
+            .signature-table { width: 100%; margin-top: 50px; text-align: center; }
+            .signature-space { height: 70px; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h2>KOPERASI KARYAWAN KOPKARA (LMS)</h2>
+            <h3>SURAT PERJANJIAN KREDIT & KONTRAK PINJAMAN</h3>
+            <p>No. Kontrak: <strong>CTR-${app.ApplicationNo}</strong></p>
+          </div>
+          <div class="section">
+            <p>Pada hari ini, disepakati Perjanjian Pinjaman antara <strong>KOPERASI KARYAWAN KOPKARA</strong> (Pemberi Pinjaman) dan <strong>Anggota #${app.MemberNo}</strong> (Penerima Pinjaman) dengan ketentuan sebagai berikut:</p>
+            <ul>
+              <li><strong>No. Pengajuan:</strong> ${app.ApplicationNo}</li>
+              <li><strong>Plafon Pinjaman:</strong> Rp ${amtStr}</li>
+              <li><strong>Tenor Jangka Waktu:</strong> ${app.Tenor} Bulan</li>
+              <li><strong>Status Persetujuan HRD:</strong> APPROVED (${app.ApprovalNotes || 'Disetujui'})</li>
+              <li><strong>Tanggal Kontrak:</strong> ${formatDate(app.ApprovedAt || app.SubmissionDate)}</li>
+            </ul>
+          </div>
+          <div class="section">
+            <p>Penerima Pinjaman menyatakan setuju untuk melunasi angsuran bulanan melalui mekanisme pemotongan gaji (*payroll deduction*) setiap tanggal 25 hingga lunas.</p>
+          </div>
+          <table class="signature-table">
+            <tr>
+              <td width="50%">
+                Penerima Pinjaman (Karyawan),
+                <div class="signature-space"></div>
+                ( ________________________ )<br/>
+                Member #${app.MemberNo}
+              </td>
+              <td width="50%">
+                Pemberi Pinjaman (Pengurus Koperasi),
+                <div class="signature-space"></div>
+                ( ________________________ )<br/>
+                HRD / Approval Kopkara
+              </td>
+            </tr>
+          </table>
+          <script>window.print();</script>
+        </body>
+      </html>
+    `);
+    contractWin.document.close();
+  };
+
+  const fetchParameters = async () => {
+    try {
+      const response = await axios.get('http://localhost:8086/api/parameters');
+      setParameters(response.data.data || []);
+    } catch (error) {
+      console.error("Error fetching parameters:", error);
+    }
+  };
+
+  const toggleRoleMenu = async (roleId, menuId, isGranted) => {
+    try {
+      if (isGranted) {
+        // Revoke access
+        await axios.delete(`http://localhost:8086/api/master/role-menus/0?role_id=${roleId}&menu_id=${menuId}`);
+        setReferenceData(prev => ({
+          ...prev,
+          role_menus: prev.role_menus.filter(rm => !(String(rm.role_id) === String(roleId) && String(rm.menu_id) === String(menuId)))
+        }));
+      } else {
+        // Grant access
+        await axios.post('http://localhost:8086/api/master/role-menus', {
+          role_id: parseInt(roleId),
+          menu_id: parseInt(menuId)
+        });
+        setReferenceData(prev => ({
+          ...prev,
+          role_menus: [...prev.role_menus, { role_id: parseInt(roleId), menu_id: parseInt(menuId) }]
+        }));
+      }
+    } catch (error) {
+      alert("Gagal memperbarui APM Matrix: " + (error.response?.data?.error || error.message));
+    }
+  };
+
+  const fetchMasterData = async (table) => {
+    try {
+      const response = await axios.get(`http://localhost:8086/api/master/${table}`);
+      setMasterDataList(response.data.data || []);
+    } catch (error) {
+      console.error('Error fetching master data:', error);
+    }
+  };
+
+  const fetchReferenceData = async () => {
+    try {
+      const [deptRes, empStatusRes, kopkaraStatusRes, empCatRes, empRes, memRes, roleRes, menuRes, roleMenuRes] = await Promise.all([
+        axios.get('http://localhost:8086/api/master/departments'),
+        axios.get('http://localhost:8086/api/master/employee-statuses'),
+        axios.get('http://localhost:8086/api/master/kopkara-statuses'),
+        axios.get('http://localhost:8086/api/master/employee-categories'),
+        axios.get('http://localhost:8086/api/master/employees'),
+        axios.get('http://localhost:8086/api/master/members'),
+        axios.get('http://localhost:8086/api/master/roles'),
+        axios.get('http://localhost:8086/api/master/menus'),
+        axios.get('http://localhost:8086/api/master/role-menus')
+      ]);
+      setReferenceData({
+        departments: deptRes.data.data || [],
+        employeeStatuses: empStatusRes.data.data || [],
+        kopkaraStatuses: kopkaraStatusRes.data.data || [],
+        employeeCategories: empCatRes.data.data || [],
+        employees: empRes.data.data || [],
+        members: memRes.data.data || [],
+        roles: roleRes.data.data || [],
+        menus: menuRes.data.data || [],
+        role_menus: roleMenuRes.data.data || []
+      });
+    } catch (error) {
+      console.error('Error fetching reference data:', error);
+    }
+  };
+
+  // Sync masterTab with activeTab for dynamic master menus
+  useEffect(() => {
+    if (activeTab.startsWith('master-')) {
+      const tab = activeTab.replace('master-', '');
+      setMasterTab(tab);
+      fetchMasterData(tab);
+      setMasterForm({});
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [masterTab, masterSearchQuery]);
+
+  const submitApplication = async (e) => {
+    e.preventDefault();
+    try {
+      await axios.post('http://localhost:8086/api/applications', {
+        member_no: parseInt(form.member_no),
+        product_id: parseInt(form.product_id),
+        requested_amount: parseFloat(form.requested_amount),
+        tenor: parseInt(form.tenor)
+      });
+      alert('Pengajuan berhasil dikirim!');
+      setForm({ ...form, product_id: '', requested_amount: '', tenor: '' });
+      setSimulation(null);
+      fetchApplications();
+    } catch (error) {
+      alert('Gagal mengirim pengajuan: ' + (error.response?.data?.error || error.message));
+    }
+  };
+
+  // Validasi Tanggal
+  useEffect(() => {
+    const getParamVal = (key, fallback) => {
+      const p = (parameters || []).find(item => item.key_name === key || item.KeyName === key);
+      return (p?.key_value || p?.KeyValue) || fallback;
+    };
+    const startPeriod = parseInt(getParamVal('LOAN_START_PERIOD', '1'));
+    const endPeriod = parseInt(getParamVal('LOAN_END_PERIOD', '31'));
+    const currentDay = new Date().getDate();
+    if (currentDay < startPeriod || currentDay > endPeriod) {
+      setDateError(`Pengajuan pinjaman ditutup. Hanya dibuka tanggal ${startPeriod} - ${endPeriod}`);
+    } else {
+      setDateError('');
+    }
+  }, [parameters]);
+
+  // Simulasi Dinamis
+  useEffect(() => {
+    if (form.product_id && form.requested_amount > 0 && form.tenor > 0) {
+      const fetchSimulation = async () => {
+        try {
+          const response = await axios.post('http://localhost:8086/api/applications/simulate', {
+            member_no: parseInt(form.member_no),
+            product_id: parseInt(form.product_id),
+            requested_amount: parseFloat(form.requested_amount),
+            tenor: parseInt(form.tenor)
+          });
+          setSimulation(response.data.data);
+        } catch (error) {
+          setSimulation({ error: error.response?.data?.error || error.message });
+        }
+      };
+      // Simple debounce
+      const timeoutId = setTimeout(() => fetchSimulation(), 500);
+      return () => clearTimeout(timeoutId);
+    } else {
+      setSimulation(null);
+    }
+  }, [form.product_id, form.requested_amount, form.tenor]);
+
+  useEffect(() => {
+    fetchProducts();
+    fetchApplications();
+    fetchParameters();
+    fetchReferenceData();
+  }, []);
+
+  // Login Authentication Verification
+  useEffect(() => {
+    if (authToken) {
+      const verifyAuthToken = async () => {
+        try {
+          // Try Karisma Simulator port 8087 first
+          const res = await axios.post('http://localhost:8087/api/karisma/verify', {}, {
+            headers: { Authorization: `Bearer ${authToken}` }
+          });
+          const user = res.data.user;
+          setCurrentUser(user);
+          localStorage.setItem('karisma_user', JSON.stringify(user));
+          setForm(prev => ({...prev, member_no: user.employee_id}));
+        } catch (err8087) {
+          try {
+            // Fallback to LMS Core Backend port 8086
+            const res = await axios.post('http://localhost:8086/api/karisma/verify', {}, {
+              headers: { Authorization: `Bearer ${authToken}` }
+            });
+            const user = res.data.user;
+            setCurrentUser(user);
+            localStorage.setItem('karisma_user', JSON.stringify(user));
+            setForm(prev => ({...prev, member_no: user.employee_id}));
+          } catch (err8086) {
+            setAuthToken('');
+            localStorage.removeItem('karisma_token');
+            localStorage.removeItem('karisma_user');
+            setCurrentUser(null);
+          }
+        }
+      };
+      verifyAuthToken();
+    }
+  }, [authToken]);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoginError('');
+    try {
+      let res;
+      try {
+        // Try Karisma Simulator port 8087 first
+        res = await axios.post('http://localhost:8087/api/karisma/login', loginForm);
+      } catch (err8087) {
+        console.warn("Port 8087 unreachable, falling back to LMS Core Backend port 8086...", err8087);
+        // Fallback to LMS Core Backend port 8086
+        res = await axios.post('http://localhost:8086/api/karisma/login', loginForm);
+      }
+      const token = res.data.token;
+      localStorage.setItem('karisma_token', token);
+      setAuthToken(token);
+    } catch (err) {
+      setLoginError(err.response?.data?.error || 'Username atau Password salah!');
+    }
+  };
+
+  const handleLogout = (reason = '') => {
+    localStorage.removeItem('karisma_token');
+    localStorage.removeItem('karisma_user');
+    setAuthToken('');
+    setCurrentUser(null);
+    setUserInfo(null);
+    setActiveTab('dashboard');
+    if (reason) {
+      setLoginError(reason);
+    }
+    window.location.reload();
+  };
+
+  const saveMasterData = async (e) => {
+    e.preventDefault();
+    try {
+      const payload = { ...masterForm };
+      ['role_id', 'employee_id', 'member_no', 'menu_id', 'parent_id', 'salary', 'max_limit', 'order'].forEach(key => {
+        if (payload[key] !== undefined && payload[key] !== '' && payload[key] !== null) {
+          payload[key] = (key === 'salary' || key === 'max_limit') ? parseFloat(payload[key]) : parseInt(payload[key]);
+        }
+      });
+
+      await axios.post(`http://localhost:8086/api/master/${masterTab}`, payload);
+      alert('Data berhasil disimpan!');
+      setMasterForm({});
+      fetchMasterData(masterTab);
+      fetchReferenceData();
+    } catch (error) {
+      alert('Gagal menyimpan: ' + (error.response?.data?.error || error.message));
+    }
+  };
+
+  const deleteMasterData = async (pkField, pkValue) => {
+    if (window.confirm(`Yakin ingin menghapus data dengan ${pkField} = ${pkValue}?`)) {
+      try {
+        await axios.delete(`http://localhost:8086/api/master/${masterTab}/${pkValue}`);
+        alert('Data berhasil dihapus!');
+        fetchMasterData(masterTab);
+        fetchReferenceData();
+      } catch (error) {
+        alert('Gagal menghapus data: ' + (error.response?.data?.error || error.message));
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'master') {
+      fetchMasterData(masterTab);
+    }
+  }, [activeTab, masterTab]);
+
+  const submitParameter = async (e) => {
+    e.preventDefault();
+    try {
+      await axios.post('http://localhost:8086/api/parameters', {
+        id: parseInt(paramForm.id),
+        key_name: paramForm.key_name,
+        key_value: paramForm.key_value,
+        description: paramForm.description
+      });
+      alert('Parameter berhasil disimpan!');
+      setParamForm({ id: 0, key_name: '', key_value: '', description: '' });
+      fetchParameters();
+    } catch (error) {
+      alert('Gagal menyimpan parameter: ' + (error.response?.data?.error || error.message));
+    }
+  };
+
+  const deleteParameter = async (id) => {
+    if(window.confirm('Yakin ingin menghapus parameter ini?')) {
+      try {
+        await axios.delete(`http://localhost:8086/api/parameters/${id}`);
+        fetchParameters();
+      } catch (error) {
+        alert('Gagal menghapus parameter');
+      }
+    }
+  };
+
+  if (!currentUser || (!currentUser.employee_id && !currentUser.username && !currentUser.role)) {
+    return (
+      <div style={{ display: 'flex', height: '100vh', width: '100vw', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f1f5f9', position: 'fixed', top: 0, left: 0, zIndex: 99999 }}>
+        <div style={{ width: '400px', padding: '40px', background: '#ffffff', borderRadius: '12px', boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)' }}>
+          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+            <div style={{ width: '48px', height: '48px', background: 'var(--primary-blue)', borderRadius: '12px', margin: '0 auto 16px' }}></div>
+            <h2 style={{ color: '#0f172a', margin: 0 }}>LMS Karisma Login</h2>
+            <p style={{ color: '#64748B', margin: '8px 0 0 0' }}>Masuk dengan akun HRIS Adira Anda</p>
+          </div>
+          
+          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {loginError && <div style={{ padding: '12px', background: '#fee2e2', color: '#991B1B', borderRadius: '8px', fontSize: '0.875rem' }}>{loginError}</div>}
+            
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', color: '#334155', fontWeight: 500 }}>Username</label>
+              <input type="text" required value={loginForm.username} onChange={e => setLoginForm({...loginForm, username: e.target.value})} style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '1rem' }} placeholder="Contoh: 1001, admin, hrd" />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', color: '#334155', fontWeight: 500 }}>Password</label>
+              <input type="password" required value={loginForm.password} onChange={e => setLoginForm({...loginForm, password: e.target.value})} style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '1rem' }} placeholder="Password" />
+            </div>
+            
+            <button type="submit" style={{ width: '100%', padding: '12px', background: 'var(--primary-blue)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '1rem', fontWeight: 600, cursor: 'pointer', marginTop: '8px' }}>
+              Masuk ke LMS
+            </button>
+          </form>
+          
+          <div style={{ marginTop: '24px', fontSize: '0.875rem', color: '#64748B', textAlign: 'center' }}>
+            <p><strong>Akun Tersedia (Simulator):</strong></p>
+            <ul style={{ listStyle: 'none', padding: 0, margin: '8px 0 0 0' }}>
+              <li>User Anggota: <code>[ID Angka Berapa Saja]</code> / <code>password123</code><br/><small>(Contoh: 10101, 1001, dsb)</small></li>
+              <li>User Admin: <code>admin</code> / <code>admin123</code></li>
+              <li>User HRD: <code>hrd</code> / <code>hrd123</code></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app-container">
+      {/* Sidebar */}
+      <aside className={`sidebar ${isSidebarCollapsed ? 'collapsed' : ''}`}>
+        <div className="sidebar-header">
+          <div style={{ width: '32px', height: '32px', background: 'var(--secondary-blue)', borderRadius: '8px', flexShrink: 0 }}></div>
+          {!isSidebarCollapsed && (
+            <span style={{ display: 'flex', flexDirection: 'column' }}>
+              <span>Kopkara LMS</span>
+              <span style={{ fontSize: '0.75rem', fontWeight: 'normal', color: '#94a3b8', textTransform: 'capitalize' }}>
+                Mode: {realRoleName}
+              </span>
+            </span>
+          )}
+        </div>
+        <nav className="sidebar-nav">
+          {(() => {
+            const topMenus = visibleMenus.filter(m => !m.parent_id);
+            const getSubMenus = (parentId) => visibleMenus.filter(m => String(m.parent_id) === String(parentId));
+
+            return topMenus.map(menu => {
+              const subMenus = getSubMenus(menu.menu_id);
+              const isExpanded = expandedParents[menu.menu_id];
+              const isChildActive = subMenus.some(sub => sub.path === activeTab);
+              const isActive = activeTab === menu.path || isChildActive;
+
+              if (subMenus.length > 0) {
+                return (
+                  <div key={menu.menu_id} style={{ marginBottom: '4px' }}>
+                    <div 
+                      className={`nav-item ${isActive ? 'active' : ''}`}
+                      onClick={() => setExpandedParents(prev => ({ ...prev, [menu.menu_id]: !prev[menu.menu_id] }))}
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <span className="nav-icon">{menu.icon || '🗃️'}</span>
+                        {!isSidebarCollapsed && <span className="nav-label">{menu.title}</span>}
+                      </div>
+                      {!isSidebarCollapsed && (
+                        <span style={{ fontSize: '0.65rem', opacity: 0.8 }}>{isExpanded ? '▼' : '▶'}</span>
+                      )}
+                    </div>
+                    {isExpanded && !isSidebarCollapsed && (
+                      <div style={{ paddingLeft: '16px', display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '2px' }}>
+                        {subMenus.map(sub => (
+                          <div 
+                            key={sub.menu_id}
+                            className={`nav-item ${activeTab === sub.path ? 'active' : ''}`}
+                            onClick={() => setActiveTab(sub.path)}
+                            style={{ fontSize: '0.875rem', padding: '8px 12px' }}
+                          >
+                            <span className="nav-icon">{sub.icon || '📌'}</span>
+                            <span className="nav-label">{sub.title}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              return (
+                <div 
+                  key={menu.menu_id}
+                  className={`nav-item ${activeTab === menu.path ? 'active' : ''}`}
+                  onClick={() => setActiveTab(menu.path)}
+                  title={isSidebarCollapsed ? menu.title : ''}
+                >
+                  <span className="nav-icon">{menu.icon || '📌'}</span>
+                  {!isSidebarCollapsed && <span className="nav-label">{menu.title}</span>}
+                </div>
+              );
+            });
+          })()}
+        </nav>
+      </aside>
+
+      {/* Main Content */}
+      <main className="main-content">
+        <header className="header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <button 
+              className="toggle-sidebar-btn"
+              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+            >
+              ☰
+            </button>
+            <div className="header-title">
+              {visibleMenus.find(m => m.path === activeTab)?.title || (activeTab.startsWith('master-') ? 'Data Master: ' + masterTab.replace('-', ' ') : 'Dashboard')}
+            </div>
+          </div>
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            {(() => {
+              const displayName = realEmployee ? realEmployee.name : (currentUser ? currentUser.name : '');
+              return (
+                <>
+                  <span style={{ fontWeight: 500, color: '#334155' }}>
+                    {displayName} ({currentUser?.employee_id}) - <span style={{ textTransform: 'capitalize' }}>{realRoleName}</span>
+                  </span>
+                  <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'var(--accent-blue)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' }}>
+                    {displayName ? displayName.substring(0, 2).toUpperCase() : ''}
+                  </div>
+                </>
+              );
+            })()}
+            <button 
+              onClick={handleLogout}
+              style={{ padding: '8px 16px', background: '#fee2e2', color: '#b91c1c', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}
+            >
+              Logout
+            </button>
+          </div>
+        </header>
+
+        <div className="content-body">
+          {activeTab === 'dashboard' && (
+            <>
+              <div className="card-grid">
+                <div className="card">
+                  <div className="card-title">Available Credit Limit</div>
+                  <div className="card-value">Rp 15.000.000</div>
+                </div>
+                <div className="card">
+                  <div className="card-title">Total Hutang</div>
+                  <div className="card-value">Rp 5.000.000</div>
+                </div>
+                <div className="card">
+                  <div className="card-title">Pinjaman Aktif</div>
+                  <div className="card-value">1</div>
+                </div>
+              </div>
+
+              <div className="table-container">
+                <div className="table-header">Pinjaman Terbaru</div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>No Pengajuan</th>
+                      <th>Tanggal</th>
+                      <th>Nominal</th>
+                      <th>Tenor</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>APP-2026-001</td>
+                      <td>12 Jul 2026</td>
+                      <td>Rp 5.000.000</td>
+                      <td>12 Bulan</td>
+                      <td><span className="badge badge-success">ACTIVE</span></td>
+                    </tr>
+                    <tr>
+                      <td>APP-2025-089</td>
+                      <td>05 Jan 2025</td>
+                      <td>Rp 2.000.000</td>
+                      <td>6 Bulan</td>
+                      <td><span className="badge badge-warning">PAID</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Tampilan Integrasi Backend (Products) */}
+              <div className="table-container" style={{ marginTop: '32px' }}>
+                <div className="table-header">Katalog Produk Pinjaman (Dari Backend)</div>
+                <div style={{ padding: '24px' }}>
+                  {loading ? (
+                    <p>Loading data dari API...</p>
+                  ) : products.length === 0 ? (
+                    <p>Belum ada produk pinjaman. Coba tambahkan lewat POST /api/products.</p>
+                  ) : (
+                    <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                      {products.map(p => {
+                        const pId = p.id || p.ID;
+                        const pName = p.name || p.Name || `Produk #${pId}`;
+                        const pTenor = p.max_tenor_months || p.MaxTenorMonths || 12;
+                        const pRate = p.interest_rate !== undefined ? p.interest_rate : (p.InterestRate !== undefined ? p.InterestRate : 0);
+                        const pStatus = p.status || p.Status || 'ACTIVE';
+                        return (
+                          <div key={pId} style={{ border: '1px solid var(--border-color)', padding: '16px', borderRadius: '8px', minWidth: '250px' }}>
+                            <h4 style={{ color: 'var(--primary-blue)', marginBottom: '8px' }}>{pName}</h4>
+                            <p style={{ fontSize: '0.875rem', color: '#64748B' }}>Max Tenor: {pTenor} bln</p>
+                            <p style={{ fontSize: '0.875rem', color: '#64748B' }}>Bunga: {pRate}%</p>
+                            <span className={getStatusBadge(pStatus)} style={{ marginTop: '12px', display: 'inline-block' }}>{pStatus}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <button 
+                    onClick={fetchProducts} 
+                    style={{ marginTop: '16px', padding: '8px 16px', background: 'var(--primary-blue)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                  >
+                    Refresh Data
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
+          {activeTab === 'pengajuan' && (
+            <div className="card" style={{ maxWidth: '700px' }}>
+              <h2>Formulir Pengajuan Pinjaman</h2>
+              {dateError && (
+                <div style={{ padding: '12px', background: '#fee2e2', color: '#991B1B', borderRadius: '4px', marginTop: '16px', fontWeight: 500 }}>
+                  ⚠️ {dateError}
+                </div>
+              )}
+              <form onSubmit={submitApplication} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '24px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Produk Pinjaman</label>
+                  <select 
+                    required 
+                    value={form.product_id} 
+                    onChange={e => setForm({...form, product_id: e.target.value})}
+                    style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)' }}
+                  >
+                    <option value="">-- Pilih Produk --</option>
+                    {products.map(p => {
+                      const pId = p.id || p.ID;
+                      const pName = p.name || p.Name || `Produk #${pId}`;
+                      const pRate = p.interest_rate !== undefined ? p.interest_rate : (p.InterestRate !== undefined ? p.InterestRate : 0);
+                      const pType = p.loan_type || p.LoanType || 'FLAT';
+                      return (
+                        <option key={pId} value={pId}>
+                          {pName} - (Bunga {pRate}% / bln - {pType})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Nominal Pinjaman (Rp)</label>
+                  <input 
+                    type="number" required min="100000"
+                    value={form.requested_amount}
+                    onChange={e => setForm({...form, requested_amount: e.target.value})}
+                    style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Tenor (Bulan)</label>
+                  <select 
+                    required
+                    value={form.tenor}
+                    onChange={e => setForm({...form, tenor: e.target.value})}
+                    style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)' }}
+                  >
+                    <option value="">-- Pilih Tenor --</option>
+                    {(() => {
+                      const maxParam = parameters.find(p => String(p.KeyName || p.key_name || '').toUpperCase() === 'LOAN_MAX_TENOR');
+                      const maxGlobal = maxParam ? (parseInt(maxParam.KeyValue || maxParam.key_value) || 60) : 60;
+                      const selectedProduct = products.find(p => String(p.ID || p.id) === String(form.product_id));
+                      const maxProduct = selectedProduct ? (parseInt(selectedProduct.MaxTenorMonths || selectedProduct.max_tenor_months) || 60) : 60;
+                      const maxTenor = Math.min(maxGlobal, maxProduct);
+                      return Array.from({ length: Math.max(1, maxTenor) }, (_, i) => i + 1).map(m => (
+                        <option key={m} value={m}>{m} Bulan</option>
+                      ));
+                    })()}
+                  </select>
+                </div>
+
+                {/* Simulasi Breakdown */}
+                {simulation && !simulation.error && (
+                  <div style={{ marginTop: '16px', padding: '16px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px' }}>
+                    <h3 style={{ fontSize: '1.1rem', marginBottom: '12px', color: 'var(--primary-blue)' }}>Rincian Simulasi Pinjaman</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div><span style={{ color: '#64748B' }}>Pokok per Bulan:</span> <br/><strong>Rp {Math.round(simulation.principal_per_month).toLocaleString('id-ID')}</strong></div>
+                      <div><span style={{ color: '#64748B' }}>Bunga per Bulan ({simulation.interest_rate}%):</span> <br/><strong>Rp {Math.round(simulation.interest_per_month).toLocaleString('id-ID')}</strong></div>
+                      <div><span style={{ color: '#64748B' }}>Biaya Administrasi:</span> <br/><strong>Rp {Math.round(simulation.admin_fee).toLocaleString('id-ID')}</strong></div>
+                      <div><span style={{ color: '#64748B' }}>Total Angsuran per Bulan:</span> <br/><strong>Rp {Math.round(simulation.total_installment).toLocaleString('id-ID')}</strong></div>
+                      <div style={{ gridColumn: 'span 2', marginTop: '8px', paddingTop: '8px', borderTop: '1px dashed #cbd5e1' }}>
+                        <span style={{ color: '#64748B' }}>Batas Plafon Maksimal (Berdasarkan Rumus):</span> <br/>
+                        <strong style={{ fontSize: '1.1rem', color: '#047857' }}>Rp {simulation.credit_limit ? Math.round(simulation.credit_limit).toLocaleString('id-ID') : 'Tidak Dibatasi'}</strong>
+                      </div>
+                      <div style={{ gridColumn: 'span 2', marginTop: '4px' }}>
+                        <span style={{ color: '#64748B' }}>Total Kewajiban (Pokok + Bunga + Admin):</span> <br/>
+                        <strong style={{ fontSize: '1.2rem', color: '#0f172a' }}>Rp {Math.round(simulation.total_loan_cost).toLocaleString('id-ID')}</strong>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {simulation && simulation.error && (
+                  <div style={{ padding: '12px', background: '#fee2e2', color: '#991B1B', borderRadius: '4px', marginTop: '16px' }}>
+                    ❌ {simulation.error}
+                  </div>
+                )}
+
+                <button 
+                  type="submit" 
+                  disabled={dateError !== '' || (simulation && simulation.error)}
+                  style={{ padding: '12px', background: dateError || (simulation && simulation.error) ? '#94a3b8' : 'var(--success-green)', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 600, cursor: dateError || (simulation && simulation.error) ? 'not-allowed' : 'pointer', marginTop: '16px' }}>
+                  Kirim Pengajuan
+                </button>
+              </form>
+            </div>
+          )}
+
+          {activeTab === 'pinjaman' && (
+            <div className="table-container">
+              <div className="table-header">Daftar Pengajuan & Pinjaman</div>
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>No. Pengajuan</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tanggal Submit</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Nominal</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tenor</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Status</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Catatan HRD</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tanggal Approval</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem', textAlign: 'center' }}>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {applications.length === 0 ? (
+                    <tr><td colSpan="8" style={{ textAlign: 'center', padding: '16px' }}>Belum ada data</td></tr>
+                  ) : (
+                    applications.map(app => (
+                      <tr key={app.ApplicationNo} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}><strong>{app.ApplicationNo}</strong></td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem', color: '#64748B' }}>
+                          {formatDate(app.SubmissionDate)}
+                        </td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Rp {app.RequestedAmount ? app.RequestedAmount.toLocaleString('id-ID') : '0'}</td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>{app.Tenor} Bulan</td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>
+                          <span className={getStatusBadge(app.Status)} style={{ backgroundColor: app.Status === 'REVISION_REQUIRED' ? '#f59e0b' : undefined }}>
+                            {app.Status === 'REVISION_REQUIRED' ? 'PERLU REVISI' : app.Status}
+                          </span>
+                        </td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem', color: '#b45309', fontWeight: 500 }}>
+                          {app.ApprovalNotes || '-'}
+                        </td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem', color: '#64748B' }}>
+                          {formatDate(app.ApprovedAt)}
+                        </td>
+                        <td style={{ padding: '6px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                            {app.Status === 'REVISION_REQUIRED' && (
+                              <button 
+                                onClick={() => {
+                                  setForm({
+                                    member_no: app.MemberNo,
+                                    product_id: app.ProductID || '',
+                                    requested_amount: app.RequestedAmount,
+                                    tenor: app.Tenor
+                                  });
+                                  setActiveTab('pengajuan');
+                                  alert(`Silakan revisi nominal/tenor pengajuan #${app.ApplicationNo} lalu klik Kirim Pengajuan.`);
+                                }}
+                                style={{ padding: '3px 8px', background: '#f59e0b', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                              >
+                                ✏️ Revisi
+                              </button>
+                            )}
+                            {(app.Status === 'APPROVED' || app.Status === 'DISBURSED') && (
+                              <button 
+                                onClick={() => handlePrintContract(app)}
+                                style={{ padding: '3px 8px', background: '#0f172a', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                title="Cetak Surat Perjanjian Kredit & Kontrak Pinjaman"
+                              >
+                                📄 Kontrak
+                              </button>
+                            )}
+                            {app.Status === 'APPROVED' && (
+                              <button 
+                                onClick={() => handleDisburse(app)}
+                                style={{ padding: '3px 8px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                title="Cairkan Dana Pinjaman"
+                              >
+                                💵 Cairkan
+                              </button>
+                            )}
+                            <button 
+                              onClick={() => handleOpenTracking(app.ApplicationNo)}
+                              style={{ padding: '3px 8px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                              title="Lihat Riwayat Status / Tracking"
+                            >
+                              📜 Track
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {activeTab === 'parameters' && (
+            <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
+              <div className="card" style={{ flex: '1', minWidth: '300px' }}>
+                <h2>{paramForm.id ? 'Edit Parameter' : 'Tambah Parameter Baru'}</h2>
+                <form onSubmit={submitParameter} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '24px' }}>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Key Name (Misal: max_loan_limit)</label>
+                    <input 
+                      type="text" required
+                      value={paramForm.key_name}
+                      onChange={e => setParamForm({...paramForm, key_name: e.target.value})}
+                      style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)' }}
+                      disabled={paramForm.id > 0} // Key tidak bisa diubah jika edit
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Key Value</label>
+                    <input 
+                      type="text" required
+                      value={paramForm.key_value}
+                      onChange={e => setParamForm({...paramForm, key_value: e.target.value})}
+                      style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Deskripsi</label>
+                    <textarea 
+                      value={paramForm.description}
+                      onChange={e => setParamForm({...paramForm, description: e.target.value})}
+                      style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)', minHeight: '80px' }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', gap: '12px' }}>
+                    <button type="submit" style={{ flex: 1, padding: '12px', background: 'var(--primary-blue)', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 600, cursor: 'pointer' }}>
+                      Simpan Parameter
+                    </button>
+                    {paramForm.id > 0 && (
+                      <button type="button" onClick={() => setParamForm({ id: 0, key_name: '', key_value: '', description: '' })} style={{ padding: '12px', background: '#e2e8f0', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                        Batal Edit
+                      </button>
+                    )}
+                  </div>
+                </form>
+              </div>
+
+              <div className="table-container" style={{ flex: '2', minWidth: '500px' }}>
+                <div className="table-header">Daftar Parameter Global</div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{ padding: '8px 12px', fontSize: '0.875rem' }}>Key Name</th>
+                      <th style={{ padding: '8px 12px', fontSize: '0.875rem' }}>Value</th>
+                      <th style={{ padding: '8px 12px', fontSize: '0.875rem' }}>Deskripsi</th>
+                      <th style={{ padding: '8px 12px', fontSize: '0.875rem' }}>Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parameters.length === 0 ? (
+                      <tr><td colSpan="4" style={{ textAlign: 'center' }}>Belum ada konfigurasi parameter</td></tr>
+                    ) : (
+                      parameters.map(param => (
+                        <tr key={param.ID} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                          <td style={{ padding: '6px 12px', fontSize: '0.875rem' }}><strong>{param.KeyName}</strong></td>
+                          <td style={{ padding: '6px 12px', fontSize: '0.875rem' }}>{param.KeyValue}</td>
+                          <td style={{ padding: '6px 12px', fontSize: '0.875rem' }}>{param.Description}</td>
+                          <td style={{ padding: '6px 12px' }}>
+                            <button onClick={() => setParamForm({id: param.ID, key_name: param.KeyName, key_value: param.KeyValue, description: param.Description})} style={{ padding: '3px 8px', marginRight: '8px', background: '#fef3c7', color: '#92400E', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>Edit</button>
+                            <button onClick={() => deleteParameter(param.ID)} style={{ padding: '3px 8px', background: '#fee2e2', color: '#991B1B', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>Hapus</button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'disbursement' && (
+            <div className="table-container">
+              <div className="table-header">Pencairan Dana Pinjaman (Disbursement Treasury)</div>
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>No. Pengajuan</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tanggal Approved</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Pemohon</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Nominal Plafon</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tenor</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Status</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem', textAlign: 'center' }}>Aksi Pencairan</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {applications.filter(a => a.Status === 'APPROVED' || a.Status === 'DISBURSED').length === 0 ? (
+                    <tr><td colSpan="7" style={{ textAlign: 'center', padding: '20px' }}>Belum ada pengajuan berstatus APPROVED / DISBURSED</td></tr>
+                  ) : (
+                    applications.filter(a => a.Status === 'APPROVED' || a.Status === 'DISBURSED').map(app => (
+                      <tr key={app.ApplicationNo} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}><strong>{app.ApplicationNo}</strong></td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem', color: '#64748B' }}>{formatDate(app.ApprovedAt || app.SubmissionDate)}</td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Member #{app.MemberNo}</td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}><strong>Rp {(app.ApprovedAmount || app.RequestedAmount).toLocaleString('id-ID')}</strong></td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>{app.Tenor} Bulan</td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>
+                          <span className={getStatusBadge(app.Status)}>
+                            {app.Status === 'DISBURSED' ? 'DICAIRKAN' : 'SETUJU (APPROVED)'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '6px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                            <button 
+                              onClick={() => handlePrintContract(app)}
+                              style={{ padding: '4px 10px', background: '#0f172a', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}
+                            >
+                              📄 Cetak Kontrak
+                            </button>
+                            {app.Status === 'APPROVED' && (
+                              <button 
+                                onClick={() => handleDisburse(app)}
+                                style={{ padding: '4px 10px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}
+                              >
+                                💵 Cairkan Dana
+                              </button>
+                            )}
+                            <button 
+                              onClick={() => handleOpenTracking(app.ApplicationNo)}
+                              style={{ padding: '4px 10px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}
+                            >
+                              📜 Track
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {activeTab === 'payroll' && (
+            <div>
+              {/* Dashboard Ringkasan Analisis Rekonsiliasi Payroll */}
+              {(() => {
+                const getParamVal = (key, fallback) => {
+                  const p = (parameters || []).find(item => item.key_name === key || item.KeyName === key);
+                  return (p?.key_value || p?.KeyValue) || fallback;
+                };
+
+                const exportFolder = getParamVal('FOLDER_BILL_EXPORT', 'D:/Data_NK/Project5/LMS/export_payroll');
+                const importFolder = getParamVal('FOLDER_BILL_IMPORT', 'D:/Data_NK/Project5/LMS/import_payroll');
+
+                const realSchedulesList = (payrollSchedules || []).map(ps => {
+                  const empName = ps.employee_name || referenceData.employees.find(e => String(e.employee_id) === String(ps.member_no))?.name || `Member #${ps.member_no || ''}`;
+                  const safePeriod = ps.period || '2026-08';
+                  const safeRef = ps.ref_no || `LMS-PAY-${safePeriod.replace(/-/g, '')}-${ps.member_no || ''}`;
+                  const paidAmt = ps.amount_paid !== undefined ? ps.amount_paid : (ps.status === 'PAID' ? (ps.total_installment || 0) : 0);
+                  const remAmt = ps.remaining_installment !== undefined ? ps.remaining_installment : (paidAmt - (ps.total_installment || 0));
+                  return {
+                    refNo: safeRef,
+                    nik: ps.nik || `317101234567${String(ps.member_no || '1001').padStart(4, '0')}`,
+                    name: `${empName} (#${ps.member_no || '1001'})`,
+                    period: safePeriod,
+                    amount: ps.total_installment || 0,
+                    deducted: paidAmt,
+                    remaining: remAmt,
+                    status: ps.status === 'PAID' ? 'SUCCESS' : (ps.status === 'PARTIAL' ? 'PARTIAL' : (ps.status === 'UNPAID' ? 'PENDING' : (ps.status || 'PENDING'))),
+                    keterangan: ps.status === 'PAID' ? 'Potongan gaji diproses penuh (LUNAS)' : (ps.status === 'PARTIAL' ? `Potongan parsial (Sisa/Credit: Rp ${Math.round(remAmt).toLocaleString('id-ID')})` : 'Menunggu eksekusi payroll HRD Adira')
+                  };
+                });
+
+                const displayList = importedRows.length > 0 ? importedRows : realSchedulesList;
+
+                const totalAmount = displayList.reduce((sum, item) => sum + (item?.amount || 0), 0);
+                const totalDeducted = displayList.reduce((sum, item) => sum + (item?.deducted || 0), 0);
+                const totalShortage = totalAmount - totalDeducted;
+                const successCount = displayList.filter(i => i?.status === 'SUCCESS').length;
+                const partialCount = displayList.filter(i => i?.status === 'PARTIAL').length;
+                const failedCount = displayList.filter(i => i?.status === 'FAILED').length;
+                const pendingCount = displayList.filter(i => i?.status === 'PENDING' || i?.status === 'UNPAID').length;
+
+                return (
+                  <div>
+                    {/* Folder Config Banner */}
+                    <div style={{ padding: '10px 16px', background: '#e0f2fe', color: '#0369a1', borderRadius: '6px', marginBottom: '16px', fontSize: '0.85rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: 500 }}>
+                      <div>📁 <strong>Folder Export Default (FOLDER_BILL_EXPORT):</strong> <span style={{ fontFamily: 'monospace' }}>{exportFolder}</span></div>
+                      <div>📂 <strong>Folder Import Default (FOLDER_BILL_IMPORT):</strong> <span style={{ fontFamily: 'monospace' }}>{importFolder}</span></div>
+                    </div>
+
+                    {/* KPI Cards Row */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+                      <div className="card" style={{ padding: '16px', background: '#f8fafc', borderLeft: '4px solid #3b82f6', marginBottom: 0 }}>
+                        <div style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Total Tagihan Payroll</div>
+                        <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: '#0f172a', marginTop: '4px' }}>Rp {Math.round(totalAmount).toLocaleString('id-ID')}</div>
+                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '4px' }}>{displayList.length} Transaksi Database (lms_sch.loan_schedules)</div>
+                      </div>
+
+                      <div className="card" style={{ padding: '16px', background: '#f0fdf4', borderLeft: '4px solid #10b981', marginBottom: 0 }}>
+                        <div style={{ fontSize: '0.8rem', color: '#047857', fontWeight: 600, textTransform: 'uppercase' }}>Terpotong Sukses</div>
+                        <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: '#065f46', marginTop: '4px' }}>Rp {Math.round(totalDeducted).toLocaleString('id-ID')}</div>
+                        <div style={{ fontSize: '0.75rem', color: '#047857', marginTop: '4px' }}>{successCount} Sukses | {partialCount} Partial</div>
+                      </div>
+
+                      <div className="card" style={{ padding: '16px', background: totalShortage > 0 ? '#fef2f2' : '#f8fafc', borderLeft: `4px solid ${totalShortage > 0 ? '#ef4444' : '#64748b'}`, marginBottom: 0 }}>
+                        <div style={{ fontSize: '0.8rem', color: totalShortage > 0 ? '#991b1b' : '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Selisih / Tunggakan</div>
+                        <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: totalShortage > 0 ? '#991b1b' : '#0f172a', marginTop: '4px' }}>Rp {Math.round(totalShortage).toLocaleString('id-ID')}</div>
+                        <div style={{ fontSize: '0.75rem', color: totalShortage > 0 ? '#991b1b' : '#64748b', marginTop: '4px' }}>{failedCount} Gagal Potong</div>
+                      </div>
+
+                      <div className="card" style={{ padding: '16px', background: '#fefce8', borderLeft: '4px solid #eab308', marginBottom: 0 }}>
+                        <div style={{ fontSize: '0.8rem', color: '#854d0e', fontWeight: 600, textTransform: 'uppercase' }}>Status Rekonsiliasi</div>
+                        <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#854d0e', marginTop: '4px' }}>
+                          {payrollReconciled ? (totalShortage > 0 ? '⚠️ UNRECONCILED (ADA SELISIH)' : '✅ TEREKONSILIASI') : '⏳ PENDING'}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#854d0e', marginTop: '4px' }}>
+                          {payrollReconciled ? `${successCount + partialCount} Selesai / ${failedCount} Gagal` : `${pendingCount} Menunggu Import HRD`}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Table Container */}
+                    <div className="table-container">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: 'var(--primary-blue)', color: 'white', borderTopLeftRadius: '8px', borderTopRightRadius: '8px' }}>
+                        <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>✂️ Detail Rekonsiliasi Pemotongan Gaji (lms_sch.loan_schedules)</div>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button 
+                            onClick={() => {
+                              const now = new Date();
+                              const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                              const yyyy = lastDay.getFullYear();
+                              const mm = String(lastDay.getMonth() + 1).padStart(2, '0');
+                              const dd = String(lastDay.getDate()).padStart(2, '0');
+                              setExportCutoffDate(`${yyyy}-${mm}-${dd}`);
+                              setExportCustomFolder(exportFolder);
+                              setExportModalOpen(true);
+                            }}
+                            style={{ padding: '6px 12px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                            title={`Export File CSV Tagihan s/d Tanggal Cut-off ke Folder ${exportFolder}`}
+                          >
+                            📥 Export File Payroll (.csv)
+                          </button>
+                          <input 
+                            type="file" 
+                            ref={fileInputRef} 
+                            accept=".csv,.txt" 
+                            onChange={handleCSVUpload} 
+                            style={{ display: 'none' }} 
+                          />
+                          <button 
+                            onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                            style={{ padding: '6px 12px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                            title={`Buka Folder Import ${importFolder} & Pilih File CSV Rekonsiliasi`}
+                          >
+                            📤 Import Result Rekonsiliasi
+                          </button>
+                        </div>
+                      </div>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>No. Ref</th>
+                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>NIK Adira</th>
+                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>Anggota / Karyawan</th>
+                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>Periode</th>
+                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>Nominal Tagihan</th>
+                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>Terpotong</th>
+                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>Status</th>
+                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>Hasil Analisis / Keterangan HRD</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {displayList.length === 0 ? (
+                            <tr><td colSpan="8" style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>Belum ada tagihan angsuran pinjaman aktif di lms_sch.loan_schedules.</td></tr>
+                          ) : (
+                            displayList.map(item => (
+                              <tr key={item?.refNo || Math.random()} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                                <td style={{ padding: '8px 12px', fontSize: '0.85rem' }}><strong>{item?.refNo || '-'}</strong></td>
+                                <td style={{ padding: '8px 12px', fontSize: '0.85rem' }}>{item?.nik || '-'}</td>
+                                <td style={{ padding: '8px 12px', fontSize: '0.85rem' }}>{item?.name || '-'}</td>
+                                <td style={{ padding: '8px 12px', fontSize: '0.85rem' }}>{item?.period || '-'}</td>
+                                <td style={{ padding: '8px 12px', fontSize: '0.85rem' }}><strong>Rp {Math.round(item?.amount || 0).toLocaleString('id-ID')}</strong></td>
+                                <td style={{ padding: '8px 12px', fontSize: '0.85rem', color: item?.status === 'SUCCESS' ? '#047857' : (item?.status === 'PENDING' || item?.status === 'UNPAID' ? '#b45309' : '#d97706') }}>Rp {Math.round(item?.deducted || 0).toLocaleString('id-ID')}</td>
+                                <td style={{ padding: '8px 12px', fontSize: '0.85rem' }}>
+                                  <span className={item?.status === 'SUCCESS' ? 'badge badge-success' : (item?.status === 'FAILED' ? 'badge badge-danger' : 'badge badge-warning')}>
+                                    {item?.status === 'UNPAID' ? 'PENDING' : (item?.status || 'PENDING')}
+                                  </span>
+                                </td>
+                                <td style={{ padding: '8px 12px', fontSize: '0.85rem', color: '#475569' }}>
+                                  <i>{item?.keterangan || 'Potongan diproses'}</i>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Modal UI Filter Cutoff Export Payroll HRD Adira */}
+              {exportModalOpen && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
+                  <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '24px', width: '90%', maxWidth: '540px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '2px solid #e2e8f0' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        📥 Export File Tagihan Payroll HRD Adira
+                      </h3>
+                      <button onClick={() => setExportModalOpen(false)} style={{ background: '#f1f5f9', border: 'none', borderRadius: '50%', width: '32px', height: '32px', cursor: 'pointer', fontWeight: 'bold', color: '#64748b' }}>✕</button>
+                    </div>
+
+                    <form onSubmit={async (e) => {
+                      e.preventDefault();
+                      try {
+                        const res = await axios.post('http://localhost:8086/api/payroll/export', {
+                          custom_folder: exportCustomFolder,
+                          cutoff_date: exportCutoffDate
+                        });
+                        const csvContent = "data:text/csv;charset=utf-8," + (res.data.csv_content || "");
+                        const encodedUri = encodeURI(csvContent);
+                        const link = document.createElement("a");
+                        link.setAttribute("href", encodedUri);
+                        link.setAttribute("download", res.data.file_name || `ADIRA_PAYROLL_KOPKARA_OUTGOING_${exportCutoffDate.replace(/-/g, '')}.csv`);
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+
+                        setExportModalOpen(false);
+                        alert(`✅ File CSV Tagihan Payroll HRD Adira BERHASIL digenerate!\n\n📁 Folder Simpan: ${res.data.file_path || exportCustomFolder}\n📅 Cut-Off Jatuh Tempo: s/d ${exportCutoffDate}\n📊 Total ${res.data.total_rows || 0} tagihan karyawan diproses.`);
+                      } catch (err) {
+                        alert("❌ Gagal mengeksport file payroll: " + (err.response?.data?.error || err.message));
+                      }
+                    }} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                      
+                      <div style={{ background: '#eff6ff', padding: '12px', borderRadius: '6px', border: '1px solid #bfdbfe' }}>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '6px', color: '#1e40af' }}>
+                          📅 Batas Tanggal Jatuh Tempo (Cut-Off Due Date) *
+                        </label>
+                        <input 
+                          type="date"
+                          value={exportCutoffDate}
+                          onChange={(e) => setExportCutoffDate(e.target.value)}
+                          required
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #93c5fd', fontSize: '0.9rem' }}
+                        />
+                        <div style={{ fontSize: '0.75rem', color: '#1e3a8a', marginTop: '6px', lineHeight: 1.4 }}>
+                          💡 <strong>Ketentuan Cut-off:</strong> Default otomatis diset ke <strong>akhir bulan berjalan</strong> ({exportCutoffDate}). Sistem hanya mengeksport tagihan jatuh tempo <strong>s/d tanggal ini</strong> yang berstatus <strong>UNPAID / PARTIAL</strong>. Tagihan bulan-bulan berikutnya (seperti September 2026 dst) <strong>TIDAK AKAN DIEKSPORT</strong>.
+                        </div>
+                      </div>
+
+                      <div>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px', color: '#0f172a' }}>
+                          📁 Target Folder Penyimpanan (.csv File) *
+                        </label>
+                        <input 
+                          type="text"
+                          value={exportCustomFolder}
+                          onChange={(e) => setExportCustomFolder(e.target.value)}
+                          required
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.85rem', fontFamily: 'monospace' }}
+                        />
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
+                        <button type="button" onClick={() => setExportModalOpen(false)} style={{ padding: '8px 16px', background: '#64748b', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>Batal</button>
+                        <button type="submit" style={{ padding: '8px 18px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>📥 Proses Export File CSV</button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'approval' && (
+            <div className="table-container">
+              <div className="table-header">Approval Pengajuan Pinjaman (HRD / Approval)</div>
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>No. Pengajuan</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tanggal Submit</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Pemohon</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Nominal</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tenor</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Status</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Catatan HRD</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tanggal Diproses</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem', textAlign: 'center' }}>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {applications.length === 0 ? (
+                    <tr><td colSpan="9" style={{ textAlign: 'center', padding: '20px' }}>Belum ada pengajuan pinjaman untuk diproses</td></tr>
+                  ) : (
+                    applications.map(app => (
+                      <tr key={app.ApplicationNo} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}><strong>{app.ApplicationNo}</strong></td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem', color: '#64748B' }}>
+                          {formatDate(app.SubmissionDate)}
+                        </td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Member #{app.MemberNo}</td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Rp {app.RequestedAmount ? app.RequestedAmount.toLocaleString('id-ID') : '0'}</td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>{app.Tenor} Bulan</td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>
+                          <span className={getStatusBadge(app.Status)} style={{ backgroundColor: app.Status === 'REVISION_REQUIRED' ? '#f59e0b' : undefined }}>
+                            {app.Status === 'REVISION_REQUIRED' ? 'REVISI' : app.Status}
+                          </span>
+                        </td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem', color: '#64748B' }}>
+                          {app.ApprovalNotes || '-'}
+                        </td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem', color: '#64748B' }}>
+                          {formatDate(app.ApprovedAt)}
+                        </td>
+                        <td style={{ padding: '6px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                          {app.Status === 'SUBMITTED' ? (
+                            <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                              <button 
+                                onClick={() => handleProcessApproval(app.ApplicationNo, 'APPROVED')}
+                                style={{ padding: '3px 8px', background: 'var(--success-green)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                title="Setujui Pengajuan"
+                              >
+                                ✅ Setuju
+                              </button>
+                              <button 
+                                onClick={() => handleProcessApproval(app.ApplicationNo, 'REVISION_REQUIRED')}
+                                style={{ padding: '3px 8px', background: '#f59e0b', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                title="Minta Revisi Pengajuan"
+                              >
+                                ✏️ Revisi
+                              </button>
+                              <button 
+                                onClick={() => handleProcessApproval(app.ApplicationNo, 'REJECTED')}
+                                style={{ padding: '3px 8px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                title="Tolak Pengajuan"
+                              >
+                                ❌ Tolak
+                              </button>
+                              <button 
+                                onClick={() => handleOpenTracking(app.ApplicationNo)}
+                                style={{ padding: '3px 8px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                title="Lihat Riwayat Status / Tracking"
+                              >
+                                📜 Track
+                              </button>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', gap: '4px', justifyContent: 'center', alignItems: 'center' }}>
+                              {(app.Status === 'APPROVED' || app.Status === 'DISBURSED') && (
+                                <button 
+                                  onClick={() => handlePrintContract(app)}
+                                  style={{ padding: '3px 8px', background: '#0f172a', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                  title="Cetak Surat Perjanjian Kredit & Kontrak Pinjaman"
+                                >
+                                  📄 Kontrak
+                                </button>
+                              )}
+                              {app.Status === 'APPROVED' && (
+                                <button 
+                                  onClick={() => handleDisburse(app)}
+                                  style={{ padding: '3px 8px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                  title="Cairkan Dana Pinjaman"
+                                >
+                                  💵 Cairkan
+                                </button>
+                              )}
+                              <button 
+                                onClick={() => handleOpenTracking(app.ApplicationNo)}
+                                style={{ padding: '3px 8px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                title="Lihat Riwayat Status / Tracking"
+                              >
+                                📜 Track
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {activeTab.startsWith('master-') && (
+            <div className="card" style={{ maxWidth: '1200px' }}>
+              <h2 style={{ textTransform: 'capitalize', marginBottom: '24px', borderBottom: '1px solid #e2e8f0', paddingBottom: '12px' }}>
+                Kelola Data Master: {masterTab.replace('-', ' ')}
+              </h2>
+
+              {masterTab === 'role-menus' ? (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                    <div>
+                      <h3 style={{ margin: 0, color: 'var(--primary-blue)' }}>🔐 Access Privilege Matrix (APM)</h3>
+                      <p style={{ margin: '4px 0 0 0', color: '#64748B', fontSize: '0.9rem' }}>
+                        Centang kotak di bawah ini untuk mengatur hak akses menu setiap Role (Admin, Anggota, HRD/Approval). Perubahan langsung tersimpan ke Database!
+                      </p>
+                    </div>
+                    <button onClick={fetchReferenceData} style={{ padding: '8px 16px', background: '#e0f2fe', color: '#0369a1', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>
+                      🔄 Refresh Matrix
+                    </button>
+                  </div>
+
+                  <div style={{ overflowX: 'auto', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '700px' }}>
+                      <thead>
+                        <tr style={{ background: 'var(--primary-blue)', color: 'white' }}>
+                          <th style={{ padding: '14px', textAlign: 'left', minWidth: '240px' }}>Modul / Menu LMS</th>
+                          <th style={{ padding: '14px', textAlign: 'left', width: '160px' }}>Path Route</th>
+                          {referenceData.roles.map(r => (
+                            <th key={r.role_id} style={{ padding: '14px', textAlign: 'center', width: '150px' }}>
+                              <div>{r.role_name}</div>
+                              <div style={{ fontSize: '0.75rem', fontWeight: 'normal', opacity: 0.8 }}>ID: {r.role_id}</div>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {referenceData.menus.map(menu => {
+                          const isParent = !menu.parent_id;
+                          return (
+                            <tr key={menu.menu_id} style={{ borderBottom: '1px solid #e2e8f0', background: isParent ? '#f8fafc' : 'white' }}>
+                              <td style={{ padding: '12px 16px', fontWeight: isParent ? '600' : 'normal', paddingLeft: isParent ? '16px' : '36px', color: isParent ? '#0f172a' : '#334155' }}>
+                                <span style={{ marginRight: '8px' }}>{menu.icon || '📌'}</span>
+                                {menu.title}
+                              </td>
+                              <td style={{ padding: '12px', fontSize: '0.85rem', color: '#64748B' }}>
+                                <code>{menu.path}</code>
+                              </td>
+                              {referenceData.roles.map(role => {
+                                const isGranted = referenceData.role_menus.some(
+                                  rm => String(rm.role_id) === String(role.role_id) && String(rm.menu_id) === String(menu.menu_id)
+                                );
+                                return (
+                                  <td key={role.role_id} style={{ padding: '12px', textAlign: 'center' }}>
+                                    <input 
+                                      type="checkbox"
+                                      checked={isGranted}
+                                      onChange={() => toggleRoleMenu(role.role_id, menu.menu_id, isGranted)}
+                                      style={{ width: '20px', height: '20px', cursor: 'pointer', accentColor: 'var(--primary-blue)' }}
+                                    />
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '24px' }}>
+                {/* Form Input Dynamic */}
+                <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                  <h3>Tambah / Edit {masterTab.replace('-', ' ')}</h3>
+                  <form onSubmit={saveMasterData} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px' }}>
+                    
+                    {(() => {
+                      let fields = [];
+                      if (masterTab === 'departments') fields = [{k:'deptno', l:'Dept No (Number)', type: 'number'}, {k:'dept_name', l:'Dept Name'}];
+                      else if (masterTab === 'employee-statuses' || masterTab === 'kopkara-statuses') fields = [{k:'status_code', l:'Status Code'}, {k:'description', l:'Description'}];
+                      else if (masterTab === 'employee-categories') fields = [{k:'category_code', l:'Category Code'}, {k:'description', l:'Description'}, {k:'max_limit', l:'Max Limit (Number)', type:'number'}, {k:'is_eligible', l:'Is Eligible (Check for Yes)', type:'checkbox'}];
+                      else if (masterTab === 'employees') fields = [
+                        {k:'employee_id', l:'Employee ID (Number)', type:'number'}, 
+                        {k:'name', l:'Name'}, 
+                        {k:'employee_status', l:'Employee Status', type:'select', options: referenceData.employeeStatuses.map(d => ({val: d.status_code, label: d.description}))}, 
+                        {k:'deptno', l:'Department', type:'select', options: referenceData.departments.map(d => ({val: d.deptno, label: d.dept_name}))}, 
+                        {k:'category_code', l:'Category', type:'select', options: referenceData.employeeCategories.map(d => ({val: d.category_code, label: d.description}))},
+                        {k:'role_id', l:'Role', type:'select', options: referenceData.roles.map(d => ({val: d.role_id, label: d.role_name}))},
+                        {k:'salary', l:'Salary (Number)', type:'number'}
+                      ];
+                      else if (masterTab === 'members') fields = [
+                        {k:'member_no', l:'Member No (Number)', type:'number'}, 
+                        {k:'employee_id', l:'Employee', type:'select', options: referenceData.employees.map(d => ({val: d.employee_id, label: `${d.employee_id} - ${d.name}`}))}, 
+                        {k:'kopkara_status', l:'Kopkara Status', type:'select', options: referenceData.kopkaraStatuses.map(d => ({val: d.status_code, label: d.description}))}, 
+                        {k:'join_date', l:'Join Date (YYYY-MM-DD)', type:'date'},
+                        {k:'bank_name', l:'Nama Bank (Contoh: BCA, Mandiri)'},
+                        {k:'bank_account_no', l:'No. Rekening Bank'},
+                        {k:'bank_account_name', l:'Nama Pemilik Rekening'}
+                      ];
+                      else if (masterTab === 'roles') fields = [
+                        {k:'role_name', l:'Role Name'},
+                        {k:'description', l:'Description'}
+                      ];
+                      else if (masterTab === 'menus') fields = [
+                        {k:'title', l:'Menu Title'},
+                        {k:'icon', l:'Icon (Emoji)'},
+                        {k:'path', l:'Path (Route)'},
+                        {k:'order', l:'Order Sequence (Number)', type:'number'}
+                      ];
+                      else if (masterTab === 'role-menus') fields = [
+                        {k:'role_id', l:'Role', type:'select', options: referenceData.roles.map(d => ({val: d.role_id, label: d.role_name}))},
+                        {k:'menu_id', l:'Menu', type:'select', options: referenceData.menus.map(d => ({val: d.menu_id, label: `${d.title} (${d.path})`}))}
+                      ];
+                      else if (masterTab === 'parameters') fields = [
+                        {k:'key_name', l:'Key Name'},
+                        {k:'key_value', l:'Key Value'},
+                        {k:'description', l:'Description'}
+                      ];
+                      
+                      return fields.map(f => (
+                        <div key={f.k} style={{ display: 'flex', flexDirection: f.type === 'checkbox' ? 'row' : 'column', alignItems: f.type === 'checkbox' ? 'center' : 'flex-start', gap: f.type === 'checkbox' ? '8px' : '4px' }}>
+                          <label style={{ fontSize: '0.9rem', fontWeight: 500, color: '#334155' }}>{f.l}</label>
+                          {f.type === 'select' ? (
+                            <select 
+                              required
+                              value={masterForm[f.k] || ''}
+                              onChange={e => setMasterForm({...masterForm, [f.k]: f.k === 'employee_id' ? parseInt(e.target.value) : e.target.value})}
+                              style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)', backgroundColor: 'white' }}
+                            >
+                              <option value="">-- Pilih {f.l} --</option>
+                              {f.options && f.options.map(opt => (
+                                <option key={opt.val} value={opt.val}>{opt.label} ({opt.val})</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input 
+                              type={f.type || 'text'}
+                              required={f.type !== 'checkbox'}
+                              checked={f.type === 'checkbox' ? (masterForm[f.k] || false) : undefined}
+                              value={f.type !== 'checkbox' ? (masterForm[f.k] || '') : undefined}
+                              onChange={e => setMasterForm({
+                                ...masterForm, 
+                                [f.k]: f.type === 'checkbox' ? e.target.checked : (f.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value)
+                              })}
+                              style={f.type !== 'checkbox' ? { width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)' } : { width: '20px', height: '20px' }}
+                            />
+                          )}
+                        </div>
+                      ));
+                    })()}
+                    
+                    <button type="submit" style={{ padding: '10px', background: 'var(--success-green)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, marginTop: '8px' }}>Simpan Data</button>
+                    {Object.keys(masterForm).length > 0 && (
+                      <button type="button" onClick={() => setMasterForm({})} style={{ padding: '10px', background: '#e2e8f0', color: '#475569', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>Batal / Form Baru</button>
+                    )}
+                  </form>
+                </div>
+
+                {/* Table View Dynamic with Search Filter */}
+                <div style={{ overflowX: 'auto', marginTop: '16px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                    <input 
+                      type="text" 
+                      placeholder="🔍 Cari data (LIKE search: misal pinjam)..."
+                      value={masterSearchQuery}
+                      onChange={e => setMasterSearchQuery(e.target.value)}
+                      style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', width: '320px', fontSize: '0.9rem' }}
+                    />
+                    <span style={{ fontSize: '0.85rem', color: '#64748B' }}>
+                      Pencarian: {masterDataList.filter(row => {
+                        if (!masterSearchQuery) return true;
+                        const q = masterSearchQuery.toLowerCase();
+                        return Object.values(row).some(v => String(v ?? '').toLowerCase().includes(q));
+                      }).length} dari {masterDataList.length} data
+                    </span>
+                  </div>
+
+                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '600px' }}>
+                    <thead>
+                      <tr style={{ background: 'var(--primary-blue)', color: 'white' }}>
+                        {(() => {
+                          let keys = [];
+                          if (masterDataList.length > 0) {
+                            keys = Object.keys(masterDataList[0]).filter(k => k !== 'CreatedAt' && k !== 'UpdatedAt' && k !== 'DeletedAt' && k !== 'CreatedUser');
+                          }
+                          return keys.map(k => <th key={k} style={{ padding: '8px 12px', textAlign: 'left', textTransform: 'capitalize', fontSize: '0.875rem' }}>{k.replace('_', ' ')}</th>);
+                        })()}
+                        <th style={{ padding: '8px 12px', textAlign: 'center', width: '120px', fontSize: '0.875rem' }}>Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const filtered = masterDataList.filter(row => {
+                          if (!masterSearchQuery) return true;
+                          const q = masterSearchQuery.toLowerCase();
+                          return Object.values(row).some(v => String(v ?? '').toLowerCase().includes(q));
+                        });
+
+                        const pageSize = parseInt(parameters.find(p => p.KeyName === 'PAGINATION_LIMIT')?.KeyValue || '10');
+                        const startIndex = (currentPage - 1) * pageSize;
+                        const paginated = filtered.slice(startIndex, startIndex + pageSize);
+
+                        return paginated.map((row, idx) => {
+                          const pkField = Object.keys(row).find(k => k.includes('id') || k.includes('no') || k.includes('code'));
+                          const pkValue = row[pkField];
+                          const keys = Object.keys(row).filter(k => k !== 'CreatedAt' && k !== 'UpdatedAt' && k !== 'DeletedAt' && k !== 'CreatedUser');
+                          
+                          return (
+                            <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                              {keys.map(k => (
+                                <td key={k} style={{ padding: '6px 12px', color: '#334155', fontSize: '0.875rem' }}>
+                                  {typeof row[k] === 'boolean' 
+                                    ? (row[k] ? 'Ya' : 'Tidak') 
+                                    : (typeof row[k] === 'object' && row[k] !== null 
+                                        ? JSON.stringify(row[k]) 
+                                        : String(row[k] ?? ''))}
+                                </td>
+                              ))}
+                              <td style={{ padding: '6px 12px', textAlign: 'center' }}>
+                                <button onClick={() => setMasterForm(row)} style={{ padding: '3px 8px', background: '#e0f2fe', color: '#0369a1', border: 'none', borderRadius: '4px', cursor: 'pointer', marginRight: '4px', fontSize: '0.8rem' }}>Edit</button>
+                                <button onClick={() => deleteMasterData(pkField, pkValue)} style={{ padding: '3px 8px', background: '#fee2e2', color: '#b91c1c', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>Hapus</button>
+                              </td>
+                            </tr>
+                          );
+                        });
+                      })()}
+                      {masterDataList.length === 0 && (
+                        <tr><td colSpan="100%" style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>Belum ada data.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+
+                  {(() => {
+                    const filtered = masterDataList.filter(row => {
+                      if (!masterSearchQuery) return true;
+                      const q = masterSearchQuery.toLowerCase();
+                      return Object.values(row).some(v => String(v ?? '').toLowerCase().includes(q));
+                    });
+
+                    const pageSize = parseInt(parameters.find(p => p.KeyName === 'PAGINATION_LIMIT')?.KeyValue || '10');
+                    const totalPages = Math.ceil(filtered.length / pageSize) || 1;
+
+                    if (totalPages <= 1) return null;
+
+                    return (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #cbd5e1' }}>
+                        <span style={{ fontSize: '0.85rem', color: '#64748B' }}>
+                          Halaman <strong>{currentPage}</strong> dari <strong>{totalPages}</strong> (Limit: {pageSize} per page)
+                        </span>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button 
+                            disabled={currentPage === 1}
+                            onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                            style={{ padding: '6px 12px', background: currentPage === 1 ? '#e2e8f0' : '#0369a1', color: currentPage === 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: currentPage === 1 ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+                          >
+                            ◀ Sebelumnya
+                          </button>
+                          <button 
+                            disabled={currentPage >= totalPages}
+                            onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                            style={{ padding: '6px 12px', background: currentPage >= totalPages ? '#e2e8f0' : '#0369a1', color: currentPage >= totalPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: currentPage >= totalPages ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+                          >
+                            Selanjutnya ▶
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'manual-repayment' && (() => {
+          const paymentSourcesParam = getParamVal('PAYMENT_SOURCES', 'TRANSFER_BANK:Transfer Bank BCA/Mandiri Kopkara,POTONG_PESANGON:Potong Langsung Uang Pesangon (HRD Adira),KOMPENSASI_SIMPANAN:Kompensasi Offset Simpanan Koperasi');
+          const paymentSourceOptions = paymentSourcesParam.split(',').map(item => {
+            const parts = item.split(':');
+            return { code: (parts[0] || '').trim(), label: (parts[1] || parts[0] || '').trim() };
+          }).filter(o => o.code.length > 0);
+
+          const memberOptionsList = allMembers.length > 0 ? allMembers : (() => {
+            const map = {};
+            (payrollSchedules || []).forEach(s => {
+              if (s.member_no && !map[s.member_no]) {
+                map[s.member_no] = { member_no: s.member_no, employee_id: s.member_no, name: s.employee_name || `Anggota #${s.member_no}` };
+              }
+            });
+            return Object.values(map);
+          })();
+
+          const pageSize = parseInt(getParamVal('DEFAULT_PAGE_SIZE', '10')) || 10;
+
+          // Filter Anggota (LIKE Search on member_no, employee_id, or name) & Pagination
+          const filteredMembers = memberOptionsList.filter(m => 
+            String(m.member_no).toLowerCase().includes(memberSearchQuery.toLowerCase()) ||
+            String(m.employee_id || '').toLowerCase().includes(memberSearchQuery.toLowerCase()) ||
+            String(m.name || '').toLowerCase().includes(memberSearchQuery.toLowerCase())
+          );
+          const totalMemberPages = Math.ceil(filteredMembers.length / pageSize) || 1;
+          const paginatedMembers = filteredMembers.slice((memberPage - 1) * pageSize, memberPage * pageSize);
+
+          // Filter Pinjaman (Active/Outstanding loans matching selected member, excluding PAID/CLOSED) & Pagination
+          const activeSchedules = (payrollSchedules || []).filter(s => s.status !== 'PAID' && s.status !== 'CLOSED');
+          const baseLoans = selectedMemberFilter 
+            ? activeSchedules.filter(s => String(s.member_no) === String(selectedMemberFilter))
+            : activeSchedules;
+
+          const filteredLoans = baseLoans.filter(s =>
+            String(s.loan_no).toLowerCase().includes(loanSearchQuery.toLowerCase()) ||
+            String(s.employee_name).toLowerCase().includes(loanSearchQuery.toLowerCase()) ||
+            String(s.member_no).toLowerCase().includes(loanSearchQuery.toLowerCase()) ||
+            String(s.period).toLowerCase().includes(loanSearchQuery.toLowerCase())
+          );
+          const totalLoanPages = Math.ceil(filteredLoans.length / pageSize) || 1;
+          const paginatedLoans = filteredLoans.slice((loanPage - 1) * pageSize, loanPage * pageSize);
+
+          const currentYearNum = new Date().getFullYear();
+          const yearOptions = [currentYearNum - 3, currentYearNum - 2, currentYearNum - 1, currentYearNum, currentYearNum + 1, currentYearNum + 2, currentYearNum + 3];
+          const monthOptions = [
+            { code: '01', name: '01 - Januari' },
+            { code: '02', name: '02 - Februari' },
+            { code: '03', name: '03 - Maret' },
+            { code: '04', name: '04 - April' },
+            { code: '05', name: '05 - Mei' },
+            { code: '06', name: '06 - Juni' },
+            { code: '07', name: '07 - Juli' },
+            { code: '08', name: '08 - Agustus' },
+            { code: '09', name: '09 - September' },
+            { code: '10', name: '10 - Oktober' },
+            { code: '11', name: '11 - November' },
+            { code: '12', name: '12 - Desember' },
+          ];
+
+          return (
+          <div>
+            <h2 style={{ marginBottom: '16px', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              💳 Pelunasan Manual & Pelunasan Dipercepat Karyawan Resign
+            </h2>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '24px' }}>
+              {/* Form Input Pelunasan Manual */}
+              <div className="card" style={{ background: '#f8fafc', padding: '20px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                <h3 style={{ margin: 0, marginBottom: '16px', fontSize: '1.05rem', color: '#1e293b' }}>📝 Form Pelunasan Manual</h3>
+                <form onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!manualForm.loan_no || !manualForm.nominal) {
+                    alert("Silakan masukan Nomor Pinjaman dan Nominal Pembayaran.");
+                    return;
+                  }
+                  try {
+                    const activeUserName = currentUser ? String(currentUser.employee_id || '10101') : '10101';
+                    const res = await axios.post('http://localhost:8086/api/payroll/manual-repayment', {
+                      ...manualForm,
+                      period: `${manualYear}-${manualMonth}`,
+                      loan_no: parseInt(manualForm.loan_no) || 0,
+                      member_no: parseInt(manualForm.member_no) || 0,
+                      nominal: parseFloat(manualForm.nominal) || 0,
+                      updated_user: activeUserName
+                    });
+                    alert(`✅ ${res.data.message}`);
+                    setManualForm({ loan_no: '', member_no: '', period: `${manualYear}-${manualMonth}`, payment_type: paymentSourceOptions[0]?.code || 'TRANSFER_BANK', nominal: '', reference_no: '', notes: '', is_full_settlement: false });
+                    fetchPayrollSchedules();
+                    axios.get('http://localhost:8086/api/payroll/deductions').then(r => setManualLogs(r.data.data || []));
+                  } catch (err) {
+                    alert("❌ Gagal memproses pelunasan manual: " + (err.response?.data?.error || err.message));
+                  }
+                }} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  
+                  {/* Dropdown 1: Input Search & Select Anggota (1-Line Horizontal Layout, Data from Members/Employees Table) */}
+                  <div style={{ background: '#ffffff', padding: '12px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
+                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '6px', color: '#0f172a' }}>
+                      1. Pilih Anggota / Karyawan *
+                    </label>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '8px', alignItems: 'center' }}>
+                      <input 
+                        type="text"
+                        value={memberSearchQuery}
+                        onChange={(e) => {
+                          setMemberSearchQuery(e.target.value);
+                          setMemberPage(1);
+                        }}
+                        placeholder="🔍 Cari member_no / name / ID..."
+                        style={{ width: '100%', padding: '8px 10px', borderRadius: '4px', border: '1px solid #94a3b8', fontSize: '0.85rem' }}
+                      />
+                      <select 
+                        value={selectedMemberFilter}
+                        onChange={(e) => {
+                          const mNo = e.target.value;
+                          setSelectedMemberFilter(mNo);
+                          fetchPayrollSchedules();
+                          const firstLoan = (payrollSchedules || []).find(s => String(s.member_no) === String(mNo) && s.status !== 'PAID' && s.status !== 'CLOSED');
+                          if (firstLoan) {
+                            setManualForm({
+                              ...manualForm,
+                              loan_no: firstLoan.loan_no,
+                              member_no: firstLoan.member_no,
+                              nominal: firstLoan.total_installment,
+                              period: `${manualYear}-${manualMonth}`
+                            });
+                          } else {
+                            setManualForm({ ...manualForm, loan_no: '', member_no: mNo, period: `${manualYear}-${manualMonth}` });
+                          }
+                        }}
+                        style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                      >
+                        <option value="">-- Semua Anggota ({filteredMembers.length} Ditemukan) --</option>
+                        {paginatedMembers.map(m => (
+                          <option key={m.member_no} value={m.member_no}>
+                            {m.member_no} - {m.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    
+                    {/* Pagination Controls Anggota */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', fontSize: '0.75rem', color: '#475569' }}>
+                      <span>Hal {memberPage} dari {totalMemberPages} ({filteredMembers.length} Anggota)</span>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <button 
+                          type="button"
+                          disabled={memberPage === 1}
+                          onClick={() => setMemberPage(prev => Math.max(prev - 1, 1))}
+                          style={{ padding: '2px 8px', fontSize: '0.75rem', background: memberPage === 1 ? '#e2e8f0' : '#0369a1', color: memberPage === 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '3px', cursor: memberPage === 1 ? 'not-allowed' : 'pointer' }}
+                        >
+                          ◀ Prev
+                        </button>
+                        <button 
+                          type="button"
+                          disabled={memberPage >= totalMemberPages}
+                          onClick={() => setMemberPage(prev => Math.min(prev + 1, totalMemberPages))}
+                          style={{ padding: '2px 8px', fontSize: '0.75rem', background: memberPage >= totalMemberPages ? '#e2e8f0' : '#0369a1', color: memberPage >= totalMemberPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '3px', cursor: memberPage >= totalMemberPages ? 'not-allowed' : 'pointer' }}
+                        >
+                          Next ▶
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Dropdown 2: Input Search & Select Pinjaman Aktif (1-Line Horizontal Layout, Filtered by Active Loans & Member) */}
+                  <div style={{ background: '#ffffff', padding: '12px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
+                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '6px', color: '#0f172a' }}>
+                      2. Pilih Pinjaman Aktif *
+                    </label>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '8px', alignItems: 'center' }}>
+                      <input 
+                        type="text"
+                        value={loanSearchQuery}
+                        onChange={(e) => {
+                          setLoanSearchQuery(e.target.value);
+                          setLoanPage(1);
+                        }}
+                        placeholder="🔍 Cari No. Pinjaman / Periode..."
+                        style={{ width: '100%', padding: '8px 10px', borderRadius: '4px', border: '1px solid #94a3b8', fontSize: '0.85rem' }}
+                      />
+                      <select 
+                        value={manualForm.loan_no} 
+                        onChange={(e) => {
+                          const lNo = e.target.value;
+                          const sel = payrollSchedules.find(s => String(s.loan_no) === String(lNo));
+                          setManualForm({
+                            ...manualForm,
+                            loan_no: lNo,
+                            member_no: sel ? sel.member_no : selectedMemberFilter,
+                            nominal: sel ? sel.total_installment : '',
+                            period: `${manualYear}-${manualMonth}`
+                          });
+                          if (sel && sel.member_no) {
+                            setSelectedMemberFilter(String(sel.member_no));
+                          }
+                        }}
+                        required
+                        style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                      >
+                        <option value="">-- Pilih Pinjaman Aktif ({filteredLoans.length} Ditemukan) --</option>
+                        {paginatedLoans.map(s => (
+                          <option key={s.id} value={s.loan_no}>
+                            Pinjaman #{s.loan_no} - {s.employee_name} ({s.member_no}) - Rp {Math.round(s.total_installment).toLocaleString('id-ID')} ({s.period})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Pagination Controls Pinjaman */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', fontSize: '0.75rem', color: '#475569' }}>
+                      <span>Hal {loanPage} dari {totalLoanPages} ({filteredLoans.length} Pinjaman)</span>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <button 
+                          type="button"
+                          disabled={loanPage === 1}
+                          onClick={() => setLoanPage(prev => Math.max(prev - 1, 1))}
+                          style={{ padding: '2px 8px', fontSize: '0.75rem', background: loanPage === 1 ? '#e2e8f0' : '#0369a1', color: loanPage === 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '3px', cursor: loanPage === 1 ? 'not-allowed' : 'pointer' }}
+                        >
+                          ◀ Prev
+                        </button>
+                        <button 
+                          type="button"
+                          disabled={loanPage >= totalLoanPages}
+                          onClick={() => setLoanPage(prev => Math.min(prev + 1, totalLoanPages))}
+                          style={{ padding: '2px 8px', fontSize: '0.75rem', background: loanPage >= totalLoanPages ? '#e2e8f0' : '#0369a1', color: loanPage >= totalLoanPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '3px', cursor: loanPage >= totalLoanPages ? 'not-allowed' : 'pointer' }}
+                        >
+                          Next ▶
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Dropdown 3: Metode / Sumber Pelunasan (Dinamis Master Parameter) */}
+                  <div>
+                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>3. Metode / Sumber Pelunasan (Dinamis Master Parameter) *</label>
+                    <select 
+                      value={manualForm.payment_type}
+                      onChange={(e) => setManualForm({ ...manualForm, payment_type: e.target.value })}
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                    >
+                      {paymentSourceOptions.map(opt => (
+                        <option key={opt.code} value={opt.code}>
+                          {opt.label} ({opt.code})
+                        </option>
+                      ))}
+                    </select>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '2px' }}>
+                      💡 <em>Dapat ditambah/diubah di menu Pengaturan Parameter (key: <code>PAYMENT_SOURCES</code>)</em>
+                    </div>
+                  </div>
+
+                  {/* Dropdown 4: Periode Tagihan (Dropdown Bulan & Dropdown Tahun) */}
+                  <div>
+                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>4. Periode Tagihan (Bulan & Tahun) *</label>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                      <select 
+                        value={manualMonth}
+                        onChange={(e) => {
+                          const m = e.target.value;
+                          setManualMonth(m);
+                          setManualForm(prev => ({ ...prev, period: `${manualYear}-${m}` }));
+                        }}
+                        style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                      >
+                        {monthOptions.map(mo => (
+                          <option key={mo.code} value={mo.code}>{mo.name}</option>
+                        ))}
+                      </select>
+
+                      <select 
+                        value={manualYear}
+                        onChange={(e) => {
+                          const y = e.target.value;
+                          setManualYear(y);
+                          setManualForm(prev => ({ ...prev, period: `${y}-${manualMonth}` }));
+                        }}
+                        style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                      >
+                        {yearOptions.map(yr => (
+                          <option key={yr} value={yr}>Tahun {yr}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#0369a1', marginTop: '4px', fontWeight: 500 }}>
+                      📅 Periode Terpilih: <strong>{manualYear}-{manualMonth}</strong>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Nominal Pembayaran (Rp) *</label>
+                    <input 
+                      type="number" 
+                      value={manualForm.nominal} 
+                      onChange={(e) => setManualForm({ ...manualForm, nominal: e.target.value })}
+                      placeholder="Nominal Rp" 
+                      required 
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>No. Bukti Transfer / Ref Bank</label>
+                    <input 
+                      type="text" 
+                      value={manualForm.reference_no} 
+                      onChange={(e) => setManualForm({ ...manualForm, reference_no: e.target.value })}
+                      placeholder="Contoh: TRF-BCA-987123" 
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Catatan Pelunasan / Karyawan Resign</label>
+                    <input 
+                      type="text" 
+                      value={manualForm.notes} 
+                      onChange={(e) => setManualForm({ ...manualForm, notes: e.target.value })}
+                      placeholder="Catatan pelunasan mandiri / pesangon" 
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px', background: '#fef3c7', borderRadius: '4px', border: '1px solid #f59e0b' }}>
+                    <input 
+                      type="checkbox" 
+                      id="isFull" 
+                      checked={manualForm.is_full_settlement}
+                      onChange={(e) => setManualForm({ ...manualForm, is_full_settlement: e.target.checked })}
+                      style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                    />
+                    <label htmlFor="isFull" style={{ fontSize: '0.85rem', fontWeight: 600, color: '#92400e', cursor: 'pointer' }}>
+                      🔥 Pelunasan Lunas Sekaligus (Early Full Settlement)
+                    </label>
+                  </div>
+
+                  <button 
+                    type="submit" 
+                    style={{ marginTop: '8px', padding: '10px 16px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.9rem' }}
+                  >
+                    💳 Eksekusi Pelunasan Manual
+                  </button>
+                </form>
+              </div>
+
+              {/* Tabel Log Audit Pelunasan */}
+              <div className="card" style={{ padding: '0px', overflow: 'hidden' }}>
+                <div style={{ padding: '16px 20px', background: 'var(--primary-blue)', color: 'white', fontWeight: 'bold', fontSize: '1.05rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>📜 Riwayat Audit Log Pelunasan & Rekonsiliasi (`lms_sch.payroll_deductions`)</span>
+                  <button 
+                    onClick={() => axios.get('http://localhost:8086/api/payroll/deductions').then(r => setManualLogs(r.data.data || []))}
+                    style={{ padding: '4px 10px', background: 'rgba(255,255,255,0.2)', color: 'white', border: '1px solid white', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
+                  >
+                    🔄 Refresh Log
+                  </button>
+                </div>
+
+                <div style={{ overflowX: 'auto', maxHeight: '550px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                    <thead>
+                      <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                        <th style={{ padding: '10px 12px', textAlign: 'left' }}>Log ID</th>
+                        <th style={{ padding: '10px 12px', textAlign: 'left' }}>No Pinjaman / Anggota</th>
+                        <th style={{ padding: '10px 12px', textAlign: 'left' }}>Periode</th>
+                        <th style={{ padding: '10px 12px', textAlign: 'right' }}>Nominal Tagihan</th>
+                        <th style={{ padding: '10px 12px', textAlign: 'right' }}>Terpotong / Dibayar</th>
+                        <th style={{ padding: '10px 12px', textAlign: 'center' }}>Status</th>
+                        <th style={{ padding: '10px 12px', textAlign: 'left' }}>Keterangan / Ref</th>
+                        <th style={{ padding: '10px 12px', textAlign: 'left' }}>User ID</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {manualLogs.length === 0 ? (
+                        <tr><td colSpan="8" style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>Belum ada histori pelunasan manual / rekonsiliasi tersimpan.</td></tr>
+                      ) : (
+                        manualLogs.map(log => (
+                          <tr key={log.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                            <td style={{ padding: '8px 12px', fontWeight: 'bold' }}>#{log.id}</td>
+                            <td style={{ padding: '8px 12px' }}>
+                              <div><strong>{log.loan_no ? `Pinjaman #${log.loan_no}` : 'Tanpa No Pinjaman'}</strong></div>
+                              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>{log.employee_name} ({log.member_no})</div>
+                            </td>
+                            <td style={{ padding: '8px 12px' }}>{log.period || '-'}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'right' }}>Rp {Math.round(log.nominal_original || 0).toLocaleString('id-ID')}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 'bold', color: log.status?.includes('SUCCESS') ? '#047857' : '#b45309' }}>
+                              Rp {Math.round(log.nominal_deducted || 0).toLocaleString('id-ID')}
+                            </td>
+                            <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                              <span className={log.status?.includes('SUCCESS') ? 'badge badge-success' : (log.status === 'FAILED' ? 'badge badge-danger' : 'badge badge-warning')}>
+                                {log.status}
+                              </span>
+                            </td>
+                            <td style={{ padding: '8px 12px', fontSize: '0.8rem', color: '#334155' }}>{log.failure_reason || '-'}</td>
+                            <td style={{ padding: '8px 12px', fontSize: '0.8rem', fontFamily: 'monospace' }}>{log.created_user || '10101'}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+          );
+        })()}
+
+        {activeTab === 'products' && (() => {
+          const canManageProducts = !['anggota'].includes(String(realRoleName || '').toLowerCase());
+          return (
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <div>
+                <h2 style={{ margin: 0, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  📦 Katalog & Pengaturan Produk Pinjaman Kopkara
+                </h2>
+                <p style={{ margin: '4px 0 0 0', color: '#64748b', fontSize: '0.9rem' }}>
+                  Kelola jenis produk pinjaman, aturan suku bunga, max tenor, dan batas plafon peminjaman.
+                </p>
+              </div>
+              {canManageProducts && (
+                <button 
+                  onClick={() => {
+                    setEditingProduct(null);
+                    setProductForm({
+                      name: '',
+                      loan_type: 'FLAT',
+                      max_tenor_months: 24,
+                      submission_period_start: 1,
+                      submission_period_end: 25,
+                      max_percentage_salary: 40.0,
+                      interest_rate: 1.5,
+                      status: 'ACTIVE'
+                    });
+                    setProductModalOpen(true);
+                  }}
+                  style={{ padding: '10px 18px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  ➕ Tambah Produk Baru
+                </button>
+              )}
+            </div>
+
+            {/* Product Summary Statistics Cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' }}>
+              <div className="card" style={{ background: '#eff6ff', border: '1px solid #bfdbfe', padding: '16px' }}>
+                <div style={{ fontSize: '0.8rem', color: '#1e40af', fontWeight: 600 }}>Total Produk Pinjaman</div>
+                <div style={{ fontSize: '1.6rem', fontWeight: 'bold', color: '#1e3a8a', marginTop: '4px' }}>{products.length} Produk</div>
+              </div>
+              <div className="card" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', padding: '16px' }}>
+                <div style={{ fontSize: '0.8rem', color: '#065f46', fontWeight: 600 }}>Produk Aktif</div>
+                <div style={{ fontSize: '1.6rem', fontWeight: 'bold', color: '#047857', marginTop: '4px' }}>{products.filter(p => p.status === 'ACTIVE').length} Aktif</div>
+              </div>
+              <div className="card" style={{ background: '#fefce8', border: '1px solid #fef08a', padding: '16px' }}>
+                <div style={{ fontSize: '0.8rem', color: '#854d0e', fontWeight: 600 }}>Rata-Rata Suku Bunga</div>
+                <div style={{ fontSize: '1.6rem', fontWeight: 'bold', color: '#a16207', marginTop: '4px' }}>
+                  {products.length > 0 ? (products.reduce((acc, p) => acc + (p.interest_rate || 0), 0) / products.length).toFixed(1) : 0}% / bln
+                </div>
+              </div>
+              <div className="card" style={{ background: '#f3e8ff', border: '1px solid #e9d5ff', padding: '16px' }}>
+                <div style={{ fontSize: '0.8rem', color: '#6b21a8', fontWeight: 600 }}>Tenor Maksimal</div>
+                <div style={{ fontSize: '1.6rem', fontWeight: 'bold', color: '#7e22ce', marginTop: '4px' }}>
+                  {products.length > 0 ? Math.max(...products.map(p => p.max_tenor_months || 0)) : 0} Bulan
+                </div>
+              </div>
+            </div>
+
+            {/* Filter & Search Bar */}
+            <div className="card" style={{ padding: '12px 16px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <input 
+                type="text" 
+                value={productSearchQuery}
+                onChange={(e) => setProductSearchQuery(e.target.value)}
+                placeholder="🔍 Cari nama produk / tipe pinjaman (FLAT / SLIDING / ANUITAS)..."
+                style={{ width: '350px', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
+              />
+              <span style={{ fontSize: '0.85rem', color: '#64748b' }}>
+                Menampilkan <strong>{products.filter(p => (p.name || '').toLowerCase().includes(productSearchQuery.toLowerCase()) || (p.loan_type || '').toLowerCase().includes(productSearchQuery.toLowerCase())).length}</strong> dari {products.length} produk
+              </span>
+            </div>
+
+            {/* Products Table */}
+            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                <thead>
+                  <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0', color: '#475569' }}>
+                    <th style={{ padding: '12px 16px', textAlign: 'left' }}>ID</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'left' }}>Nama Produk Pinjaman</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'center' }}>Tipe Angsuran</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'center' }}>Max Tenor</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'center' }}>Periode Pengajuan</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'right' }}>Max % Gaji (DSR)</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'right' }}>Bunga / Bulan</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'center' }}>Status</th>
+                    {canManageProducts && <th style={{ padding: '12px 16px', textAlign: 'center' }}>Aksi</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {products.filter(p => (p.name || '').toLowerCase().includes(productSearchQuery.toLowerCase()) || (p.loan_type || '').toLowerCase().includes(productSearchQuery.toLowerCase())).length === 0 ? (
+                    <tr><td colSpan="9" style={{ textAlign: 'center', padding: '32px', color: '#94a3b8' }}>Tidak ada data produk pinjaman ditemukan.</td></tr>
+                  ) : (
+                    products.filter(p => (p.name || '').toLowerCase().includes(productSearchQuery.toLowerCase()) || (p.loan_type || '').toLowerCase().includes(productSearchQuery.toLowerCase())).map(p => (
+                      <tr key={p.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                        <td style={{ padding: '12px 16px', fontWeight: 'bold', color: '#64748b' }}>#{p.id}</td>
+                        <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a' }}>
+                          <div>{p.name}</div>
+                        </td>
+                        <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                          <span style={{ padding: '3px 8px', borderRadius: '4px', background: '#e0f2fe', color: '#0369a1', fontWeight: 600, fontSize: '0.75rem' }}>
+                            {p.loan_type || 'FLAT'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 600 }}>{p.max_tenor_months} Bulan</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'center', color: '#475569' }}>Tgl {p.submission_period_start} - {p.submission_period_end}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600, color: '#166534' }}>{p.max_percentage_salary}%</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 'bold', color: '#0284c7' }}>{p.interest_rate}%</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                          <span className={p.status === 'ACTIVE' ? 'badge badge-success' : 'badge badge-danger'}>
+                            {p.status || 'ACTIVE'}
+                          </span>
+                        </td>
+                        {canManageProducts && (
+                          <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                              <button 
+                                onClick={() => {
+                                  setEditingProduct(p);
+                                  setProductForm({
+                                    name: p.name || '',
+                                    loan_type: p.loan_type || 'FLAT',
+                                    max_tenor_months: p.max_tenor_months || 24,
+                                    submission_period_start: p.submission_period_start || 1,
+                                    submission_period_end: p.submission_period_end || 25,
+                                    max_percentage_salary: p.max_percentage_salary || 40.0,
+                                    interest_rate: p.interest_rate || 1.5,
+                                    status: p.status || 'ACTIVE'
+                                  });
+                                  setProductModalOpen(true);
+                                }}
+                                style={{ padding: '4px 10px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
+                              >
+                                ✏️ Edit
+                              </button>
+                              <button 
+                                onClick={async () => {
+                                  if (window.confirm(`Hapus produk pinjaman "${p.name}"?`)) {
+                                    try {
+                                      await axios.delete(`http://localhost:8086/api/products/${p.id}`);
+                                      alert("✅ Produk pinjaman berhasil dihapus!");
+                                      fetchProducts();
+                                    } catch (err) {
+                                      alert("❌ Gagal menghapus produk: " + (err.response?.data?.error || err.message));
+                                    }
+                                  }
+                                }}
+                                style={{ padding: '4px 10px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
+                              >
+                                🗑️ Hapus
+                              </button>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Modal Form Tambah / Edit Produk Pinjaman */}
+            {productModalOpen && (
+              <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
+                <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '24px', width: '90%', maxWidth: '600px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', paddingBottom: '12px', borderBottom: '2px solid #e2e8f0' }}>
+                    <h2 style={{ margin: 0, fontSize: '1.15rem', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      📦 {editingProduct ? `Edit Produk Pinjaman #${editingProduct.id}` : 'Tambah Produk Pinjaman Baru'}
+                    </h2>
+                    <button onClick={() => setProductModalOpen(false)} style={{ background: '#f1f5f9', border: 'none', borderRadius: '50%', width: '32px', height: '32px', cursor: 'pointer', fontWeight: 'bold', color: '#64748b' }}>✕</button>
+                  </div>
+
+                  <form onSubmit={async (e) => {
+                    e.preventDefault();
+                    try {
+                      const payload = {
+                        ...productForm,
+                        id: editingProduct ? editingProduct.id : 0,
+                        max_tenor_months: parseInt(productForm.max_tenor_months) || 12,
+                        submission_period_start: parseInt(productForm.submission_period_start) || 1,
+                        submission_period_end: parseInt(productForm.submission_period_end) || 25,
+                        max_percentage_salary: parseFloat(String(productForm.max_percentage_salary).replace(',', '.')) || 40.0,
+                        interest_rate: parseFloat(String(productForm.interest_rate).replace(',', '.')) || 1.5
+                      };
+
+                      if (editingProduct) {
+                        await axios.put(`http://localhost:8086/api/products/${editingProduct.id}`, payload);
+                        alert("✅ Produk pinjaman berhasil diperbarui!");
+                      } else {
+                        await axios.post('http://localhost:8086/api/products', payload);
+                        alert("✅ Produk pinjaman baru berhasil ditambahkan!");
+                      }
+                      setProductModalOpen(false);
+                      fetchProducts();
+                    } catch (err) {
+                      alert("❌ Gagal menyimpan data produk: " + (err.response?.data?.error || err.message));
+                    }
+                  }} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                    
+                    <div>
+                      <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Nama Produk Pinjaman *</label>
+                      <input 
+                        type="text"
+                        value={productForm.name}
+                        onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
+                        placeholder="Contoh: Pinjaman Multiguna Fluktuatif"
+                        required
+                        style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Tipe Angsuran *</label>
+                        <select 
+                          value={productForm.loan_type}
+                          onChange={(e) => setProductForm({ ...productForm, loan_type: e.target.value })}
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                        >
+                          <option value="FLAT">FLAT (Pokok & Bunga Tetap)</option>
+                          <option value="SLIDING">SLIDING (Bunga Menurun)</option>
+                          <option value="ANUITAS">ANUITAS (Angsuran Efektif)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Tenor Maksimal (Bulan) *</label>
+                        <input 
+                          type="number"
+                          value={productForm.max_tenor_months}
+                          onChange={(e) => setProductForm({ ...productForm, max_tenor_months: e.target.value })}
+                          required
+                          min="1"
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Periode Pengajuan (Tgl Awal) *</label>
+                        <input 
+                          type="number"
+                          value={productForm.submission_period_start}
+                          onChange={(e) => setProductForm({ ...productForm, submission_period_start: e.target.value })}
+                          min="1" max="31" required
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Periode Pengajuan (Tgl Akhir) *</label>
+                        <input 
+                          type="number"
+                          value={productForm.submission_period_end}
+                          onChange={(e) => setProductForm({ ...productForm, submission_period_end: e.target.value })}
+                          min="1" max="31" required
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Max % Gaji (DSR %) *</label>
+                        <input 
+                          type="number"
+                          step="0.1"
+                          value={productForm.max_percentage_salary}
+                          onChange={(e) => setProductForm({ ...productForm, max_percentage_salary: e.target.value })}
+                          required
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Suku Bunga (% / Bulan) *</label>
+                        <input 
+                          type="number"
+                          step="0.01"
+                          value={productForm.interest_rate}
+                          onChange={(e) => setProductForm({ ...productForm, interest_rate: e.target.value })}
+                          required
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Status Produk *</label>
+                      <select 
+                        value={productForm.status}
+                        onChange={(e) => setProductForm({ ...productForm, status: e.target.value })}
+                        style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                      >
+                        <option value="ACTIVE">ACTIVE (Aktif Dapat Dipilih)</option>
+                        <option value="INACTIVE">INACTIVE (Nonaktifkan sementara)</option>
+                      </select>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
+                      <button type="button" onClick={() => setProductModalOpen(false)} style={{ padding: '8px 16px', background: '#64748b', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>Batal</button>
+                      <button type="submit" style={{ padding: '8px 18px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>💾 Simpan Produk Pinjaman</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+          </div>
+          );
+        })()}
+
+          {activeTab !== 'dashboard' && activeTab !== 'pengajuan' && activeTab !== 'pinjaman' && activeTab !== 'parameters' && activeTab !== 'master' && activeTab !== 'approval' && activeTab !== 'disbursement' && activeTab !== 'payroll' && activeTab !== 'manual-repayment' && activeTab !== 'products' && !activeTab.startsWith('master-') && (
+            <div className="card">
+              <h2>Module: {visibleMenus.find(m => m.path === activeTab)?.title || activeTab}</h2>
+              <p style={{ marginTop: '16px', color: '#64748B' }}>
+                Halaman ini masih dalam tahap pengembangan. Anda mengakses halaman ini menggunakan role: <strong>{realRoleName}</strong>.
+              </p>
+            </div>
+          )}
+      {/* LIMS Style Riwayat Status / Loan Tracking Modal */}
+      {trackingModalOpen && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
+          <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '24px', width: '90%', maxWidth: '850px', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', paddingBottom: '12px', borderBottom: '2px solid #e2e8f0' }}>
+              <h2 style={{ margin: 0, fontSize: '1.25rem', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                📜 Riwayat Status Pengajuan Pinjaman <span style={{ color: 'var(--primary-blue)', fontFamily: 'monospace' }}>#{trackingAppNo}</span>
+              </h2>
+              <button onClick={() => setTrackingModalOpen(false)} style={{ background: '#f1f5f9', border: 'none', borderRadius: '50%', width: '32px', height: '32px', cursor: 'pointer', fontWeight: 'bold', color: '#64748b' }}>✕</button>
+            </div>
+
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+              <thead>
+                <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569' }}>Tanggal</th>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569' }}>Status</th>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569' }}>User</th>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569' }}>SLA (Durasi)</th>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569' }}>Catatan</th>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569' }}>IP Address</th>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569' }}>User Agent</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trackingList.length === 0 ? (
+                  <tr><td colSpan="7" style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>Belum ada catatan riwayat status.</td></tr>
+                ) : (
+                  trackingList.map(t => (
+                    <tr key={t.ID} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: '8px 10px', color: '#334155', whiteSpace: 'nowrap' }}>{formatDate(t.ActionDate)}</td>
+                      <td style={{ padding: '8px 10px' }}>
+                        <span className={getStatusBadge(t.Status)} style={{ backgroundColor: t.Status === 'REVISION_REQUIRED' ? '#f59e0b' : undefined, fontSize: '0.75rem' }}>
+                          {t.Status === 'REVISION_REQUIRED' ? 'REVISI' : t.Status}
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px 10px', fontWeight: 600, color: '#1e293b' }}>{t.UserName || t.UserID}</td>
+                      <td style={{ padding: '8px 10px', fontFamily: 'monospace', color: '#2563eb', fontWeight: 600 }}>{t.SLADuration || '-'}</td>
+                      <td style={{ padding: '8px 10px', color: '#475569' }}>{t.Notes || '-'}</td>
+                      <td style={{ padding: '8px 10px', fontFamily: 'monospace', fontSize: '0.8rem', color: '#64748b' }}>{t.IPAddress || '127.0.0.1'}</td>
+                      <td style={{ padding: '8px 10px', fontSize: '0.8rem', color: '#64748b', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.UserAgent || 'Chrome'}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
+              <button onClick={() => setTrackingModalOpen(false)} style={{ padding: '8px 20px', background: '#64748b', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>Tutup</button>
+            </div>
+          </div>
+        </div>
+      )}
+        </div>
+      </main>
+    </div>
+  )
+}
+
+export default App
