@@ -88,6 +88,105 @@ function App() {
     status: 'ACTIVE'
   });
 
+  const [reconcileClosingInfo, setReconcileClosingInfo] = useState({ status: 'OPEN', hrd_signatory: '', finance_signatory: '', kopkara_signatory: '', closing_notes: '' });
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [adjustmentsList, setAdjustmentsList] = useState([]);
+  const [adjustModalOpen, setAdjustModalOpen] = useState(false);
+  const [adjustTargetItem, setAdjustTargetItem] = useState(null);
+  const [adjustNotes, setAdjustNotes] = useState('Data dikembalikan ke HRD-Adira');
+  const [adjustType, setAdjustType] = useState('FAILED_CORRECTION');
+  const [closeModalOpen, setCloseModalOpen] = useState(false);
+  const [closeForm, setCloseForm] = useState({
+    hrd_signatory: 'Adira HRD Officer',
+    finance_signatory: 'LMS Finance Officer',
+    kopkara_signatory: 'Pengurus Kopkara',
+    closing_notes: 'Laporan Rekonsiliasi Payroll telah diperiksa, disetujui, dan ditandatangani secara sah.'
+  });
+
+  const fetchReconciliationStatus = async () => {
+    try {
+      const res = await axios.get('http://localhost:8086/api/payroll/reconciliation-status?period=2026-08');
+      if (res.data && res.data.data) {
+        setReconcileClosingInfo(res.data.data);
+      }
+    } catch (err) {
+      console.error("Error fetching reconciliation status:", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchReconciliationStatus();
+  }, []);
+
+  const fetchAdjustments = async () => {
+    try {
+      const res = await axios.get('http://localhost:8086/api/payroll/adjustments?period=2026-08');
+      if (res.data && res.data.adjustments) {
+        setAdjustmentsList(res.data.adjustments || []);
+      }
+    } catch (err) {
+      console.error("Error fetching adjustments:", err);
+    }
+  };
+
+  const handleSaveAdjustment = async (e) => {
+    e.preventDefault();
+    if (!adjustTargetItem) return;
+    try {
+      const activeUserName = currentUser ? String(currentUser.employee_id || '10101') : '10101';
+      const tagihan = Math.round(adjustTargetItem?.amount || 0);
+      const terpotong = Math.round(adjustTargetItem?.deducted || 0);
+      const isOverpay = adjustType.includes('OVERPAYMENT') || (terpotong - tagihan > 0);
+      const refundNominal = Math.abs(terpotong - tagihan);
+      
+      const targetLoanNo = adjustTargetItem?.loanNo || adjustTargetItem?.loan_no || 0;
+      const payload = {
+        ref_no: String(targetLoanNo || adjustTargetItem?.refNo || ''),
+        loan_no: targetLoanNo,
+        period: adjustTargetItem.period || '2026-08',
+        adjustment_type: adjustType,
+        original_amount: tagihan,
+        deducted_amount: terpotong,
+        adjusted_amount: isOverpay ? refundNominal : (adjustType === 'FAILED_CORRECTION' ? 0 : tagihan),
+        notes: adjustNotes,
+        created_user: activeUserName
+      };
+
+      const res = await axios.post('http://localhost:8086/api/payroll/adjust', payload);
+      alert(`✅ ${res.data.message}`);
+      setAdjustModalOpen(false);
+      setAdjustTargetItem(null);
+      fetchAdjustments();
+      fetchPayrollSchedules();
+      fetchReconciliationStatus();
+    } catch (err) {
+      alert(`❌ Gagal menyimpan adjustment: ${err.response?.data?.error || err.message}`);
+    }
+  };
+
+  const handleSaveCloseReconciliation = async (e) => {
+    e.preventDefault();
+    try {
+      const activeUserName = currentUser ? String(currentUser.employee_id || '10101') : '10101';
+      const payload = {
+        period: '2026-08',
+        hrd_signatory: closeForm.hrd_signatory,
+        finance_signatory: closeForm.finance_signatory,
+        kopkara_signatory: closeForm.kopkara_signatory,
+        closing_notes: closeForm.closing_notes,
+        closed_user: activeUserName
+      };
+
+      const res = await axios.post('http://localhost:8086/api/payroll/close-reconciliation', payload);
+      alert(`🔒 ${res.data.message}`);
+      setCloseModalOpen(false);
+      fetchReconciliationStatus();
+      fetchPayrollSchedules();
+    } catch (err) {
+      alert(`❌ Gagal menutup rekonsiliasi: ${err.response?.data?.error || err.message}`);
+    }
+  };
+
   const handleOpenTracking = async (applicationNo) => {
     setTrackingAppNo(applicationNo);
     try {
@@ -217,10 +316,24 @@ function App() {
 
   const fetchPayrollSchedules = async () => {
     try {
-      const response = await axios.get('http://localhost:8086/api/payroll/schedules');
-      setPayrollSchedules(response.data || []);
+      const response = await axios.get('http://localhost:8086/api/payroll/schedules?period=2026-08');
+      if (response.data) {
+        if (Array.isArray(response.data)) {
+          setPayrollSchedules(response.data);
+        } else if (response.data.data) {
+          setPayrollSchedules(response.data.data || []);
+        }
+      }
     } catch (error) {
       console.error("Error fetching payroll schedules:", error);
+    }
+    try {
+      const adjRes = await axios.get('http://localhost:8086/api/payroll/adjustments?period=2026-08');
+      if (adjRes.data && adjRes.data.adjustments) {
+        setAdjustmentsList(adjRes.data.adjustments || []);
+      }
+    } catch (e) {
+      console.error("Error fetching adjustments list:", e);
     }
   };
 
@@ -389,6 +502,9 @@ function App() {
           updated_user: activeUserName,
           rows: importPayload
         });
+        if (res.data && res.data.logs && res.data.logs.length > 0) {
+          setImportedRows(res.data.logs);
+        }
         fetchPayrollSchedules();
         fetchApplications();
         alert(`✅ Berhasil mengimpor file [${file.name}] dari folder komputer Anda!\n\n${res.data.message}`);
@@ -405,6 +521,716 @@ function App() {
       }
     };
     reader.readAsText(file);
+  };
+
+  const handlePrintReconciliationReport = async (displayList, totalAmount, totalDeducted, totalShortage) => {
+    let adjList = [];
+    try {
+      const res = await axios.get('http://localhost:8086/api/payroll/adjustments?period=2026-08');
+      adjList = res.data.adjustments || [];
+    } catch (e) {
+      console.error("Error fetching adjustments for print report:", e);
+    }
+
+    let adjRowsHtml = '';
+    if (adjList.length === 0) {
+      adjRowsHtml = `<tr><td colspan="6" style="text-align: center; color: #64748b; padding: 10px;">Belum ada record adjustment selisih pada periode ini.</td></tr>`;
+    } else {
+      adjList.forEach((adj, idx) => {
+        adjRowsHtml += `
+          <tr>
+            <td style="padding: 6px 8px; text-align: center;">${idx + 1}</td>
+            <td style="padding: 6px 8px;"><strong>${adj.ref_no || '-'}</strong></td>
+            <td style="padding: 6px 8px;">${adj.employee_name || '-'} (#${adj.member_no || ''})</td>
+            <td style="padding: 6px 8px;"><span style="background: #e0e7ff; color: #3730a3; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.75rem;">${adj.adjustment_type || '-'}</span></td>
+            <td style="padding: 6px 8px; text-align: right;"><strong>Rp ${Math.round(adj.adjusted_amount || 0).toLocaleString('id-ID')}</strong></td>
+            <td style="padding: 6px 8px; font-style: italic; color: #334155;">"${adj.notes || '-'}"</td>
+          </tr>
+        `;
+      });
+    }
+
+    const reportWin = window.open('', '_blank');
+    const todayStr = new Date().toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' });
+
+    let rowsHtml = '';
+    (displayList || []).forEach((item, idx) => {
+      const tagihanHrd = Math.round(item?.amount || 0);
+      const isFailed = item?.status === 'FAILED';
+      const isAdjusted = item?.status === 'ADJUSTED';
+      const terpotongHrd = isFailed ? 0 : Math.round(item?.deducted || 0);
+      const selisih = isAdjusted ? 0 : (tagihanHrd - terpotongHrd);
+      
+      let statusRecon = '✅ MATCH (SELESAI)';
+      let statusColor = '#047857';
+      if (isAdjusted) {
+        statusRecon = '⚙️ ADJUSTED (SELESAI)';
+        statusColor = '#6366f1';
+      } else if (isFailed) {
+        statusRecon = '❌ FAILED (PINJAMAN TIDAK DITEMUKAN)';
+        statusColor = '#b91c1c';
+      } else if (terpotongHrd === 0 && tagihanHrd > 0) {
+        statusRecon = '⏳ PENDING / BELUM TERPOTONG';
+        statusColor = '#b45309';
+      } else if (selisih > 0) {
+        statusRecon = `⚠️ PARTIAL (KURANG Rp ${selisih.toLocaleString('id-ID')})`;
+        statusColor = '#d97706';
+      } else if (selisih < 0) {
+        statusRecon = `🔵 OVERPAYMENT (LEBIH Rp ${Math.abs(selisih).toLocaleString('id-ID')})`;
+        statusColor = '#0284c7';
+      }
+
+      const refNoCol = item?.loanNo || item?.loan_no || item?.refNo || '-';
+      rowsHtml += `
+        <tr style="border-bottom: 1px solid #cbd5e1;">
+          <td style="padding: 6px 10px; text-align: center; white-space: nowrap;">${idx + 1}</td>
+          <td style="padding: 6px 10px; white-space: nowrap; font-weight: bold;">${refNoCol}</td>
+          <td style="padding: 6px 10px; white-space: nowrap;">${item?.nik || '-'}</td>
+          <td style="padding: 6px 10px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${item?.name || '-'}</td>
+          <td style="padding: 6px 10px; text-align: center; white-space: nowrap;">${item?.period || '2026-08'}</td>
+          <td style="padding: 6px 10px; text-align: right; white-space: nowrap;">Rp ${tagihanHrd.toLocaleString('id-ID')}</td>
+          <td style="padding: 6px 10px; text-align: right; white-space: nowrap; font-weight: bold; color: ${statusColor};">Rp ${terpotongHrd.toLocaleString('id-ID')}</td>
+          <td style="padding: 6px 10px; text-align: right; white-space: nowrap; color: ${selisih > 0 ? '#b91c1c' : (selisih < 0 ? '#0284c7' : '#047857')}; font-weight: bold;">
+            ${selisih === 0 ? 'Rp 0' : (selisih > 0 ? `+Rp ${selisih.toLocaleString('id-ID')}` : `-Rp ${Math.abs(selisih).toLocaleString('id-ID')}`)}
+          </td>
+          <td style="padding: 6px 10px; font-weight: bold; color: ${statusColor}; white-space: nowrap;">${statusRecon}</td>
+          <td style="padding: 6px 10px; font-style: italic; font-size: 0.8rem; color: ${isFailed ? '#b91c1c' : '#334155'};">${item?.keterangan || (isFailed ? 'Nomor Pinjaman tidak ditemukan di DB LMS' : '-')}</td>
+        </tr>
+      `;
+    });
+
+    reportWin.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Laporan Rekonsiliasi Payroll - LMS Kopkara</title>
+        <style>
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 24px; color: #1e293b; }
+          .header { text-align: center; border-bottom: 3px double #0284c7; padding-bottom: 12px; margin-bottom: 20px; }
+          .header h2 { margin: 0; color: #0f172a; font-size: 1.3rem; }
+          .header p { margin: 4px 0 0 0; color: #64748b; font-size: 0.85rem; }
+          .summary-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 0.85rem; }
+          .summary-table td { padding: 8px 12px; border: 1px solid #cbd5e1; }
+          .main-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+          .main-table th { background: #0f172a; color: white; padding: 8px 10px; border: 1px solid #0f172a; text-align: left; }
+          .main-table td { border: 1px solid #cbd5e1; }
+          .signatures { display: flex; justify-content: space-between; margin-top: 45px; text-align: center; font-size: 0.85rem; page-break-inside: avoid; }
+          .sig-box { width: 30%; }
+          .sig-space { height: 60px; }
+          @media print {
+            @page { size: landscape; margin: 10mm; }
+            button { display: none; }
+          }
+        </style>
+      </head>
+      <body>
+        <div style="text-align: right; margin-bottom: 12px;">
+          <button onclick="window.print()" style="padding: 8px 18px; background: #0284c7; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">🖨️ Cetak / Print PDF</button>
+        </div>
+
+        <div class="header">
+          <h2>KOPERASI KARYAWAN ADIRA (KOPKARA)</h2>
+          <h2>LAPORAN REKONSILIASI PEMOTONGAN GAJI PAYROLL</h2>
+          <p>Perbandingan Hasil Import HRD-Adira vs Database LMS Kopkara | Tanggal Cetak: ${todayStr}</p>
+        </div>
+
+        <table class="summary-table">
+          <tr style="background: #f8fafc; font-weight: bold;">
+            <td>Total Record Transaksi</td>
+            <td>Total Tagihan Payroll (LMS)</td>
+            <td>Total Terpotong (HRD Adira)</td>
+            <td>Total Selisih / Tunggakan</td>
+          </tr>
+          <tr>
+            <td><strong>${(displayList || []).length} Transaksi</strong></td>
+            <td><strong>Rp ${Math.round(totalAmount || 0).toLocaleString('id-ID')}</strong></td>
+            <td style="color: #047857; font-weight: bold;">Rp ${Math.round(totalDeducted || 0).toLocaleString('id-ID')}</td>
+            <td style="color: ${(totalShortage || 0) > 0 ? '#b91c1c' : '#047857'}; font-weight: bold;">Rp ${Math.round(totalShortage || 0).toLocaleString('id-ID')}</td>
+          </tr>
+        </table>
+
+        <table class="main-table">
+          <thead>
+            <tr>
+              <th style="text-align: center;">No</th>
+              <th>No. Ref / Loan No</th>
+              <th>NIK Adira</th>
+              <th>Anggota / Karyawan</th>
+              <th style="text-align: center;">Periode</th>
+              <th style="text-align: right;">Tagihan LMS</th>
+              <th style="text-align: right;">Potongan HRD</th>
+              <th style="text-align: right;">Selisih (Varian)</th>
+              <th>Status Rekonsiliasi</th>
+              <th>Keterangan HRD / LMS</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+
+        <div style="margin-top: 24px; margin-bottom: 20px; page-break-inside: avoid;">
+          <h3 style="margin-top: 0; font-size: 0.95rem; color: #1e293b; border-bottom: 2px solid #6366f1; padding-bottom: 4px;">
+            📋 RIWAYAT ADJUSTMENT SELISIH PAYROLL (AUDIT TRAIL & HASIL KOREKSI UNTUK DITANDATANGANI)
+          </h3>
+          <table class="main-table">
+            <thead>
+              <tr style="background: #475569;">
+                <th style="text-align: center; width: 40px;">No</th>
+                <th>No. Referensi</th>
+                <th>Anggota / Karyawan</th>
+                <th>Tipe Adjustment</th>
+                <th style="text-align: right;">Nominal Adjusted</th>
+                <th>Keterangan User / Catatan Audit</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${adjRowsHtml}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="signatures">
+          <div class="sig-box">
+            <p>Dibuat Oleh (HRD Adira)</p>
+            <div class="sig-space"></div>
+            <p>_______________________</p>
+            <p>Staff Payroll HRD</p>
+          </div>
+          <div class="sig-box">
+            <p>Diperiksa Oleh (LMS Kopkara)</p>
+            <div class="sig-space"></div>
+            <p>_______________________</p>
+            <p>Analis Keuangan / Admin</p>
+          </div>
+          <div class="sig-box">
+            <p>Disetujui Oleh</p>
+            <div class="sig-space"></div>
+            <p>_______________________</p>
+            <p>Pengurus Kopkara</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `);
+    reportWin.document.close();
+  };
+
+  const renderPayrollContent = () => {
+    const getParamVal = (key, fallback) => {
+      const p = (parameters || []).find(item => item.key_name === key || item.KeyName === key);
+      return (p?.key_value || p?.KeyValue) || fallback;
+    };
+
+    const exportFolder = getParamVal('FOLDER_BILL_EXPORT', 'D:/Data_NK/Project5/LMS/export_payroll');
+    const importFolder = getParamVal('FOLDER_BILL_IMPORT', 'D:/Data_NK/Project5/LMS/import_payroll');
+
+    const realSchedulesList = (payrollSchedules || []).map(ps => {
+      const empName = ps.employee_name || referenceData.employees.find(e => String(e.employee_id) === String(ps.member_no))?.name || `Member #${ps.member_no || ''}`;
+      const safePeriod = ps.period || '2026-08';
+      const safeRef = ps.ref_no || `LMS-PAY-${safePeriod.replace(/-/g, '')}-${ps.member_no || ''}`;
+      const paidAmt = ps.amount_paid !== undefined ? ps.amount_paid : (ps.status === 'PAID' ? (ps.total_installment || 0) : 0);
+      const remAmt = ps.status === 'ADJUSTED' ? 0 : (ps.remaining_installment !== undefined ? ps.remaining_installment : (paidAmt - (ps.total_installment || 0)));
+      return {
+        id: ps.id,
+        loanNo: ps.loan_no,
+        memberNo: ps.member_no,
+        refNo: safeRef,
+        nik: ps.nik || `317101234567${String(ps.member_no || '1001').padStart(4, '0')}`,
+        name: `${empName} (#${ps.member_no || '1001'})`,
+        period: safePeriod,
+        amount: ps.total_installment || 0,
+        deducted: ps.status === 'ADJUSTED' ? (ps.total_installment || 0) : paidAmt,
+        remaining: remAmt,
+        status: ps.status === 'ADJUSTED' ? 'ADJUSTED' : (ps.status === 'PAID' ? 'SUCCESS' : (ps.status === 'PARTIAL' ? 'PARTIAL' : (ps.status === 'UNPAID' ? 'PENDING' : (ps.status || 'PENDING')))),
+        keterangan: ps.status === 'ADJUSTED' ? '⚙️ Adjustment Koreksi (SELESAI / Selisih Rp 0)' : (ps.status === 'PAID' ? 'Potongan gaji diproses penuh (LUNAS)' : (ps.status === 'PARTIAL' ? `Potongan parsial (Sisa/Credit: Rp ${Math.round(remAmt).toLocaleString('id-ID')})` : 'Menunggu eksekusi payroll HRD Adira'))
+      };
+    });
+
+    const rawList = importedRows.length > 0 ? importedRows : realSchedulesList;
+    const displayList = rawList.map(item => {
+      const hasAdj = (adjustmentsList || []).some(a => a.ref_no === item.refNo || (a.loan_no > 0 && String(a.loan_no) === String(item.loanNo)));
+      if (hasAdj || item.status === 'ADJUSTED') {
+        return {
+          ...item,
+          deducted: item.amount,
+          remaining: 0,
+          status: 'SUCCESS',
+          keterangan: '⚙️ Adjustment Koreksi (SELESAI / Selisih Rp 0)'
+        };
+      }
+      return item;
+    });
+
+    // Create Final Table Rows including explicit Adjustment Reference rows
+    const finalTableRows = [...displayList];
+    (adjustmentsList || []).forEach(adj => {
+      const targetRef = adj.ref_no || `LMS-PAY-202608-${adj.member_no}`;
+      finalTableRows.push({
+        isAdjustmentRef: true,
+        id: `adj-ref-${adj.id}`,
+        refNo: `${targetRef}-ADJ`,
+        parentRefNo: targetRef,
+        nik: adj.member_no,
+        name: `${adj.employee_name || 'Karyawan'} (#${adj.member_no})`,
+        period: adj.period || '2026-08',
+        amount: adj.original_amount || 0,
+        deducted: adj.adjusted_amount || adj.original_amount || 0,
+        remaining: 0,
+        status: 'ADJUSTED',
+        adjustmentType: adj.adjustment_type,
+        notes: adj.notes,
+        keterangan: `⚙️ Record Adjustment: ${adj.adjustment_type} ("${adj.notes}")`
+      });
+    });
+
+    const totalAmount = displayList.reduce((sum, item) => sum + (item?.amount || 0), 0);
+    const totalDeducted = displayList.reduce((sum, item) => sum + (item?.deducted || 0), 0);
+    const totalShortage = totalAmount - totalDeducted;
+    const successCount = displayList.filter(i => i?.status === 'SUCCESS').length;
+    const partialCount = displayList.filter(i => i?.status === 'PARTIAL').length;
+    const failedCount = displayList.filter(i => i?.status === 'FAILED').length;
+    const pendingCount = displayList.filter(i => i?.status === 'PENDING' || i?.status === 'UNPAID').length;
+
+    return (
+      <div>
+        {/* Folder Config Banner */}
+        <div style={{ padding: '10px 16px', background: '#e0f2fe', color: '#0369a1', borderRadius: '6px', marginBottom: '16px', fontSize: '0.85rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: 500 }}>
+          <div>📁 <strong>Folder Export Default (FOLDER_BILL_EXPORT):</strong> <span style={{ fontFamily: 'monospace' }}>{exportFolder}</span></div>
+          <div>📂 <strong>Folder Import Default (FOLDER_BILL_IMPORT):</strong> <span style={{ fontFamily: 'monospace' }}>{importFolder}</span></div>
+        </div>
+
+        {/* KPI Cards Row */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+          <div className="card" style={{ padding: '16px', background: '#f8fafc', borderLeft: '4px solid #3b82f6', marginBottom: 0 }}>
+            <div style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Total Tagihan Payroll</div>
+            <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: '#0f172a', marginTop: '4px' }}>Rp {Math.round(totalAmount).toLocaleString('id-ID')}</div>
+            <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '4px' }}>{displayList.length} Transaksi Database (lms_sch.loan_schedules)</div>
+          </div>
+
+          <div className="card" style={{ padding: '16px', background: '#f0fdf4', borderLeft: '4px solid #10b981', marginBottom: 0 }}>
+            <div style={{ fontSize: '0.8rem', color: '#047857', fontWeight: 600, textTransform: 'uppercase' }}>Terpotong Sukses</div>
+            <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: '#065f46', marginTop: '4px' }}>Rp {Math.round(totalDeducted).toLocaleString('id-ID')}</div>
+            <div style={{ fontSize: '0.75rem', color: '#047857', marginTop: '4px' }}>{successCount} Sukses | {partialCount} Partial</div>
+          </div>
+
+          <div className="card" style={{ padding: '16px', background: totalShortage > 0 ? '#fef2f2' : '#f8fafc', borderLeft: `4px solid ${totalShortage > 0 ? '#ef4444' : '#64748b'}`, marginBottom: 0 }}>
+            <div style={{ fontSize: '0.8rem', color: totalShortage > 0 ? '#991b1b' : '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Selisih / Tunggakan</div>
+            <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: totalShortage > 0 ? '#991b1b' : '#0f172a', marginTop: '4px' }}>Rp {Math.round(totalShortage).toLocaleString('id-ID')}</div>
+            <div style={{ fontSize: '0.75rem', color: totalShortage > 0 ? '#991b1b' : '#64748b', marginTop: '4px' }}>{failedCount} Gagal Potong</div>
+          </div>
+
+          <div className="card" style={{ padding: '16px', background: reconcileClosingInfo.status === 'CLOSED' ? '#ecfdf5' : '#fefce8', borderLeft: `4px solid ${reconcileClosingInfo.status === 'CLOSED' ? '#10b981' : '#eab308'}`, marginBottom: 0 }}>
+            <div style={{ fontSize: '0.8rem', color: reconcileClosingInfo.status === 'CLOSED' ? '#047857' : '#854d0e', fontWeight: 600, textTransform: 'uppercase' }}>Status Rekonsiliasi</div>
+            <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: reconcileClosingInfo.status === 'CLOSED' ? '#047857' : ((failedCount > 0 || totalShortage > 0) ? '#b91c1c' : '#047857'), marginTop: '4px' }}>
+              {reconcileClosingInfo.status === 'CLOSED' ? '🔒 REKONSILIASI CLOSED' : ((payrollReconciled || successCount > 0 || partialCount > 0 || failedCount > 0) ? ((totalShortage > 0 || failedCount > 0) ? '⚠️ UNRECONCILED (ADA SELISIH)' : '✅ TEREKONSILIASI') : '⏳ PENDING')}
+            </div>
+            <div style={{ fontSize: '0.75rem', color: reconcileClosingInfo.status === 'CLOSED' ? '#047857' : '#854d0e', marginTop: '4px' }}>
+              {reconcileClosingInfo.status === 'CLOSED' ? '🔒 Telah Ditandatangani & Disetujui Resmi' : ((payrollReconciled || successCount > 0 || partialCount > 0 || failedCount > 0) ? `${successCount + partialCount} Selesai / ${failedCount} Gagal Potong` : `${pendingCount} Menunggu Import HRD`)}
+            </div>
+          </div>
+        </div>
+
+        {/* Table Container */}
+        <div className="table-container">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: 'var(--primary-blue)', color: 'white', borderTopLeftRadius: '8px', borderTopRightRadius: '8px' }}>
+            <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>✂️ Detail Rekonsiliasi Pemotongan Gaji (lms_sch.loan_schedules)</div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button 
+                onClick={() => setCloseModalOpen(true)}
+                disabled={reconcileClosingInfo.status === 'CLOSED'}
+                style={{ padding: '6px 12px', background: reconcileClosingInfo.status === 'CLOSED' ? '#64748b' : '#059669', color: 'white', border: 'none', borderRadius: '4px', cursor: reconcileClosingInfo.status === 'CLOSED' ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                title="Tanda Tangan & Tutup Status Rekonsiliasi Periode Ini secara Resmi"
+              >
+                {reconcileClosingInfo.status === 'CLOSED' ? '🔒 Rekon Closed' : '🔒 Tanda Tangan & Tutup Rekon (CLOSE)'}
+              </button>
+              <button 
+                type="button"
+                onClick={async () => {
+                  if (window.confirm('Apakah Anda yakin ingin RESET & BUKA KEMBALI status rekonsiliasi agar bisa meng-import ulang file CSV HRD-Adira?')) {
+                    try {
+                      await axios.post('http://localhost:8086/api/payroll/reset-reconciliation?period=2026-08');
+                      setImportedRows([]);
+                      setReconcileClosingInfo({ status: 'OPEN' });
+                      fetchPayrollSchedules();
+                      alert('Status Rekonsiliasi & Tagihan 2026-08 BERHASIL DI-RESET! Tombol Import Result Rekonsiliasi kini aktif kembali.');
+                    } catch (err) {
+                      alert('Gagal me-reset status: ' + err.message);
+                    }
+                  }
+                }}
+                style={{ padding: '6px 12px', background: '#dc2626', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                title="Reset Total Data Rekonsiliasi Periode Ini & Buka Kembali Akses Import File CSV HRD"
+              >
+                🔄 Reset & Buka Rekon (RE-IMPORT)
+              </button>
+              <button 
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  fetchAdjustments();
+                  setHistoryModalOpen(true);
+                }}
+                style={{ padding: '6px 12px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem', zIndex: 10, position: 'relative' }}
+                title="Lihat Daftar & Riwayat Audit Adjustment Periode Ini"
+              >
+                📋 Lihat Riwayat Adjustment ({adjustmentsList.length})
+              </button>
+              <button 
+                onClick={() => handlePrintReconciliationReport(displayList, totalAmount, totalDeducted, totalShortage)}
+                style={{ padding: '6px 12px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                title="Cetak / Download Laporan Resmi Rekonsiliasi Perbandingan HRD vs LMS"
+              >
+                🖨️ Cetak Laporan Rekonsiliasi
+              </button>
+              <button 
+                onClick={() => {
+                  const now = new Date();
+                  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                  const yyyy = lastDay.getFullYear();
+                  const mm = String(lastDay.getMonth() + 1).padStart(2, '0');
+                  const dd = String(lastDay.getDate()).padStart(2, '0');
+                  setExportCutoffDate(`${yyyy}-${mm}-${dd}`);
+                  setExportCustomFolder(exportFolder);
+                  setExportModalOpen(true);
+                }}
+                style={{ padding: '6px 12px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                title={`Export File CSV Tagihan s/d Tanggal Cut-off ke Folder ${exportFolder}`}
+              >
+                📥 Export File Payroll (.csv)
+              </button>
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                accept=".csv,.txt" 
+                onChange={handleCSVUpload} 
+                style={{ display: 'none' }} 
+              />
+              <button 
+                onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                disabled={reconcileClosingInfo.status === 'CLOSED'}
+                style={{ padding: '6px 12px', background: reconcileClosingInfo.status === 'CLOSED' ? '#64748b' : '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: reconcileClosingInfo.status === 'CLOSED' ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                title={`Buka Folder Import ${importFolder} & Pilih File CSV Rekonsiliasi`}
+              >
+                📤 Import Result Rekonsiliasi
+              </button>
+            </div>
+          </div>
+          <table style={{ tableLayout: 'auto', width: '100%' }}>
+            <thead>
+              <tr>
+                <th style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>No. Ref</th>
+                <th style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>NIK Adira</th>
+                <th style={{ padding: '8px 10px', fontSize: '0.85rem', maxWidth: '180px' }}>Anggota / Karyawan</th>
+                <th style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Periode</th>
+                <th style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Nominal Tagihan</th>
+                <th style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Terpotong HRD</th>
+                <th style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Selisih (Varian)</th>
+                <th style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Status</th>
+                <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Hasil Analisis / Keterangan HRD</th>
+                <th style={{ padding: '8px 10px', fontSize: '0.85rem', textAlign: 'center' }}>Aksi Adjustment</th>
+              </tr>
+            </thead>
+            <tbody>
+              {finalTableRows.length === 0 ? (
+                <tr><td colSpan="10" style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>Belum ada tagihan angsuran pinjaman aktif di lms_sch.loan_schedules.</td></tr>
+              ) : (
+                finalTableRows.map((item, idx) => {
+                  if (item.isAdjustmentRef) {
+                    return (
+                      <tr key={`adj-ref-row-${item.id}-${idx}`} style={{ background: '#f5f3ff', borderBottom: '1px solid #c7d2fe' }}>
+                        <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
+                          <strong style={{ color: '#4f46e5' }}>↳ {item.refNo}</strong>
+                        </td>
+                        <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{item.nik}</td>
+                        <td style={{ padding: '8px 10px', fontSize: '0.85rem', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</td>
+                        <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{item.period}</td>
+                        <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Rp {Math.round(item.amount).toLocaleString('id-ID')}</td>
+                        <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap', color: '#059669', fontWeight: 600 }}>Rp {Math.round(item.deducted).toLocaleString('id-ID')}</td>
+                        <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap', fontWeight: 600, color: '#059669' }}>Rp 0</td>
+                        <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
+                          <span className="badge badge-success" style={{ background: '#6366f1' }}>⚙️ ADJUSTED</span>
+                        </td>
+                        <td style={{ padding: '8px 10px', fontSize: '0.85rem', color: '#4338ca', fontStyle: 'italic' }}>
+                          🔗 Ref ke <strong>{item.parentRefNo}</strong>: "{item.notes}"
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'center', fontSize: '0.75rem', color: '#6366f1', fontWeight: 600 }}>
+                          ⚙️ Record Reference
+                        </td>
+                      </tr>
+                    );
+                  }
+                  const tagihan = Math.round(item?.amount || 0);
+                  const isFailed = item?.status === 'FAILED';
+                  const terpotong = isFailed ? 0 : Math.round(item?.deducted || 0);
+                  const diff = tagihan - terpotong;
+                  const displayRefNo = String(item?.loanNo || item?.loan_no || item?.refNo || '-');
+                  return (
+                    <tr key={item?.id ? `sched-${item.id}` : `${item?.refNo || 'pay'}-${idx}`} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                      <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}><strong>{displayRefNo}</strong></td>
+                      <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{item?.nik || '-'}</td>
+                      <td style={{ padding: '8px 10px', fontSize: '0.85rem', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item?.name || ''}>
+                        {item?.name || '-'}
+                      </td>
+                      <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{item?.period || '-'}</td>
+                      <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}><strong>Rp {tagihan.toLocaleString('id-ID')}</strong></td>
+                      <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap', color: isFailed ? '#dc2626' : (item?.status === 'SUCCESS' ? '#047857' : '#b45309'), fontWeight: 600 }}>
+                        Rp {terpotong.toLocaleString('id-ID')}
+                      </td>
+                      <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap', fontWeight: 600, color: diff > 0 ? '#b91c1c' : (diff < 0 ? '#0284c7' : '#047857') }}>
+                        {diff === 0 ? 'Rp 0' : (diff > 0 ? `+Rp ${diff.toLocaleString('id-ID')}` : `-Rp ${Math.abs(diff).toLocaleString('id-ID')}`)}
+                      </td>
+                      <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
+                        <span className={item?.status === 'SUCCESS' ? 'badge badge-success' : (isFailed ? 'badge badge-danger' : 'badge badge-warning')}>
+                          {item?.status === 'UNPAID' ? 'PENDING' : (item?.status || 'PENDING')}
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px 10px', fontSize: '0.85rem', color: isFailed ? '#991b1b' : '#475569' }}>
+                        <i>{item?.keterangan || (isFailed ? 'Gagal Potong: Pinjaman tidak ditemukan' : 'Potongan diproses')}</i>
+                      </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                        {(() => {
+                          const itemLoanNo = String(item?.loanNo || item?.loan_no || '');
+                          const isItemAdjusted = adjustmentsList.some(a => 
+                            (itemLoanNo !== '' && itemLoanNo !== '0' && (String(a.loan_no) === itemLoanNo || String(a.ref_no) === itemLoanNo)) ||
+                            (a.ref_no && String(a.ref_no) === displayRefNo)
+                          );
+                          if (isItemAdjusted) {
+                            return (
+                              <button disabled style={{ padding: '4px 10px', background: '#94a3b8', color: 'white', border: 'none', borderRadius: '4px', cursor: 'not-allowed', fontSize: '0.8rem', fontWeight: 600 }} title="Record ini sudah diadjust">
+                                ⚙️ Adjusted
+                              </button>
+                            );
+                          }
+                          if ((isFailed || diff < 0) && reconcileClosingInfo.status !== 'CLOSED') {
+                            return (
+                              <button
+                                onClick={() => {
+                                  setAdjustTargetItem(item);
+                                  if (isFailed) {
+                                    setAdjustType('FAILED_CORRECTION');
+                                    setAdjustNotes('data dikembalikan ke HRD-Adira');
+                                  } else if (diff < 0) {
+                                    setAdjustType('OVERPAYMENT_REFUND');
+                                    setAdjustNotes('data dikembalikan ke HRD-Adira');
+                                  } else {
+                                    setAdjustType('FAILED_CORRECTION');
+                                    setAdjustNotes('data dikembalikan ke HRD-Adira');
+                                  }
+                                  setAdjustModalOpen(true);
+                                }}
+                                style={{ padding: '4px 10px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                                title="Proses Adjustment Selisih Rekonsiliasi"
+                              >
+                                ⚙️ Adjust
+                              </button>
+                            );
+                          }
+                          if (reconcileClosingInfo.status === 'CLOSED') {
+                            return <span style={{ fontSize: '0.75rem', color: '#64748b' }}>🔒 Locked</span>;
+                          }
+                          return null;
+                        })()}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Modal Adjustment Selisih */}
+        {adjustModalOpen && adjustTargetItem && (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
+            <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '24px', width: '90%', maxWidth: '520px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '2px solid #e2e8f0' }}>
+                <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  ⚙️ Form Adjustment Selisih Rekonsiliasi
+                </h3>
+                <button onClick={() => setAdjustModalOpen(false)} style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: '#64748b' }}>&times;</button>
+              </div>
+
+              <form onSubmit={handleSaveAdjustment}>
+                <div style={{ padding: '12px', background: '#f8fafc', borderRadius: '6px', marginBottom: '16px', fontSize: '0.85rem', borderLeft: '4px solid #6366f1' }}>
+                  <div><strong>No. Referensi:</strong> {adjustTargetItem.refNo}</div>
+                  <div><strong>Karyawan / Anggota:</strong> {adjustTargetItem.name}</div>
+                  <div><strong>Nominal Tagihan LMS:</strong> Rp {Math.round(adjustTargetItem.amount || 0).toLocaleString('id-ID')}</div>
+                  <div><strong>Terpotong HRD:</strong> Rp {Math.round(adjustTargetItem.deducted || 0).toLocaleString('id-ID')}</div>
+                  <div><strong>Status Rekon:</strong> <span className="badge badge-danger">{adjustTargetItem.status}</span></div>
+                </div>
+
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: 600, fontSize: '0.85rem' }}>Tipe Adjustment:</label>
+                  <select 
+                    value={adjustType} 
+                    onChange={e => setAdjustType(e.target.value)}
+                    style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)', fontSize: '0.85rem' }}
+                  >
+                    <option value="FAILED_CORRECTION">Koreksi Gagal (Membuat Record Adjustment & Kirim Balik Ke HRD)</option>
+                    <option value="OVERPAYMENT_REFUND">Koreksi Overpayment (Set Remaining = 0 & Buat Record Adjustment)</option>
+                    <option value="OVERPAYMENT_OFFSET">Koreksi Overpayment (Offset Angsuran Pokok Berikutnya)</option>
+                  </select>
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: 600, fontSize: '0.85rem' }}>Keterangan Adjustment (Keterangan Dibuat User):</label>
+                  <textarea 
+                    required
+                    value={adjustNotes}
+                    onChange={e => setAdjustNotes(e.target.value)}
+                    placeholder="misal: data dikembalikan ke HRD-Adira"
+                    style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)', minHeight: '80px', fontSize: '0.85rem' }}
+                  />
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '4px' }}>
+                    * Record adjustment baru akan mereferensikan transaksi ini ({adjustTargetItem.refNo}) untuk jejak audit (tracking).
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                  <button type="button" onClick={() => setAdjustModalOpen(false)} style={{ padding: '8px 16px', background: '#e2e8f0', color: '#475569', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>
+                    Batal
+                  </button>
+                  <button type="submit" style={{ padding: '8px 16px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>
+                    💾 Simpan Adjustment
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Closing & Tanda Tangan Rekonsiliasi */}
+        {closeModalOpen && (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
+            <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '24px', width: '90%', maxWidth: '540px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '2px solid #e2e8f0' }}>
+                <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  🔒 Tanda Tangan & Tutup Rekonsiliasi (CLOSE)
+                </h3>
+                <button onClick={() => setCloseModalOpen(false)} style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: '#64748b' }}>&times;</button>
+              </div>
+
+              <form onSubmit={handleSaveCloseReconciliation}>
+                <div style={{ padding: '12px', background: '#f0fdf4', borderRadius: '6px', marginBottom: '16px', fontSize: '0.85rem', borderLeft: '4px solid #10b981', color: '#047857' }}>
+                  <strong>Catatan Persetujuan:</strong> Menutup periode rekonsiliasi ini akan mengunci (lock) status rekonsiliasi secara resmi dan merekam nama para penandatangan sah.
+                </div>
+
+                <div style={{ marginBottom: '12px' }}>
+                  <label style={{ display: 'block', marginBottom: '4px', fontWeight: 600, fontSize: '0.85rem' }}>Penandatangan HRD Adira:</label>
+                  <input 
+                    type="text" required
+                    value={closeForm.hrd_signatory}
+                    onChange={e => setCloseForm({...closeForm, hrd_signatory: e.target.value})}
+                    style={{ width: '100%', padding: '8px 10px', borderRadius: '4px', border: '1px solid var(--border-color)', fontSize: '0.85rem' }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '12px' }}>
+                  <label style={{ display: 'block', marginBottom: '4px', fontWeight: 600, fontSize: '0.85rem' }}>Penandatangan Finance LMS:</label>
+                  <input 
+                    type="text" required
+                    value={closeForm.finance_signatory}
+                    onChange={e => setCloseForm({...closeForm, finance_signatory: e.target.value})}
+                    style={{ width: '100%', padding: '8px 10px', borderRadius: '4px', border: '1px solid var(--border-color)', fontSize: '0.85rem' }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '12px' }}>
+                  <label style={{ display: 'block', marginBottom: '4px', fontWeight: 600, fontSize: '0.85rem' }}>Penandatangan Pengurus Kopkara:</label>
+                  <input 
+                    type="text" required
+                    value={closeForm.kopkara_signatory}
+                    onChange={e => setCloseForm({...closeForm, kopkara_signatory: e.target.value})}
+                    style={{ width: '100%', padding: '8px 10px', borderRadius: '4px', border: '1px solid var(--border-color)', fontSize: '0.85rem' }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', marginBottom: '4px', fontWeight: 600, fontSize: '0.85rem' }}>Catatan Persetujuan Rekonsiliasi:</label>
+                  <textarea 
+                    value={closeForm.closing_notes}
+                    onChange={e => setCloseForm({...closeForm, closing_notes: e.target.value})}
+                    style={{ width: '100%', padding: '8px 10px', borderRadius: '4px', border: '1px solid var(--border-color)', minHeight: '60px', fontSize: '0.85rem' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                  <button type="button" onClick={() => setCloseModalOpen(false)} style={{ padding: '8px 16px', background: '#e2e8f0', color: '#475569', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>
+                    Batal
+                  </button>
+                  <button type="submit" style={{ padding: '8px 16px', background: '#059669', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>
+                    🔒 Tanda Tangan & CLOSE Rekon
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Riwayat Adjustment Payroll */}
+        {historyModalOpen && (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
+            <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '24px', width: '90%', maxWidth: '850px', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '2px solid #e2e8f0' }}>
+                <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  📋 Riwayat Audit Adjustment Selisih Payroll (lms_sch.payroll_adjustments)
+                </h3>
+                <button onClick={() => setHistoryModalOpen(false)} style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: '#64748b' }}>&times;</button>
+              </div>
+
+              <div style={{ padding: '10px 14px', background: '#eff6ff', borderRadius: '6px', marginBottom: '16px', fontSize: '0.85rem', color: '#1e40af' }}>
+                ℹ️ Seluruh catatan koreksi & adjustment yang dibuat user akan tersimpan secara otomatis sebagai audit log resmi untuk proses rekonsiliasi.
+              </div>
+
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                <thead>
+                  <tr style={{ background: '#f1f5f9', borderBottom: '2px solid #cbd5e1' }}>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>No. Ref</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>Karyawan / Anggota</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>Tipe Adjustment</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'right' }}>Nominal Tagihan</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'right' }}>Nominal Adjusted</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>Keterangan User</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>User & Waktu</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adjustmentsList.length === 0 ? (
+                    <tr>
+                      <td colSpan="7" style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>Belum ada data adjustment pada periode ini.</td>
+                    </tr>
+                  ) : (
+                    adjustmentsList.map(adj => (
+                      <tr key={adj.id || Math.random()} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                        <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}><strong>{adj.ref_no || '-'}</strong></td>
+                        <td style={{ padding: '8px 10px' }}>{adj.employee_name || '-'} <span style={{ color: '#64748b', fontSize: '0.75rem' }}>(#{adj.member_no || ''})</span></td>
+                        <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                          <span style={{ padding: '2px 6px', background: '#e0e7ff', color: '#3730a3', borderRadius: '4px', fontWeight: 600, fontSize: '0.75rem' }}>
+                            {adj.adjustment_type}
+                          </span>
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>Rp {Math.round(adj.original_amount || 0).toLocaleString('id-ID')}</td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 'bold', color: '#059669' }}>Rp {Math.round(adj.adjusted_amount || 0).toLocaleString('id-ID')}</td>
+                        <td style={{ padding: '8px 10px', color: '#334155', fontStyle: 'italic' }}>"{adj.notes || '-'}"</td>
+                        <td style={{ padding: '8px 10px', fontSize: '0.75rem', color: '#64748b', whiteSpace: 'nowrap' }}>
+                          <div>👤 {adj.created_user || 'Admin'}</div>
+                          <div>📅 {adj.created_at ? new Date(adj.created_at).toLocaleString('id-ID') : '-'}</div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
+                <button onClick={() => setHistoryModalOpen(false)} style={{ padding: '8px 20px', background: '#64748b', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>Tutup</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const handlePrintContract = (app) => {
@@ -1325,165 +2151,7 @@ function App() {
             </div>
           )}
 
-          {activeTab === 'payroll' && (
-            <div>
-              {/* Dashboard Ringkasan Analisis Rekonsiliasi Payroll */}
-              {(() => {
-                const getParamVal = (key, fallback) => {
-                  const p = (parameters || []).find(item => item.key_name === key || item.KeyName === key);
-                  return (p?.key_value || p?.KeyValue) || fallback;
-                };
-
-                const exportFolder = getParamVal('FOLDER_BILL_EXPORT', 'D:/Data_NK/Project5/LMS/export_payroll');
-                const importFolder = getParamVal('FOLDER_BILL_IMPORT', 'D:/Data_NK/Project5/LMS/import_payroll');
-
-                const realSchedulesList = (payrollSchedules || []).map(ps => {
-                  const empName = ps.employee_name || referenceData.employees.find(e => String(e.employee_id) === String(ps.member_no))?.name || `Member #${ps.member_no || ''}`;
-                  const safePeriod = ps.period || '2026-08';
-                  const safeRef = ps.ref_no || `LMS-PAY-${safePeriod.replace(/-/g, '')}-${ps.member_no || ''}`;
-                  const paidAmt = ps.amount_paid !== undefined ? ps.amount_paid : (ps.status === 'PAID' ? (ps.total_installment || 0) : 0);
-                  const remAmt = ps.remaining_installment !== undefined ? ps.remaining_installment : (paidAmt - (ps.total_installment || 0));
-                  return {
-                    refNo: safeRef,
-                    nik: ps.nik || `317101234567${String(ps.member_no || '1001').padStart(4, '0')}`,
-                    name: `${empName} (#${ps.member_no || '1001'})`,
-                    period: safePeriod,
-                    amount: ps.total_installment || 0,
-                    deducted: paidAmt,
-                    remaining: remAmt,
-                    status: ps.status === 'PAID' ? 'SUCCESS' : (ps.status === 'PARTIAL' ? 'PARTIAL' : (ps.status === 'UNPAID' ? 'PENDING' : (ps.status || 'PENDING'))),
-                    keterangan: ps.status === 'PAID' ? 'Potongan gaji diproses penuh (LUNAS)' : (ps.status === 'PARTIAL' ? `Potongan parsial (Sisa/Credit: Rp ${Math.round(remAmt).toLocaleString('id-ID')})` : 'Menunggu eksekusi payroll HRD Adira')
-                  };
-                });
-
-                const displayList = importedRows.length > 0 ? importedRows : realSchedulesList;
-
-                const totalAmount = displayList.reduce((sum, item) => sum + (item?.amount || 0), 0);
-                const totalDeducted = displayList.reduce((sum, item) => sum + (item?.deducted || 0), 0);
-                const totalShortage = totalAmount - totalDeducted;
-                const successCount = displayList.filter(i => i?.status === 'SUCCESS').length;
-                const partialCount = displayList.filter(i => i?.status === 'PARTIAL').length;
-                const failedCount = displayList.filter(i => i?.status === 'FAILED').length;
-                const pendingCount = displayList.filter(i => i?.status === 'PENDING' || i?.status === 'UNPAID').length;
-
-                return (
-                  <div>
-                    {/* Folder Config Banner */}
-                    <div style={{ padding: '10px 16px', background: '#e0f2fe', color: '#0369a1', borderRadius: '6px', marginBottom: '16px', fontSize: '0.85rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: 500 }}>
-                      <div>📁 <strong>Folder Export Default (FOLDER_BILL_EXPORT):</strong> <span style={{ fontFamily: 'monospace' }}>{exportFolder}</span></div>
-                      <div>📂 <strong>Folder Import Default (FOLDER_BILL_IMPORT):</strong> <span style={{ fontFamily: 'monospace' }}>{importFolder}</span></div>
-                    </div>
-
-                    {/* KPI Cards Row */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '20px' }}>
-                      <div className="card" style={{ padding: '16px', background: '#f8fafc', borderLeft: '4px solid #3b82f6', marginBottom: 0 }}>
-                        <div style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Total Tagihan Payroll</div>
-                        <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: '#0f172a', marginTop: '4px' }}>Rp {Math.round(totalAmount).toLocaleString('id-ID')}</div>
-                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '4px' }}>{displayList.length} Transaksi Database (lms_sch.loan_schedules)</div>
-                      </div>
-
-                      <div className="card" style={{ padding: '16px', background: '#f0fdf4', borderLeft: '4px solid #10b981', marginBottom: 0 }}>
-                        <div style={{ fontSize: '0.8rem', color: '#047857', fontWeight: 600, textTransform: 'uppercase' }}>Terpotong Sukses</div>
-                        <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: '#065f46', marginTop: '4px' }}>Rp {Math.round(totalDeducted).toLocaleString('id-ID')}</div>
-                        <div style={{ fontSize: '0.75rem', color: '#047857', marginTop: '4px' }}>{successCount} Sukses | {partialCount} Partial</div>
-                      </div>
-
-                      <div className="card" style={{ padding: '16px', background: totalShortage > 0 ? '#fef2f2' : '#f8fafc', borderLeft: `4px solid ${totalShortage > 0 ? '#ef4444' : '#64748b'}`, marginBottom: 0 }}>
-                        <div style={{ fontSize: '0.8rem', color: totalShortage > 0 ? '#991b1b' : '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Selisih / Tunggakan</div>
-                        <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: totalShortage > 0 ? '#991b1b' : '#0f172a', marginTop: '4px' }}>Rp {Math.round(totalShortage).toLocaleString('id-ID')}</div>
-                        <div style={{ fontSize: '0.75rem', color: totalShortage > 0 ? '#991b1b' : '#64748b', marginTop: '4px' }}>{failedCount} Gagal Potong</div>
-                      </div>
-
-                      <div className="card" style={{ padding: '16px', background: '#fefce8', borderLeft: '4px solid #eab308', marginBottom: 0 }}>
-                        <div style={{ fontSize: '0.8rem', color: '#854d0e', fontWeight: 600, textTransform: 'uppercase' }}>Status Rekonsiliasi</div>
-                        <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#854d0e', marginTop: '4px' }}>
-                          {payrollReconciled ? (totalShortage > 0 ? '⚠️ UNRECONCILED (ADA SELISIH)' : '✅ TEREKONSILIASI') : '⏳ PENDING'}
-                        </div>
-                        <div style={{ fontSize: '0.75rem', color: '#854d0e', marginTop: '4px' }}>
-                          {payrollReconciled ? `${successCount + partialCount} Selesai / ${failedCount} Gagal` : `${pendingCount} Menunggu Import HRD`}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Table Container */}
-                    <div className="table-container">
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: 'var(--primary-blue)', color: 'white', borderTopLeftRadius: '8px', borderTopRightRadius: '8px' }}>
-                        <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>✂️ Detail Rekonsiliasi Pemotongan Gaji (lms_sch.loan_schedules)</div>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <button 
-                            onClick={() => {
-                              const now = new Date();
-                              const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-                              const yyyy = lastDay.getFullYear();
-                              const mm = String(lastDay.getMonth() + 1).padStart(2, '0');
-                              const dd = String(lastDay.getDate()).padStart(2, '0');
-                              setExportCutoffDate(`${yyyy}-${mm}-${dd}`);
-                              setExportCustomFolder(exportFolder);
-                              setExportModalOpen(true);
-                            }}
-                            style={{ padding: '6px 12px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
-                            title={`Export File CSV Tagihan s/d Tanggal Cut-off ke Folder ${exportFolder}`}
-                          >
-                            📥 Export File Payroll (.csv)
-                          </button>
-                          <input 
-                            type="file" 
-                            ref={fileInputRef} 
-                            accept=".csv,.txt" 
-                            onChange={handleCSVUpload} 
-                            style={{ display: 'none' }} 
-                          />
-                          <button 
-                            onClick={() => fileInputRef.current && fileInputRef.current.click()}
-                            style={{ padding: '6px 12px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
-                            title={`Buka Folder Import ${importFolder} & Pilih File CSV Rekonsiliasi`}
-                          >
-                            📤 Import Result Rekonsiliasi
-                          </button>
-                        </div>
-                      </div>
-                      <table>
-                        <thead>
-                          <tr>
-                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>No. Ref</th>
-                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>NIK Adira</th>
-                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>Anggota / Karyawan</th>
-                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>Periode</th>
-                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>Nominal Tagihan</th>
-                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>Terpotong</th>
-                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>Status</th>
-                            <th style={{ padding: '8px 12px', fontSize: '0.85rem' }}>Hasil Analisis / Keterangan HRD</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {displayList.length === 0 ? (
-                            <tr><td colSpan="8" style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>Belum ada tagihan angsuran pinjaman aktif di lms_sch.loan_schedules.</td></tr>
-                          ) : (
-                            displayList.map(item => (
-                              <tr key={item?.refNo || Math.random()} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                                <td style={{ padding: '8px 12px', fontSize: '0.85rem' }}><strong>{item?.refNo || '-'}</strong></td>
-                                <td style={{ padding: '8px 12px', fontSize: '0.85rem' }}>{item?.nik || '-'}</td>
-                                <td style={{ padding: '8px 12px', fontSize: '0.85rem' }}>{item?.name || '-'}</td>
-                                <td style={{ padding: '8px 12px', fontSize: '0.85rem' }}>{item?.period || '-'}</td>
-                                <td style={{ padding: '8px 12px', fontSize: '0.85rem' }}><strong>Rp {Math.round(item?.amount || 0).toLocaleString('id-ID')}</strong></td>
-                                <td style={{ padding: '8px 12px', fontSize: '0.85rem', color: item?.status === 'SUCCESS' ? '#047857' : (item?.status === 'PENDING' || item?.status === 'UNPAID' ? '#b45309' : '#d97706') }}>Rp {Math.round(item?.deducted || 0).toLocaleString('id-ID')}</td>
-                                <td style={{ padding: '8px 12px', fontSize: '0.85rem' }}>
-                                  <span className={item?.status === 'SUCCESS' ? 'badge badge-success' : (item?.status === 'FAILED' ? 'badge badge-danger' : 'badge badge-warning')}>
-                                    {item?.status === 'UNPAID' ? 'PENDING' : (item?.status || 'PENDING')}
-                                  </span>
-                                </td>
-                                <td style={{ padding: '8px 12px', fontSize: '0.85rem', color: '#475569' }}>
-                                  <i>{item?.keterangan || 'Potongan diproses'}</i>
-                                </td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                );
-              })()}
+          {(activeTab === 'payroll' || activeTab === 'payroll-reconciliation') && renderPayrollContent()}
 
               {/* Modal UI Filter Cutoff Export Payroll HRD Adira */}
               {exportModalOpen && (
@@ -1556,8 +2224,7 @@ function App() {
                   </div>
                 </div>
               )}
-            </div>
-          )}
+            
 
           {activeTab === 'approval' && (
             <div className="table-container">
@@ -2061,13 +2728,17 @@ function App() {
                           const mNo = e.target.value;
                           setSelectedMemberFilter(mNo);
                           fetchPayrollSchedules();
-                          const firstLoan = (payrollSchedules || []).find(s => String(s.member_no) === String(mNo) && s.status !== 'PAID' && s.status !== 'CLOSED');
+                          const firstLoan = (payrollSchedules || []).find(s => String(s.member_no) === String(mNo) && s.status === 'PARTIAL') ||
+                                            (payrollSchedules || []).find(s => String(s.member_no) === String(mNo) && s.status !== 'PAID' && s.status !== 'CLOSED');
                           if (firstLoan) {
+                            const tot = parseFloat(firstLoan.total_installment) || 0;
+                            const paid = parseFloat(firstLoan.amount_paid) || 0;
+                            const rem = (tot - paid) > 0 ? (tot - paid) : tot;
                             setManualForm({
                               ...manualForm,
                               loan_no: firstLoan.loan_no,
                               member_no: firstLoan.member_no,
-                              nominal: firstLoan.total_installment,
+                              nominal: rem,
                               period: `${manualYear}-${manualMonth}`
                             });
                           } else {
@@ -2130,11 +2801,17 @@ function App() {
                         onChange={(e) => {
                           const lNo = e.target.value;
                           const sel = payrollSchedules.find(s => String(s.loan_no) === String(lNo));
+                          let remNominal = '';
+                          if (sel) {
+                            const tot = parseFloat(sel.total_installment) || 0;
+                            const paid = parseFloat(sel.amount_paid) || 0;
+                            remNominal = (tot - paid) > 0 ? (tot - paid) : tot;
+                          }
                           setManualForm({
                             ...manualForm,
                             loan_no: lNo,
                             member_no: sel ? sel.member_no : selectedMemberFilter,
-                            nominal: sel ? sel.total_installment : '',
+                            nominal: remNominal,
                             period: `${manualYear}-${manualMonth}`
                           });
                           if (sel && sel.member_no) {
@@ -2145,11 +2822,17 @@ function App() {
                         style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
                       >
                         <option value="">-- Pilih Pinjaman Aktif ({filteredLoans.length} Ditemukan) --</option>
-                        {paginatedLoans.map(s => (
-                          <option key={s.id} value={s.loan_no}>
-                            Pinjaman #{s.loan_no} - {s.employee_name} ({s.member_no}) - Rp {Math.round(s.total_installment).toLocaleString('id-ID')} ({s.period})
-                          </option>
-                        ))}
+                        {paginatedLoans.map(s => {
+                          const tot = parseFloat(s.total_installment) || 0;
+                          const paid = parseFloat(s.amount_paid) || 0;
+                          const rem = (tot - paid) > 0 ? (tot - paid) : tot;
+                          const hasPartial = paid > 0 && paid < tot;
+                          return (
+                            <option key={s.id} value={s.loan_no}>
+                              Pinjaman #{s.loan_no} - {s.employee_name} ({s.member_no}) - Rp {Math.round(rem).toLocaleString('id-ID')}{hasPartial ? ' (Sisa Hutang)' : ''} ({s.period})
+                            </option>
+                          );
+                        })}
                       </select>
                     </div>
 
@@ -2236,12 +2919,15 @@ function App() {
                   <div>
                     <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Nominal Pembayaran (Rp) *</label>
                     <input 
-                      type="number" 
-                      value={manualForm.nominal} 
-                      onChange={(e) => setManualForm({ ...manualForm, nominal: e.target.value })}
-                      placeholder="Nominal Rp" 
+                      type="text" 
+                      value={manualForm.nominal !== '' && manualForm.nominal !== null && manualForm.nominal !== undefined ? (Math.round(parseFloat(String(manualForm.nominal).replace(/[^0-9]/g, '')) || 0) > 0 ? Math.round(parseFloat(String(manualForm.nominal).replace(/[^0-9]/g, '')) || 0).toLocaleString('id-ID') : '') : ''} 
+                      onChange={(e) => {
+                        const rawDigits = e.target.value.replace(/[^0-9]/g, '');
+                        setManualForm({ ...manualForm, nominal: rawDigits });
+                      }}
+                      placeholder="0" 
                       required 
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1', fontWeight: 600, fontSize: '0.95rem', color: '#0f172a' }}
                     />
                   </div>
 
@@ -2663,7 +3349,7 @@ function App() {
           );
         })()}
 
-          {activeTab !== 'dashboard' && activeTab !== 'pengajuan' && activeTab !== 'pinjaman' && activeTab !== 'parameters' && activeTab !== 'master' && activeTab !== 'approval' && activeTab !== 'disbursement' && activeTab !== 'payroll' && activeTab !== 'manual-repayment' && activeTab !== 'products' && !activeTab.startsWith('master-') && (
+          {activeTab !== 'dashboard' && activeTab !== 'pengajuan' && activeTab !== 'pinjaman' && activeTab !== 'parameters' && activeTab !== 'master' && activeTab !== 'approval' && activeTab !== 'disbursement' && activeTab !== 'payroll' && activeTab !== 'payroll-reconciliation' && activeTab !== 'manual-repayment' && activeTab !== 'products' && !activeTab.startsWith('master-') && (
             <div className="card">
               <h2>Module: {visibleMenus.find(m => m.path === activeTab)?.title || activeTab}</h2>
               <p style={{ marginTop: '16px', color: '#64748B' }}>

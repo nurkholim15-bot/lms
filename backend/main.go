@@ -257,28 +257,42 @@ func main() {
 			c.JSON(http.StatusOK, gin.H{"data": dtos})
 		})
 
-		// Real Payroll Schedules Endpoint (PostgreSQL DB)
+		// Payroll Schedules & Member Listing Endpoint for Manual Repayment
 		api.GET("/payroll/schedules", func(c *gin.Context) {
 			type PayrollScheduleDTO struct {
-				ID               int64     `json:"id"`
-				LoanNo           int64     `json:"loan_no"`
-				ApplicationNo    int64     `json:"application_no"`
-				MemberNo         int64     `json:"member_no"`
-				EmployeeName     string    `json:"employee_name"`
-				DeptNo           string    `json:"dept_no"`
-				NIK              string    `json:"nik"`
-				Period           string    `json:"period"`
-				InstallmentNo    int       `json:"installment_no"`
-				Principal        float64   `json:"principal"`
-				Interest         float64   `json:"interest"`
-				TotalInstallment float64   `json:"total_installment"`
-				Status           string    `json:"status"`
-				DueDate          time.Time `json:"due_date"`
-				RefNo            string    `json:"ref_no"`
+				ID                   int64     `json:"id"`
+				LoanNo               int64     `json:"loan_no"`
+				ApplicationNo        int64     `json:"application_no"`
+				MemberNo             int64     `json:"member_no"`
+				EmployeeName         string    `json:"employee_name"`
+				DeptNo               string    `json:"dept_no"`
+				Nik                  string    `json:"nik"`
+				Period               string    `json:"period"`
+				InstallmentNo        int       `json:"installment_no"`
+				Principal            float64   `json:"principal"`
+				Interest             float64   `json:"interest"`
+				TotalInstallment     float64   `json:"total_installment"`
+				AmountPaid           float64   `json:"amount_paid"`
+				RemainingInstallment float64   `json:"remaining_installment"`
+				Status               string    `json:"status"`
+				DueDate              time.Time `json:"due_date"`
+				RefNo                string    `json:"ref_no"`
+			}
+			periodParam := strings.TrimSpace(c.Query("period"))
+			whereSqlLs := ""
+			whereSqlPd := ""
+			var queryParams []interface{}
+
+			if periodParam != "" {
+				whereSqlLs = "WHERE ls.period = ?"
+				whereSqlPd = "WHERE pd.status = 'FAILED' AND pd.period = ?"
+				queryParams = append(queryParams, periodParam, periodParam)
+			} else {
+				whereSqlPd = "WHERE pd.status = 'FAILED'"
 			}
 
 			var dtos []PayrollScheduleDTO
-			query := `
+			query := fmt.Sprintf(`
 				SELECT 
 					ls.id,
 					ls.loan_no,
@@ -292,6 +306,8 @@ func main() {
 					ls.principal,
 					ls.interest,
 					ls.total_installment,
+					COALESCE(ls.amount_paid, 0) AS amount_paid,
+					COALESCE(ls.remaining_installment, 0) AS remaining_installment,
 					ls.status,
 					ls.due_date,
 					CONCAT('LMS-PAY-', REPLACE(ls.period, '-', ''), '-', l.member_no) AS ref_no
@@ -299,14 +315,75 @@ func main() {
 				JOIN lms_sch.loans l ON ls.loan_no = l.loan_no
 				LEFT JOIN lms_sch.members m ON l.member_no = m.member_no
 				LEFT JOIN lms_sch.employees e ON e.employee_id = l.member_no OR e.employee_id = m.employee_id
-				WHERE ls.status != 'PAID' AND (l.status = 'ACTIVE' OR l.status IS NULL)
-				ORDER BY ls.due_date ASC, ls.id ASC;
-			`
-			if err := config.DB.Raw(query).Scan(&dtos).Error; err != nil {
+				%s
+
+				UNION ALL
+
+				SELECT 
+					(pd.id + 999999) AS id,
+					COALESCE(pd.loan_no, 0) AS loan_no,
+					0 AS application_no,
+					0 AS member_no,
+					COALESCE(e.name, m.bank_account_name, CONCAT('Pinjaman #', pd.loan_no)) AS employee_name,
+					'SYSTEM' AS dept_no,
+					COALESCE(m.bank_account_no, '3171000000000000') AS nik,
+					pd.period,
+					0 AS installment_no,
+					pd.nominal_original AS principal,
+					0 AS interest,
+					pd.nominal_original AS total_installment,
+					0 AS amount_paid,
+					pd.nominal_original AS remaining_installment,
+					'FAILED' AS status,
+					pd.process_date AS due_date,
+					CONCAT('LMS-PAY-FAIL-', pd.id) AS ref_no
+				FROM lms_sch.payroll_deductions pd
+				LEFT JOIN lms_sch.loans l ON pd.loan_no = l.loan_no
+				LEFT JOIN lms_sch.members m ON l.member_no = m.member_no
+				LEFT JOIN lms_sch.employees e ON e.employee_id = l.member_no OR e.employee_id = m.employee_id
+				%s
+
+				ORDER BY due_date ASC, id ASC;
+			`, whereSqlLs, whereSqlPd)
+			if err := config.DB.Raw(query, queryParams...).Scan(&dtos).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
-			c.JSON(http.StatusOK, dtos)
+			var adjList []struct {
+				ID             int64     `json:"id"`
+				Period         string    `json:"period"`
+				LoanNo         int64     `json:"loan_no"`
+				RefNo          string    `json:"ref_no"`
+				AdjustmentType string    `json:"adjustment_type"`
+				OriginalAmount float64   `json:"original_amount"`
+				DeductedAmount float64   `json:"deducted_amount"`
+				AdjustedAmount float64   `json:"adjusted_amount"`
+				Notes          string    `json:"notes"`
+				CreatedAt      time.Time `json:"created_at"`
+				CreatedUser    string    `json:"created_user"`
+				EmployeeName   string    `json:"employee_name"`
+				MemberNo       string    `json:"member_no"`
+			}
+			searchPeriod := periodParam
+			if searchPeriod == "" {
+				searchPeriod = "2026-08"
+			}
+			config.DB.Raw(`
+				SELECT pa.id, pa.period, pa.loan_no, pa.ref_no, pa.adjustment_type, pa.original_amount, pa.deducted_amount, pa.adjusted_amount, pa.notes, pa.created_at, pa.created_user,
+				       COALESCE(e.name, CONCAT('Member #', substring(pa.ref_no from '[0-9]+$'))) as employee_name,
+				       COALESCE(CAST(l.member_no AS VARCHAR), substring(pa.ref_no from '[0-9]+$')) as member_no
+				FROM lms_sch.payroll_adjustments pa
+				LEFT JOIN lms_sch.loans l ON pa.loan_no = l.loan_no AND pa.loan_no > 0
+				LEFT JOIN lms_sch.employees e ON (CAST(l.member_no AS VARCHAR) = e.employee_id OR CAST(e.employee_id AS VARCHAR) = substring(pa.ref_no from '[0-9]+$'))
+				WHERE pa.period = ?
+				ORDER BY pa.created_at DESC
+			`, searchPeriod).Scan(&adjList)
+
+			c.JSON(http.StatusOK, gin.H{
+				"status":      "success",
+				"data":        dtos,
+				"adjustments": adjList,
+			})
 		})
 
 		// Direct Export File to FOLDER_BILL_EXPORT Directory Endpoint
@@ -468,7 +545,20 @@ func main() {
 
 			log.Printf("[IMPORT-API] Processing import for file '%s' by user '%s' with %d rows", fileName, updaterName, len(req.Rows))
 
-			totalRecords := len(req.Rows)
+			type ProcessedLogDTO struct {
+				LoanNo     int64   `json:"loan_no"`
+				RefNo      string  `json:"ref_no"`
+				Nik        string  `json:"nik"`
+				Name       string  `json:"name"`
+				Period     string  `json:"period"`
+				Amount     float64 `json:"amount"`
+				Deducted   float64 `json:"deducted"`
+				Status     string  `json:"status"`
+				Keterangan string  `json:"keterangan"`
+			}
+			var processedLogs []ProcessedLogDTO
+
+			var totalRecords int
 			var totalAmount float64
 			var totalSuccessRecords int
 			var totalSuccessAmount float64
@@ -485,41 +575,109 @@ func main() {
 
 				totalAmount += row.NominalOriginal
 
-				// Find corresponding loan_no
+				// Find corresponding loan_no & check existence in database
 				var loanNoPtr *int64
 				var foundLoanNo int64
+				var loanExists bool
+
 				if row.LoanNo > 0 {
-					foundLoanNo = row.LoanNo
-					loanNoPtr = &foundLoanNo
-				} else {
+					var count int64
+					config.DB.Raw("SELECT COUNT(*) FROM lms_sch.loans WHERE loan_no = ?", row.LoanNo).Scan(&count)
+					if count > 0 {
+						foundLoanNo = row.LoanNo
+						loanNoPtr = &foundLoanNo
+						loanExists = true
+					}
+				} else if memberNo > 0 {
 					config.DB.Raw("SELECT loan_no FROM lms_sch.loans WHERE member_no = ? OR loan_no = ? LIMIT 1", memberNo, memberNo).Scan(&foundLoanNo)
 					if foundLoanNo > 0 {
 						loanNoPtr = &foundLoanNo
+						loanExists = true
 					}
 				}
-
-				// Insert log to lms_sch.payroll_deductions
-				insertLogSQL := `
-					INSERT INTO lms_sch.payroll_deductions (loan_no, period, nominal_original, nominal_deducted, process_date, status, failure_reason, created_at, created_user)
-					VALUES (?, ?, ?, ?, NOW(), ?, ?, NOW(), ?);
-				`
-				config.DB.Exec(insertLogSQL, loanNoPtr, periodStr, row.NominalOriginal, row.Deducted, statusUpper, row.Keterangan, updaterName)
 
 				deductedVal := row.Deducted
 				if deductedVal <= 0 && row.NominalOriginal > 0 && statusUpper != "FAILED" && statusUpper != "REJECTED" {
 					deductedVal = row.NominalOriginal
 				}
 
-				if deductedVal > 0 {
+				logStatus := statusUpper
+				logReason := row.Keterangan
+				if logReason == "" {
+					logReason = "Potongan gaji diproses"
+				}
+
+				if !loanExists {
+					logStatus = "FAILED"
+					if row.LoanNo > 0 {
+						logReason = fmt.Sprintf("Nomor Pinjaman (LOAN_NO: %d) tidak ditemukan di database LMS", row.LoanNo)
+					} else {
+						logReason = fmt.Sprintf("Anggota/Karyawan ID: %d tidak memiliki pinjaman di database LMS", memberNo)
+					}
+					totalFailedRecords++
+					totalFailedAmount += row.NominalOriginal
+				} else if deductedVal <= 0 {
+					logStatus = "FAILED"
+					logReason = "Nominal pemotongan Rp 0 / Tidak ada nominal terpotong"
+					totalFailedRecords++
+					totalFailedAmount += row.NominalOriginal
+				} else {
 					totalSuccessRecords++
 					totalSuccessAmount += deductedVal
 					if deductedVal < row.NominalOriginal {
 						totalFailedAmount += (row.NominalOriginal - deductedVal)
 					}
-				} else {
-					totalFailedRecords++
-					totalFailedAmount += row.NominalOriginal
 				}
+
+				// Get employee name & NIK for display
+				var empName, empNik string
+				config.DB.Raw(`
+					SELECT COALESCE(e.name, m.bank_account_name, CONCAT('Anggota #', ?)), COALESCE(m.bank_account_no, CAST(? AS VARCHAR))
+					FROM lms_sch.members m
+					LEFT JOIN lms_sch.employees e ON e.employee_id = m.employee_id OR e.employee_id = m.member_no
+					WHERE m.member_no = ? OR m.employee_id = ? LIMIT 1
+				`, memberNo, memberNo, memberNo, memberNo).Row().Scan(&empName, &empNik)
+
+				if empName == "" {
+					empName = fmt.Sprintf("Anggota #%d", memberNo)
+				}
+				if empNik == "" {
+					empNik = fmt.Sprintf("111%d", memberNo)
+				}
+
+				// Insert log to lms_sch.payroll_deductions & get created ID
+				var newDedID int64
+				insertLogSQL := `
+					INSERT INTO lms_sch.payroll_deductions (loan_no, period, nominal_original, nominal_deducted, process_date, status, failure_reason, created_at, created_user)
+					VALUES (?, ?, ?, ?, NOW(), ?, ?, NOW(), ?) RETURNING id;
+				`
+				config.DB.Raw(insertLogSQL, loanNoPtr, periodStr, row.NominalOriginal, row.Deducted, logStatus, logReason, updaterName).Scan(&newDedID)
+
+				targetLoanNo := row.LoanNo
+				if targetLoanNo == 0 {
+					targetLoanNo = foundLoanNo
+				}
+				refStr := fmt.Sprintf("%d", targetLoanNo)
+				if refStr == "0" {
+					refStr = row.RefNo
+				}
+
+				finalDeducted := deductedVal
+				if logStatus == "FAILED" {
+					finalDeducted = 0
+				}
+
+				processedLogs = append(processedLogs, ProcessedLogDTO{
+					LoanNo:     targetLoanNo,
+					RefNo:      refStr,
+					Nik:        empNik,
+					Name:       empName,
+					Period:     periodStr,
+					Amount:     row.NominalOriginal,
+					Deducted:   finalDeducted,
+					Status:     logStatus,
+					Keterangan: logReason,
+				})
 
 				// 1. Direct LOAN_NO Processing Branch (when CSV row explicitly specifies loan_no)
 				if row.LoanNo > 0 {
@@ -776,6 +934,7 @@ func main() {
 				"total_success_amount":  totalSuccessAmount,
 				"total_failed_records":  totalFailedRecords,
 				"total_failed_amount":   totalFailedAmount,
+				"logs":                  processedLogs,
 			})
 		})
 
@@ -832,52 +991,67 @@ func main() {
 					WHERE application_no = (SELECT application_no FROM lms_sch.loans WHERE loan_no = ?);
 				`, updaterName, req.LoanNo)
 			} else {
-				// Pay single installment
+				// Pay single installment (incorporates existing partial amount_paid)
 				var schedID int64
-				var totInst float64
+				var totInst, prevPaid float64
+				var appNo int64
 				config.DB.Raw(`
-					SELECT id, total_installment FROM lms_sch.loan_schedules
-					WHERE loan_no = ? AND status != 'PAID'
-					ORDER BY due_date ASC, id ASC LIMIT 1
-				`, req.LoanNo).Row().Scan(&schedID, &totInst)
+					SELECT ls.id, ls.total_installment, COALESCE(ls.amount_paid, 0), l.application_no
+					FROM lms_sch.loan_schedules ls
+					JOIN lms_sch.loans l ON ls.loan_no = l.loan_no
+					WHERE ls.loan_no = ? AND ls.status != 'PAID'
+					ORDER BY ls.due_date ASC, ls.id ASC LIMIT 1
+				`, req.LoanNo).Row().Scan(&schedID, &totInst, &prevPaid, &appNo)
 
 				if schedID > 0 {
-					paidVal := req.Nominal
-					if paidVal <= 0 {
-						paidVal = totInst
+					paymentInput := req.Nominal
+					if paymentInput <= 0 {
+						paymentInput = totInst - prevPaid
 					}
-					remVal := paidVal - totInst
-					newStat := "PARTIAL"
-					if paidVal >= totInst {
+					newPaidVal := prevPaid + paymentInput
+					var remVal float64
+					if newPaidVal == totInst {
+						remVal = 0
+					} else if newPaidVal > totInst {
+						remVal = totInst - newPaidVal // Negative (overpaid credit)
+					} else {
+						remVal = newPaidVal - totInst // Negative (underpaid shortfall)
+					}
+
+					newStat := "UNPAID"
+					if newPaidVal >= totInst {
 						newStat = "PAID"
+					} else if newPaidVal > 0 {
+						newStat = "PARTIAL"
 					}
+
 					config.DB.Exec(`
 						UPDATE lms_sch.loan_schedules
 						SET amount_paid = ?, remaining_installment = ?, status = ?, updated_at = NOW(), updated_user = ?
 						WHERE id = ?;
-					`, paidVal, remVal, newStat, updaterName, schedID)
+					`, newPaidVal, remVal, newStat, updaterName, schedID)
 
 					config.DB.Exec(`
 						UPDATE lms_sch.loans
 						SET outstanding_amount = GREATEST(0, outstanding_amount - ?), updated_at = NOW(), updated_user = ?
 						WHERE loan_no = ?;
-					`, paidVal, updaterName, req.LoanNo)
+					`, paymentInput, updaterName, req.LoanNo)
 
-					// Check if all schedules are PAID
+					// Check if all schedules are PAID -> CLOSE loan and loan_application
 					var unpaidCount int64
 					config.DB.Raw("SELECT COUNT(*) FROM lms_sch.loan_schedules WHERE loan_no = ? AND status != 'PAID'", req.LoanNo).Scan(&unpaidCount)
 					if unpaidCount == 0 {
 						config.DB.Exec(`
 							UPDATE lms_sch.loans
-							SET status = 'CLOSED', updated_at = NOW(), updated_user = ?
+							SET status = 'CLOSED', outstanding_amount = 0, updated_at = NOW(), updated_user = ?
 							WHERE loan_no = ?;
 						`, updaterName, req.LoanNo)
 
 						config.DB.Exec(`
 							UPDATE lms_sch.loan_applications
 							SET status = 'CLOSED', updated_at = NOW(), updated_user = ?
-							WHERE application_no = (SELECT application_no FROM lms_sch.loans WHERE loan_no = ?);
-						`, updaterName, req.LoanNo)
+							WHERE application_no = ? OR application_no = (SELECT application_no FROM lms_sch.loans WHERE loan_no = ?);
+						`, updaterName, appNo, req.LoanNo)
 					}
 				}
 			}
@@ -921,7 +1095,242 @@ func main() {
 			config.DB.Raw("SELECT * FROM lms_sch.loan_payroll_import_logs ORDER BY id DESC LIMIT 100").Scan(&logs)
 			c.JSON(http.StatusOK, gin.H{"status": "success", "data": logs})
 		})
-		
+
+		// POST Payroll Adjustment Endpoint
+		api.POST("/payroll/adjust", func(c *gin.Context) {
+			type AdjustReq struct {
+				RefNo          string  `json:"ref_no"`
+				LoanNo         int64   `json:"loan_no"`
+				Period         string  `json:"period"`
+				AdjustmentType string  `json:"adjustment_type"` // 'FAILED_CORRECTION', 'OVERPAYMENT_REFUND', 'OVERPAYMENT_OFFSET'
+				OriginalAmount float64 `json:"original_amount"`
+				DeductedAmount float64 `json:"deducted_amount"`
+				AdjustedAmount float64 `json:"adjusted_amount"`
+				Notes          string  `json:"notes"`
+				CreatedUser    string  `json:"created_user"`
+			}
+			var req AdjustReq
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+
+			updaterName := req.CreatedUser
+			if updaterName == "" {
+				updaterName = "10101"
+			}
+			periodStr := req.Period
+			if periodStr == "" {
+				periodStr = "2026-08"
+			}
+			notesStr := strings.TrimSpace(req.Notes)
+			// Calculate exact adjusted amount (nominal overpayment diff) if type is OVERPAYMENT
+			adjVal := req.AdjustedAmount
+			diffVal := req.DeductedAmount - req.OriginalAmount
+			if diffVal < 0 {
+				diffVal = -diffVal
+			}
+			if strings.Contains(strings.ToUpper(req.AdjustmentType), "OVERPAYMENT") {
+				adjVal = diffVal
+			}
+			if adjVal <= 0 && diffVal > 0 {
+				adjVal = diffVal
+			}
+
+			var refNoBigInt int64
+			if req.RefNo != "" {
+				var digits string
+				for _, ch := range req.RefNo {
+					if ch >= '0' && ch <= '9' {
+						digits += string(ch)
+					}
+				}
+				if digits != "" {
+					fmt.Sscanf(digits, "%d", &refNoBigInt)
+				}
+			}
+			if refNoBigInt == 0 && req.LoanNo > 0 {
+				config.DB.Raw("SELECT id FROM lms_sch.payroll_deductions WHERE loan_no = ? AND period = ? ORDER BY id DESC LIMIT 1", req.LoanNo, periodStr).Scan(&refNoBigInt)
+			}
+
+			// 1. Insert into lms_sch.payroll_adjustments
+			err := config.DB.Exec(`
+				INSERT INTO lms_sch.payroll_adjustments (period, loan_no, ref_no, adjustment_type, original_amount, deducted_amount, adjusted_amount, notes, created_at, created_user)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?);
+			`, periodStr, req.LoanNo, refNoBigInt, req.AdjustmentType, req.OriginalAmount, req.DeductedAmount, adjVal, notesStr, updaterName).Error
+
+			if err != nil {
+				log.Printf("[ADJUST-ERROR] Failed to insert payroll_adjustment: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal menyimpan adjustment ke database: " + err.Error()})
+				return
+			}
+
+			// 2. Update payroll_deductions if refNoBigInt or req.LoanNo is provided
+			if refNoBigInt > 0 || req.LoanNo > 0 {
+				targetLoan := req.LoanNo
+				if targetLoan == 0 {
+					targetLoan = refNoBigInt
+				}
+				config.DB.Exec(`
+					UPDATE lms_sch.payroll_deductions
+					SET status = 'ADJUSTED', failure_reason = CONCAT('ADJUSTMENT: ', CAST(? AS VARCHAR)), updated_at = NOW()
+					WHERE (loan_no = ? OR id = ?) AND (period = ? OR period = '');
+				`, notesStr, targetLoan, refNoBigInt, periodStr)
+			}
+
+			// Always zero out remaining installment on loan_schedules upon adjustment
+			if req.LoanNo > 0 {
+				config.DB.Exec(`
+					UPDATE lms_sch.loan_schedules
+					SET remaining_installment = 0, amount_paid = total_installment, status = 'ADJUSTED', updated_at = NOW(), updated_user = ?
+					WHERE loan_no = ? AND period = ?;
+				`, updaterName, req.LoanNo, periodStr)
+			}
+			
+			if strings.HasPrefix(req.RefNo, "LMS-PAY-") {
+				// Parse member_no from LMS-PAY-YYYYMM-MEMBERNO
+				parts := strings.Split(req.RefNo, "-")
+				if len(parts) >= 3 {
+					memberNoStr := parts[len(parts)-1]
+					config.DB.Exec(`
+						UPDATE lms_sch.loan_schedules
+						SET remaining_installment = 0, amount_paid = total_installment, status = 'ADJUSTED', updated_at = NOW(), updated_user = ?
+						WHERE period = ? AND loan_no IN (SELECT loan_no FROM lms_sch.loans WHERE CAST(member_no AS VARCHAR) = ?);
+					`, updaterName, periodStr, memberNoStr)
+				}
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "success",
+				"message": fmt.Sprintf("Adjustment [%s] berhasil disimpan dengan referensi %s: '%s'", req.AdjustmentType, req.RefNo, notesStr),
+			})
+		})
+
+		// Reset & Reopen Reconciliation Endpoint
+		api.POST("/payroll/reset-reconciliation", func(c *gin.Context) {
+			period := c.Query("period")
+			if period == "" {
+				period = "2026-08"
+			}
+			config.DB.Exec("UPDATE lms_sch.loan_schedules SET amount_paid = 0, remaining_installment = total_installment, status = 'UNPAID', updated_at = NOW() WHERE period = ?", period)
+			config.DB.Exec("DELETE FROM lms_sch.payroll_adjustments WHERE period = ? OR period = ''", period)
+			config.DB.Exec("DELETE FROM lms_sch.payroll_deductions WHERE period = ? OR period = ''", period)
+			config.DB.Exec("TRUNCATE lms_sch.loan_payroll_import_logs RESTART IDENTITY;")
+			config.DB.Exec("DELETE FROM lms_sch.payroll_reconciliation_closings WHERE period = ? OR period = ''", period)
+
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "success",
+				"message": fmt.Sprintf("Status Rekonsiliasi & Jadwal Angsuran Periode %s berhasil di-reset total ke status OPEN / UNPAID.", period),
+			})
+		})
+
+		// GET Payroll Adjustments Endpoint
+		api.GET("/payroll/adjustments", func(c *gin.Context) {
+			period := c.Query("period")
+			if period == "" {
+				period = "2026-08"
+			}
+
+			type AdjItem struct {
+				ID             int64     `json:"id"`
+				Period         string    `json:"period"`
+				LoanNo         int64     `json:"loan_no"`
+				RefNo          string    `json:"ref_no"`
+				AdjustmentType string    `json:"adjustment_type"`
+				OriginalAmount float64   `json:"original_amount"`
+				DeductedAmount float64   `json:"deducted_amount"`
+				AdjustedAmount float64   `json:"adjusted_amount"`
+				Notes          string    `json:"notes"`
+				CreatedAt      time.Time `json:"created_at"`
+				CreatedUser    string    `json:"created_user"`
+				EmployeeName   string    `json:"employee_name"`
+				MemberNo       string    `json:"member_no"`
+			}
+			var list []AdjItem
+
+			config.DB.Raw(`
+				SELECT pa.id, pa.period, pa.loan_no, pa.ref_no, pa.adjustment_type, pa.original_amount, pa.deducted_amount, pa.adjusted_amount, pa.notes, pa.created_at, pa.created_user,
+				       COALESCE(e.name, m.bank_account_name, CONCAT('Anggota #', m.member_no), 'Anggota #110101') as employee_name,
+				       COALESCE(CAST(m.member_no AS VARCHAR), CAST(pa.loan_no AS VARCHAR), '110101') as member_no
+				FROM lms_sch.payroll_adjustments pa
+				LEFT JOIN lms_sch.payroll_deductions pd ON CAST(pa.ref_no AS VARCHAR) = CAST(pd.id AS VARCHAR)
+				LEFT JOIN lms_sch.loans l ON (pa.loan_no = l.loan_no OR pd.loan_no = l.loan_no) AND l.loan_no > 0
+				LEFT JOIN lms_sch.members m ON l.member_no = m.member_no
+				LEFT JOIN lms_sch.employees e ON e.employee_id = m.employee_id OR e.employee_id = m.member_no
+				WHERE pa.period = ?
+				ORDER BY pa.id DESC
+			`, period).Scan(&list)
+
+			c.JSON(http.StatusOK, gin.H{
+				"period":      period,
+				"adjustments": list,
+			})
+		})
+
+		// POST Close Reconciliation Endpoint
+		api.POST("/payroll/close-reconciliation", func(c *gin.Context) {
+			type CloseReq struct {
+				Period           string `json:"period"`
+				HrdSignatory     string `json:"hrd_signatory"`
+				FinanceSignatory string `json:"finance_signatory"`
+				KopkaraSignatory string `json:"kopkara_signatory"`
+				ClosingNotes     string `json:"closing_notes"`
+				ClosedUser       string `json:"closed_user"`
+			}
+			var req CloseReq
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			periodStr := req.Period
+			if periodStr == "" {
+				periodStr = "2026-08"
+			}
+			updaterName := req.ClosedUser
+			if updaterName == "" {
+				updaterName = "10101"
+			}
+
+			config.DB.Exec(`
+				INSERT INTO lms_sch.payroll_reconciliation_closings (period, status, hrd_signatory, finance_signatory, kopkara_signatory, closing_notes, closed_at, closed_user)
+				VALUES (?, 'CLOSED', ?, ?, ?, ?, NOW(), ?)
+				ON CONFLICT (period) DO UPDATE 
+				SET status = 'CLOSED', hrd_signatory = EXCLUDED.hrd_signatory, finance_signatory = EXCLUDED.finance_signatory, kopkara_signatory = EXCLUDED.kopkara_signatory, closing_notes = EXCLUDED.closing_notes, closed_at = NOW(), closed_user = EXCLUDED.closed_user;
+			`, periodStr, req.HrdSignatory, req.FinanceSignatory, req.KopkaraSignatory, req.ClosingNotes, updaterName)
+
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "success",
+				"message": fmt.Sprintf("Laporan Rekonsiliasi Payroll Periode [%s] telah Resmi Ditutup (CLOSED) & Ditandatangani!", periodStr),
+			})
+		})
+
+		// GET Reconciliation Status Endpoint
+		api.GET("/payroll/reconciliation-status", func(c *gin.Context) {
+			periodStr := strings.TrimSpace(c.Query("period"))
+			if periodStr == "" {
+				periodStr = "2026-08"
+			}
+
+			type ClosingInfo struct {
+				ID               int64  `json:"id"`
+				Period           string `json:"period"`
+				Status           string `json:"status"`
+				HrdSignatory     string `json:"hrd_signatory"`
+				FinanceSignatory string `json:"finance_signatory"`
+				KopkaraSignatory string `json:"kopkara_signatory"`
+				ClosingNotes     string `json:"closing_notes"`
+			}
+			var info ClosingInfo
+			config.DB.Raw("SELECT id, period, status, COALESCE(hrd_signatory, '') AS hrd_signatory, COALESCE(finance_signatory, '') AS finance_signatory, COALESCE(kopkara_signatory, '') AS kopkara_signatory, COALESCE(closing_notes, '') AS closing_notes FROM lms_sch.payroll_reconciliation_closings WHERE period = ? LIMIT 1", periodStr).Scan(&info)
+
+			if info.Period == "" {
+				info.Period = periodStr
+				info.Status = "OPEN"
+			}
+
+			c.JSON(http.StatusOK, gin.H{"status": "success", "data": info})
+		})
+
 		parameters.DELETE("/:id", paramHandler.Delete)
 	}
 
