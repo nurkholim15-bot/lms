@@ -15,6 +15,8 @@ import (
 
 type ApplicationUseCase interface {
 	GetAllApplications() ([]models.LoanApplication, error)
+	GetApplicationsByPeriod(period string) ([]models.LoanApplication, error)
+	GetApplicationsByPeriodAndStatus(period string, status string) ([]models.LoanApplication, error)
 	SimulateApplication(req SubmitApplicationRequest) (SimulationResult, error)
 	SubmitApplication(req SubmitApplicationRequest) (*models.LoanApplication, error)
 	ApproveApplication(applicationNo int64, approvedAmount float64, notes string) error
@@ -189,6 +191,14 @@ func (u *applicationUseCase) GetAllApplications() ([]models.LoanApplication, err
 	return u.appRepo.FindAll()
 }
 
+func (u *applicationUseCase) GetApplicationsByPeriod(period string) ([]models.LoanApplication, error) {
+	return u.appRepo.FindByPeriod(period)
+}
+
+func (u *applicationUseCase) GetApplicationsByPeriodAndStatus(period string, status string) ([]models.LoanApplication, error) {
+	return u.appRepo.FindByPeriodAndStatus(period, status)
+}
+
 func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*models.LoanApplication, error) {
 	// 1. Get Product Details for validation
 	product, err := u.productRepo.FindByID(req.ProductID)
@@ -243,20 +253,6 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 		Tenor:             req.Tenor,
 		EligibilityResult: "ELIGIBLE",
 		Status:            "SUBMITTED",
-	}
-
-	err = u.appRepo.Create(app)
-	if err != nil {
-		return nil, err
-	}
-
-	// Save simulation details to loan_simulations table (Multiple Fields)
-	simRecord := &models.LoanSimulation{
-		ApplicationNo:     appNo,
-		MemberNo:          member.MemberNo,
-		ProductID:         req.ProductID,
-		RequestedAmount:   req.RequestedAmount,
-		Tenor:             req.Tenor,
 		PrincipalPerMonth: simResult.PrincipalPerMonth,
 		InterestPerMonth:  simResult.InterestPerMonth,
 		AdminFee:          simResult.AdminFee,
@@ -265,9 +261,10 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 		InterestRate:      simResult.InterestRate,
 		CreditLimit:       simResult.CreditLimit,
 	}
-	err = u.appRepo.GetDB().Create(simRecord).Error
+
+	err = u.appRepo.Create(app)
 	if err != nil {
-		fmt.Printf("ERROR inserting to loan_simulations: %v\n", err)
+		return nil, err
 	}
 
 	// Save initial Tracking entry
@@ -325,24 +322,21 @@ func (u *applicationUseCase) ProcessApproval(applicationNo int64, action string,
 		app.ApprovalNotes = notes
 
 		// Create Loan Contract for APPROVED status
-		var sim models.LoanSimulation
-		if err := u.appRepo.GetDB().Where("application_no = ?", app.ApplicationNo).First(&sim).Error; err == nil {
-			contract := models.LoanContract{
-				ApplicationNo:     app.ApplicationNo,
-				MemberNo:          app.MemberNo,
-				ProductID:         app.ProductID,
-				ApprovedAmount:    *app.ApprovedAmount,
-				Tenor:             app.Tenor,
-				PrincipalPerMonth: sim.PrincipalPerMonth,
-				InterestPerMonth:  sim.InterestPerMonth,
-				AdminFee:          sim.AdminFee,
-				TotalInstallment:  sim.TotalInstallment,
-				TotalLoanCost:     sim.TotalLoanCost,
-				ContractDate:      time.Now(),
-				Status:            "ACTIVE",
-			}
-			_ = u.appRepo.GetDB().Create(&contract).Error
+		contract := models.LoanContract{
+			ApplicationNo:     app.ApplicationNo,
+			MemberNo:          app.MemberNo,
+			ProductID:         app.ProductID,
+			ApprovedAmount:    *app.ApprovedAmount,
+			Tenor:             app.Tenor,
+			PrincipalPerMonth: app.PrincipalPerMonth,
+			InterestPerMonth:  app.InterestPerMonth,
+			AdminFee:          app.AdminFee,
+			TotalInstallment:  app.TotalInstallment,
+			TotalLoanCost:     app.TotalLoanCost,
+			ContractDate:      time.Now(),
+			Status:            "ACTIVE",
 		}
+		_ = u.appRepo.GetDB().Create(&contract).Error
 
 	case "REJECTED", "TOLAK":
 		app.Status = "REJECTED"
@@ -397,17 +391,11 @@ func (u *applicationUseCase) DisburseApplication(applicationNo int64, req Disbur
 
 	now := time.Now()
 
-	// 1. Fetch simulation record
-	var sim models.LoanSimulation
-	if err := u.appRepo.GetDB().Where("application_no = ?", applicationNo).First(&sim).Error; err != nil {
-		return fmt.Errorf("data simulasi pinjaman tidak ditemukan: %v", err)
-	}
-
 	principalAmt := app.RequestedAmount
 	if app.ApprovedAmount != nil && *app.ApprovedAmount > 0 {
 		principalAmt = *app.ApprovedAmount
 	}
-	adminFee := sim.AdminFee
+	adminFee := app.AdminFee
 	disbursementAmt := principalAmt - adminFee
 	if disbursementAmt < 0 {
 		disbursementAmt = principalAmt
@@ -438,8 +426,7 @@ func (u *applicationUseCase) DisburseApplication(applicationNo int64, req Disbur
 	}
 
 	dueDay := 25
-	var dueParam models.GlobalParameter
-	if err := u.appRepo.GetDB().Where("key_name = ?", "LOAN_DUEDATE").First(&dueParam).Error; err == nil && dueParam.KeyValue != "" {
+	if dueParam, err := u.paramRepo.FindByKey("LOAN_DUEDATE"); err == nil && dueParam.KeyValue != "" {
 		if d, errConv := strconv.Atoi(dueParam.KeyValue); errConv == nil && d >= 1 && d <= 28 {
 			dueDay = d
 		}
@@ -454,9 +441,9 @@ func (u *applicationUseCase) DisburseApplication(applicationNo int64, req Disbur
 			LoanNo:           loanNo,
 			Period:           periodStr,
 			InstallmentNo:    i,
-			Principal:        sim.PrincipalPerMonth,
-			Interest:         sim.InterestPerMonth,
-			TotalInstallment: sim.TotalInstallment,
+			Principal:        app.PrincipalPerMonth,
+			Interest:         app.InterestPerMonth,
+			TotalInstallment: app.TotalInstallment,
 			Status:           "UNPAID",
 			DueDate:          dueDate,
 		}

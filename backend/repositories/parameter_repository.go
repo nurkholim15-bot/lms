@@ -1,6 +1,9 @@
 package repositories
 
 import (
+	"strings"
+	"sync"
+
 	"lms-backend/models"
 
 	"gorm.io/gorm"
@@ -15,35 +18,92 @@ type ParameterRepository interface {
 }
 
 type parameterRepository struct {
-	db *gorm.DB
+	db       *gorm.DB
+	mu       sync.RWMutex
+	cache    []models.GlobalParameter
+	cacheMap map[string]models.GlobalParameter
+	isLoaded bool
 }
 
 func NewParameterRepository(db *gorm.DB) ParameterRepository {
-	return &parameterRepository{db}
+	repo := &parameterRepository{
+		db:       db,
+		cacheMap: make(map[string]models.GlobalParameter),
+	}
+	repo.refreshCache()
+	return repo
+}
+
+func (r *parameterRepository) refreshCache() {
+	var params []models.GlobalParameter
+	if err := r.db.Where("deleted_at IS NULL").Find(&params).Error; err == nil {
+		r.mu.Lock()
+		r.cache = params
+		r.cacheMap = make(map[string]models.GlobalParameter)
+		for _, p := range params {
+			r.cacheMap[strings.ToUpper(p.KeyName)] = p
+		}
+		r.isLoaded = true
+		r.mu.Unlock()
+	}
 }
 
 func (r *parameterRepository) FindAll() ([]models.GlobalParameter, error) {
-	var params []models.GlobalParameter
-	err := r.db.Where("deleted_at IS NULL").Find(&params).Error
-	return params, err
+	r.mu.RLock()
+	if r.isLoaded {
+		defer r.mu.RUnlock()
+		return r.cache, nil
+	}
+	r.mu.RUnlock()
+
+	r.refreshCache()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cache, nil
 }
 
 func (r *parameterRepository) FindByKey(keyName string) (models.GlobalParameter, error) {
-	var param models.GlobalParameter
-	err := r.db.Where("deleted_at IS NULL AND key_name = ?", keyName).First(&param).Error
-	return param, err
+	r.mu.RLock()
+	if r.isLoaded {
+		param, exists := r.cacheMap[strings.ToUpper(keyName)]
+		r.mu.RUnlock()
+		if exists {
+			return param, nil
+		}
+	} else {
+		r.mu.RUnlock()
+	}
+
+	r.refreshCache()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	param, exists := r.cacheMap[strings.ToUpper(keyName)]
+	if exists {
+		return param, nil
+	}
+	return models.GlobalParameter{}, gorm.ErrRecordNotFound
 }
 
 func (r *parameterRepository) Create(param *models.GlobalParameter) error {
-	return r.db.Create(param).Error
+	err := r.db.Create(param).Error
+	if err == nil {
+		r.refreshCache()
+	}
+	return err
 }
 
 func (r *parameterRepository) Update(param *models.GlobalParameter) error {
-	// Updates all fields for simplicity
-	return r.db.Save(param).Error
+	err := r.db.Save(param).Error
+	if err == nil {
+		r.refreshCache()
+	}
+	return err
 }
 
 func (r *parameterRepository) Delete(id int64) error {
-	// Soft delete logic for GORM, or simple update if manual
-	return r.db.Model(&models.GlobalParameter{}).Where("id = ?", id).Update("deleted_at", gorm.Expr("CURRENT_TIMESTAMP")).Error
+	err := r.db.Model(&models.GlobalParameter{}).Where("id = ?", id).Update("deleted_at", gorm.Expr("CURRENT_TIMESTAMP")).Error
+	if err == nil {
+		r.refreshCache()
+	}
+	return err
 }

@@ -17,33 +17,18 @@ type LoanApplication struct {
 	EligibilityResult string     `gorm:"column:eligibility_result"`
 	Status            string     `gorm:"column:status"`
 	ApprovalNotes     string     `gorm:"column:approval_notes"`
+	PrincipalPerMonth float64    `gorm:"column:principal_per_month"`
+	InterestPerMonth  float64    `gorm:"column:interest_per_month"`
+	AdminFee          float64    `gorm:"column:admin_fee"`
+	TotalInstallment  float64    `gorm:"column:total_installment"`
+	TotalLoanCost     float64    `gorm:"column:total_loan_cost"`
+	InterestRate      float64    `gorm:"column:interest_rate"`
+	CreditLimit       float64    `gorm:"column:credit_limit"`
 	BaseModel
 }
 
 func (LoanApplication) TableName() string {
 	return "lms_sch.loan_applications"
-}
-
-// LoanSimulation represents lms_sch.loan_simulations
-type LoanSimulation struct {
-	ID                int64   `gorm:"primaryKey;column:id"`
-	ApplicationNo     int64   `gorm:"column:application_no"`
-	MemberNo          int64   `gorm:"column:member_no;index"`
-	ProductID         int64   `gorm:"column:product_id"`
-	RequestedAmount   float64 `gorm:"column:requested_amount"`
-	Tenor             int     `gorm:"column:tenor"`
-	PrincipalPerMonth float64 `gorm:"column:principal_per_month"`
-	InterestPerMonth  float64 `gorm:"column:interest_per_month"`
-	AdminFee          float64 `gorm:"column:admin_fee"`
-	TotalInstallment  float64 `gorm:"column:total_installment"`
-	TotalLoanCost     float64 `gorm:"column:total_loan_cost"`
-	InterestRate      float64 `gorm:"column:interest_rate"`
-	CreditLimit       float64 `gorm:"column:credit_limit"`
-	BaseModel
-}
-
-func (LoanSimulation) TableName() string {
-	return "lms_sch.loan_simulations"
 }
 
 // LoanTracking represents lms_sch.loan_trackings

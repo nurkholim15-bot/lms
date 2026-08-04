@@ -69,10 +69,47 @@ function App() {
   const [manualYear, setManualYear] = useState('2026');
   const [memberSearchQuery, setMemberSearchQuery] = useState('');
   const [memberPage, setMemberPage] = useState(1);
+  const [paginatedMemberList, setPaginatedMemberList] = useState([]);
+  const [memberTotalRecords, setMemberTotalRecords] = useState(0);
+  const [memberTotalPages, setMemberTotalPages] = useState(1);
+  const [memberDropdownLoaded, setMemberDropdownLoaded] = useState(false);
+  const memberLoadingRef = useRef(false);
+
+  const fetchPaginatedMembers = async (q, page) => {
+    if (memberLoadingRef.current) return;
+    memberLoadingRef.current = true;
+    try {
+      const pageSize = parseInt(getParamVal('DEFAULT_PAGE_SIZE', '10')) || 10;
+      const res = await axios.get(`http://localhost:8086/api/members?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
+      setPaginatedMemberList(res.data.data || []);
+      setMemberTotalRecords(res.data.total_records || 0);
+      setMemberTotalPages(res.data.total_pages || 1);
+      setMemberDropdownLoaded(true);
+    } catch (err) {
+      console.error("Error fetching members:", err);
+    } finally {
+      memberLoadingRef.current = false;
+    }
+  };
+
+  const debouncedSearchRef = useRef(null);
+
+  const handleMemberSearchChange = (newQ) => {
+    setMemberSearchQuery(newQ);
+    setMemberPage(1);
+    if (debouncedSearchRef.current) {
+      clearTimeout(debouncedSearchRef.current);
+    }
+    debouncedSearchRef.current = setTimeout(() => {
+      fetchPaginatedMembers(newQ, 1);
+    }, 300);
+  };
   const [loanSearchQuery, setLoanSearchQuery] = useState('');
   const [loanPage, setLoanPage] = useState(1);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportCutoffDate, setExportCutoffDate] = useState('');
+  const [exportPeriodMonth, setExportPeriodMonth] = useState('08');
+  const [exportPeriodYear, setExportPeriodYear] = useState('2026');
   const [exportCustomFolder, setExportCustomFolder] = useState('');
   const [productModalOpen, setProductModalOpen] = useState(false);
   const [productSearchQuery, setProductSearchQuery] = useState('');
@@ -303,9 +340,19 @@ function App() {
     return `${day}-${month}-${year} ${hours}:${mins}:${secs}`;
   };
 
-  const fetchApplications = async () => {
+  const [approvalMonthFilter, setApprovalMonthFilter] = useState({ month: '08', year: '2026' });
+  const [disbursementMonthFilter, setDisbursementMonthFilter] = useState({ month: '08', year: '2026', status: 'ALL' });
+
+  const fetchApplications = async (targetYear, targetMonth) => {
     try {
-      const response = await axios.get('http://localhost:8086/api/applications');
+      const yr = targetYear || (activeTab === 'disbursement' ? disbursementMonthFilter.year : approvalMonthFilter.year) || '2026';
+      const mo = targetMonth || (activeTab === 'disbursement' ? disbursementMonthFilter.month : approvalMonthFilter.month) || '08';
+      const period = `${yr}${mo}`;
+      let url = `http://localhost:8086/api/applications?period=${period}`;
+      if (activeTab === 'disbursement') {
+        url += `&status=APPROVED,DISBURSED`;
+      }
+      const response = await axios.get(url);
       setApplications(response.data.data || []);
     } catch (error) {
       console.error("Error fetching applications:", error);
@@ -323,28 +370,36 @@ function App() {
         } else if (response.data.data) {
           setPayrollSchedules(response.data.data || []);
         }
+        if (response.data.adjustments) {
+          setAdjustmentsList(response.data.adjustments || []);
+        }
       }
     } catch (error) {
       console.error("Error fetching payroll schedules:", error);
     }
-    try {
-      const adjRes = await axios.get('http://localhost:8086/api/payroll/adjustments?period=2026-08');
-      if (adjRes.data && adjRes.data.adjustments) {
-        setAdjustmentsList(adjRes.data.adjustments || []);
-      }
-    } catch (e) {
-      console.error("Error fetching adjustments list:", e);
-    }
   };
 
+  // Fetch parameters and products once on initial mount
   useEffect(() => {
-    fetchApplications();
-    fetchPayrollSchedules();
     fetchParameters();
     fetchProducts();
-    axios.get('http://localhost:8086/api/members/all')
-      .then(res => setAllMembers(res.data.data || []))
-      .catch(err => console.error("Error fetching all members:", err));
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'approval' || activeTab === 'disbursement' || activeTab === 'pengajuan' || activeTab === 'dashboard') {
+      fetchApplications();
+    }
+
+    if (activeTab === 'payroll' || activeTab === 'payroll-reconciliation' || activeTab === 'manual-repayment') {
+      fetchPayrollSchedules();
+    }
+
+    if (activeTab === 'pengajuan' || activeTab === 'master' || activeTab === 'approval' || activeTab === 'disbursement') {
+      axios.get('http://localhost:8086/api/members/all')
+        .then(res => setAllMembers(res.data.data || []))
+        .catch(err => console.error("Error fetching all members:", err));
+    }
+
     if (activeTab === 'manual-repayment') {
       axios.get('http://localhost:8086/api/payroll/deductions')
         .then(res => setManualLogs(res.data.data || []))
@@ -1621,11 +1676,17 @@ function App() {
     <div className="app-container">
       {/* Sidebar */}
       <aside className={`sidebar ${isSidebarCollapsed ? 'collapsed' : ''}`}>
-        <div className="sidebar-header">
-          <div style={{ width: '32px', height: '32px', background: 'var(--secondary-blue)', borderRadius: '8px', flexShrink: 0 }}></div>
+        <div className="sidebar-header" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '16px 20px' }}>
+          <img 
+            src="/kopkara.jfif" 
+            alt="Kopkara Logo" 
+            style={{ width: '36px', height: '36px', borderRadius: '6px', objectFit: 'contain', flexShrink: 0, background: '#ffffff', padding: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} 
+          />
           {!isSidebarCollapsed && (
             <span style={{ display: 'flex', flexDirection: 'column' }}>
-              <span>Kopkara LMS</span>
+              <span style={{ fontWeight: 'bold', fontSize: '1rem', color: '#ffffff' }}>
+                {getParamVal('LMS_Title', 'Kopkara LMS')}
+              </span>
               <span style={{ fontSize: '0.75rem', fontWeight: 'normal', color: '#94a3b8', textTransform: 'capitalize' }}>
                 Mode: {realRoleName}
               </span>
@@ -1853,11 +1914,21 @@ function App() {
                 <div>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Nominal Pinjaman (Rp)</label>
                   <input 
-                    type="number" required min="100000"
-                    value={form.requested_amount}
-                    onChange={e => setForm({...form, requested_amount: e.target.value})}
-                    style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)' }}
+                    type="text" 
+                    required 
+                    placeholder="Contoh: 300.000"
+                    value={form.requested_amount ? Number(form.requested_amount).toLocaleString('id-ID') : ''}
+                    onChange={e => {
+                      const rawVal = e.target.value.replace(/\D/g, '');
+                      setForm({...form, requested_amount: rawVal});
+                    }}
+                    style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)', fontWeight: 600, fontSize: '0.95rem' }}
                   />
+                  {form.requested_amount && (
+                    <span style={{ fontSize: '0.75rem', color: '#0284c7', display: 'block', marginTop: '4px' }}>
+                      Nominal Terbaca: <strong>Rp {Number(form.requested_amount).toLocaleString('id-ID')}</strong>
+                    </span>
+                  )}
                 </div>
                 <div>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Tenor (Bulan)</label>
@@ -2089,65 +2160,142 @@ function App() {
           )}
 
           {activeTab === 'disbursement' && (
-            <div className="table-container">
-              <div className="table-header">Pencairan Dana Pinjaman (Disbursement Treasury)</div>
-              <table>
-                <thead>
-                  <tr>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>No. Pengajuan</th>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tanggal Approved</th>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Pemohon</th>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Nominal Plafon</th>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tenor</th>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Status</th>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem', textAlign: 'center' }}>Aksi Pencairan</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {applications.filter(a => a.Status === 'APPROVED' || a.Status === 'DISBURSED').length === 0 ? (
-                    <tr><td colSpan="7" style={{ textAlign: 'center', padding: '20px' }}>Belum ada pengajuan berstatus APPROVED / DISBURSED</td></tr>
-                  ) : (
-                    applications.filter(a => a.Status === 'APPROVED' || a.Status === 'DISBURSED').map(app => (
-                      <tr key={app.ApplicationNo} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}><strong>{app.ApplicationNo}</strong></td>
-                        <td style={{ padding: '6px 10px', fontSize: '0.85rem', color: '#64748B' }}>{formatDate(app.ApprovedAt || app.SubmissionDate)}</td>
-                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Member #{app.MemberNo}</td>
-                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}><strong>Rp {(app.ApprovedAmount || app.RequestedAmount).toLocaleString('id-ID')}</strong></td>
-                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>{app.Tenor} Bulan</td>
-                        <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>
-                          <span className={getStatusBadge(app.Status)}>
-                            {app.Status === 'DISBURSED' ? 'DICAIRKAN' : 'SETUJU (APPROVED)'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '6px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
-                            <button 
-                              onClick={() => handlePrintContract(app)}
-                              style={{ padding: '4px 10px', background: '#0f172a', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}
-                            >
-                              📄 Cetak Kontrak
-                            </button>
-                            {app.Status === 'APPROVED' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* Header Box Verifikasi Pencairan Dana & Filter Partisi (Matching Screenshot #2) */}
+              <div style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+                <h3 style={{ fontSize: '1.1rem', color: '#1e293b', margin: '0 0 4px 0', fontWeight: 'bold' }}>Verifikasi Pencairan Dana</h3>
+                <div style={{ fontSize: '0.8rem', color: '#2563eb', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>🗄️ LMS System -</span>
+                  <span style={{ fontWeight: 600 }}>Querying on: loan_applications_{disbursementMonthFilter.year}{disbursementMonthFilter.month}</span>
+                </div>
+
+                <div style={{ background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '10px', padding: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#475569', marginBottom: '4px', textTransform: 'uppercase' }}>BULAN</label>
+                      <select 
+                        value={disbursementMonthFilter.month} 
+                        onChange={e => setDisbursementMonthFilter({...disbursementMonthFilter, month: e.target.value})}
+                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', fontSize: '0.9rem', minWidth: '120px' }}
+                      >
+                        <option value="01">Januari</option>
+                        <option value="02">Februari</option>
+                        <option value="03">Maret</option>
+                        <option value="04">April</option>
+                        <option value="05">Mei</option>
+                        <option value="06">Juni</option>
+                        <option value="07">Juli</option>
+                        <option value="08">Agustus</option>
+                        <option value="09">September</option>
+                        <option value="10">Oktober</option>
+                        <option value="11">November</option>
+                        <option value="12">Desember</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#475569', marginBottom: '4px', textTransform: 'uppercase' }}>TAHUN</label>
+                      <select 
+                        value={disbursementMonthFilter.year} 
+                        onChange={e => setDisbursementMonthFilter({...disbursementMonthFilter, year: e.target.value})}
+                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', fontSize: '0.9rem', minWidth: '100px' }}
+                      >
+                        <option value="2024">2024</option>
+                        <option value="2025">2025</option>
+                        <option value="2026">2026</option>
+                        <option value="2027">2027</option>
+                        <option value="2028">2028</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#475569', marginBottom: '4px', textTransform: 'uppercase' }}>STATUS AKTIF</label>
+                      <div style={{ padding: '6px 16px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', color: '#2563eb', fontWeight: 'bold', fontSize: '0.85rem' }}>
+                        APPROVED
+                      </div>
+                    </div>
+                  </div>
+
+                  <button 
+                    type="button"
+                    onClick={() => fetchApplications(disbursementMonthFilter.year, disbursementMonthFilter.month)}
+                    style={{ background: '#10b981', color: '#ffffff', border: 'none', borderRadius: '8px', padding: '8px 24px', fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 2px 4px rgba(16,185,129,0.2)' }}
+                  >
+                    <span>🔍</span> Filter
+                  </button>
+                </div>
+              </div>
+
+              <div className="table-container">
+                <div className="table-header">Pencairan Dana Pinjaman (Disbursement Treasury)</div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>No. Pengajuan</th>
+                      <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tanggal Approved</th>
+                      <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Pemohon</th>
+                      <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Nominal Plafon</th>
+                      <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tenor</th>
+                      <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Status</th>
+                      <th style={{ padding: '6px 10px', fontSize: '0.85rem', textAlign: 'center' }}>Aksi Pencairan</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(() => {
+                      const filteredApps = applications.filter(a => a.Status === 'APPROVED' || a.Status === 'DISBURSED');
+
+                      if (filteredApps.length === 0) {
+                        return (
+                          <tr>
+                            <td colSpan="7" style={{ textAlign: 'center', padding: '24px', background: '#ffffff', color: '#64748b', fontWeight: 500, fontSize: '0.95rem' }}>
+                              Data tidak ditemukan
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      return filteredApps.map(app => (
+                        <tr key={app.ApplicationNo} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                          <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}><strong>{app.ApplicationNo}</strong></td>
+                          <td style={{ padding: '6px 10px', fontSize: '0.85rem', color: '#64748B' }}>{formatDate(app.ApprovedAt || app.SubmissionDate)}</td>
+                          <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Member #{app.MemberNo}</td>
+                          <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}><strong>Rp {(app.ApprovedAmount || app.RequestedAmount).toLocaleString('id-ID')}</strong></td>
+                          <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>{app.Tenor} Bulan</td>
+                          <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>
+                            <span className={getStatusBadge(app.Status)}>
+                              {app.Status === 'DISBURSED' ? 'DICAIRKAN' : 'SETUJU (APPROVED)'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '6px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                               <button 
-                                onClick={() => handleDisburse(app)}
-                                style={{ padding: '4px 10px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}
+                                onClick={() => handlePrintContract(app)}
+                                style={{ padding: '4px 10px', background: '#0f172a', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}
                               >
-                                💵 Cairkan Dana
+                                📄 Cetak Kontrak
                               </button>
-                            )}
-                            <button 
-                              onClick={() => handleOpenTracking(app.ApplicationNo)}
-                              style={{ padding: '4px 10px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}
-                            >
-                              📜 Track
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                              {app.Status === 'APPROVED' && (
+                                <button 
+                                  onClick={() => handleDisburse(app)}
+                                  style={{ padding: '4px 10px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}
+                                >
+                                  💵 Cairkan Dana
+                                </button>
+                              )}
+                              <button 
+                                onClick={() => handleOpenTracking(app.ApplicationNo)}
+                                style={{ padding: '4px 10px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}
+                              >
+                                📜 Track
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ));
+                    })()}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
 
@@ -2167,41 +2315,93 @@ function App() {
                     <form onSubmit={async (e) => {
                       e.preventDefault();
                       try {
+                        const scanMode = getParamVal('SCAN_DUEDATE_BILLING', 'PERIOD').toUpperCase();
+                        const effectiveCutoffDate = scanMode === 'DUEDATE' ? exportCutoffDate : `${exportPeriodYear}-${exportPeriodMonth}-31`;
                         const res = await axios.post('http://localhost:8086/api/payroll/export', {
                           custom_folder: exportCustomFolder,
-                          cutoff_date: exportCutoffDate
+                          cutoff_date: effectiveCutoffDate
                         });
                         const csvContent = "data:text/csv;charset=utf-8," + (res.data.csv_content || "");
                         const encodedUri = encodeURI(csvContent);
                         const link = document.createElement("a");
                         link.setAttribute("href", encodedUri);
-                        link.setAttribute("download", res.data.file_name || `ADIRA_PAYROLL_KOPKARA_OUTGOING_${exportCutoffDate.replace(/-/g, '')}.csv`);
+                        link.setAttribute("download", res.data.file_name || `ADIRA_PAYROLL_KOPKARA_OUTGOING_${effectiveCutoffDate.replace(/-/g, '')}.csv`);
                         document.body.appendChild(link);
                         link.click();
                         document.body.removeChild(link);
 
                         setExportModalOpen(false);
-                        alert(`✅ File CSV Tagihan Payroll HRD Adira BERHASIL digenerate!\n\n📁 Folder Simpan: ${res.data.file_path || exportCustomFolder}\n📅 Cut-Off Jatuh Tempo: s/d ${exportCutoffDate}\n📊 Total ${res.data.total_rows || 0} tagihan karyawan diproses.`);
+                        const labelInfo = scanMode === 'DUEDATE' ? `Cut-Off Tanggal: s/d ${effectiveCutoffDate}` : `Cut-Off Periode: s/d ${exportPeriodYear}-${exportPeriodMonth}`;
+                        alert(`✅ File CSV Tagihan Payroll HRD Adira BERHASIL digenerate!\n\n📁 Folder Simpan: ${res.data.file_path || exportCustomFolder}\n📅 ${labelInfo}\n📊 Total ${res.data.total_rows || 0} tagihan karyawan diproses.`);
                       } catch (err) {
                         alert("❌ Gagal mengeksport file payroll: " + (err.response?.data?.error || err.message));
                       }
                     }} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                       
-                      <div style={{ background: '#eff6ff', padding: '12px', borderRadius: '6px', border: '1px solid #bfdbfe' }}>
-                        <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '6px', color: '#1e40af' }}>
-                          📅 Batas Tanggal Jatuh Tempo (Cut-Off Due Date) *
-                        </label>
-                        <input 
-                          type="date"
-                          value={exportCutoffDate}
-                          onChange={(e) => setExportCutoffDate(e.target.value)}
-                          required
-                          style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #93c5fd', fontSize: '0.9rem' }}
-                        />
-                        <div style={{ fontSize: '0.75rem', color: '#1e3a8a', marginTop: '6px', lineHeight: 1.4 }}>
-                          💡 <strong>Ketentuan Cut-off:</strong> Default otomatis diset ke <strong>akhir bulan berjalan</strong> ({exportCutoffDate}). Sistem hanya mengeksport tagihan jatuh tempo <strong>s/d tanggal ini</strong> yang berstatus <strong>UNPAID / PARTIAL</strong>. Tagihan bulan-bulan berikutnya (seperti September 2026 dst) <strong>TIDAK AKAN DIEKSPORT</strong>.
+                      {getParamVal('SCAN_DUEDATE_BILLING', 'PERIOD').toUpperCase() === 'DUEDATE' ? (
+                        <div style={{ background: '#eff6ff', padding: '12px', borderRadius: '6px', border: '1px solid #bfdbfe' }}>
+                          <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '6px', color: '#1e40af' }}>
+                            📅 Batas Tanggal Jatuh Tempo (Cut-Off Due Date) *
+                          </label>
+                          <input 
+                            type="date"
+                            value={exportCutoffDate}
+                            onChange={(e) => setExportCutoffDate(e.target.value)}
+                            required
+                            style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #93c5fd', fontSize: '0.9rem' }}
+                          />
+                          <div style={{ fontSize: '0.75rem', color: '#1e3a8a', marginTop: '6px', lineHeight: 1.4 }}>
+                            💡 <strong>Ketentuan Cut-off:</strong> Default otomatis diset ke <strong>akhir bulan berjalan</strong> ({exportCutoffDate}). Sistem hanya mengeksport tagihan jatuh tempo <strong>s/d tanggal ini</strong> yang berstatus <strong>UNPAID / PARTIAL</strong>. Tagihan bulan-bulan berikutnya <strong>TIDAK AKAN DIEKSPORT</strong>.
+                          </div>
                         </div>
-                      </div>
+                      ) : (
+                        <div style={{ background: '#eff6ff', padding: '12px', borderRadius: '6px', border: '1px solid #bfdbfe' }}>
+                          <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '6px', color: '#1e40af' }}>
+                            📅 Periode Cut-Off Tagihan (Bulan & Tahun) *
+                          </label>
+                          <div style={{ display: 'flex', gap: '12px', marginBottom: '8px' }}>
+                            <div style={{ flex: 1 }}>
+                              <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: '#1e40af', marginBottom: '2px' }}>BULAN</label>
+                              <select
+                                value={exportPeriodMonth}
+                                onChange={(e) => setExportPeriodMonth(e.target.value)}
+                                style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #93c5fd', background: '#ffffff', fontSize: '0.9rem', fontWeight: 600 }}
+                              >
+                                <option value="01">Januari</option>
+                                <option value="02">Februari</option>
+                                <option value="03">Maret</option>
+                                <option value="04">April</option>
+                                <option value="05">Mei</option>
+                                <option value="06">Juni</option>
+                                <option value="07">Juli</option>
+                                <option value="08">Agustus</option>
+                                <option value="09">September</option>
+                                <option value="10">Oktober</option>
+                                <option value="11">November</option>
+                                <option value="12">Desember</option>
+                              </select>
+                            </div>
+
+                            <div style={{ flex: 1 }}>
+                              <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: '#1e40af', marginBottom: '2px' }}>TAHUN</label>
+                              <select
+                                value={exportPeriodYear}
+                                onChange={(e) => setExportPeriodYear(e.target.value)}
+                                style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #93c5fd', background: '#ffffff', fontSize: '0.9rem', fontWeight: 600 }}
+                              >
+                                <option value="2024">2024</option>
+                                <option value="2025">2025</option>
+                                <option value="2026">2026</option>
+                                <option value="2027">2027</option>
+                                <option value="2028">2028</option>
+                              </select>
+                            </div>
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: '#1e3a8a', marginTop: '6px', lineHeight: 1.4 }}>
+                            💡 <strong>Ketentuan Cut-off Periode:</strong> Sistem akan mengeksport tagihan <strong>s/d periode {exportPeriodYear}-{exportPeriodMonth}</strong> yang berstatus <strong>UNPAID / PARTIAL</strong>. Tagihan periode berikutnya <strong>TIDAK AKAN DIEKSPORT</strong>.
+                          </div>
+                        </div>
+                      )}
 
                       <div>
                         <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px', color: '#0f172a' }}>
@@ -2227,9 +2427,75 @@ function App() {
             
 
           {activeTab === 'approval' && (
-            <div className="table-container">
-              <div className="table-header">Approval Pengajuan Pinjaman (HRD / Approval)</div>
-              <table>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* Filter Bar Verifikasi Administratif Matching Screenshot #2 */}
+              <div style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+                <h3 style={{ fontSize: '1.1rem', color: '#1e293b', margin: '0 0 4px 0', fontWeight: 'bold' }}>Verifikasi Administratif</h3>
+                <div style={{ fontSize: '0.8rem', color: '#2563eb', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>🗄️ LMS System -</span>
+                  <span style={{ fontWeight: 600 }}>Querying on: loan_applications_{approvalMonthFilter.year}{approvalMonthFilter.month}</span>
+                </div>
+
+                <div style={{ background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '10px', padding: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#475569', marginBottom: '4px', textTransform: 'uppercase' }}>BULAN</label>
+                      <select 
+                        value={approvalMonthFilter.month} 
+                        onChange={e => setApprovalMonthFilter({...approvalMonthFilter, month: e.target.value})}
+                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', fontSize: '0.9rem', minWidth: '120px' }}
+                      >
+                        <option value="01">Januari</option>
+                        <option value="02">Februari</option>
+                        <option value="03">Maret</option>
+                        <option value="04">April</option>
+                        <option value="05">Mei</option>
+                        <option value="06">Juni</option>
+                        <option value="07">Juli</option>
+                        <option value="08">Agustus</option>
+                        <option value="09">September</option>
+                        <option value="10">Oktober</option>
+                        <option value="11">November</option>
+                        <option value="12">Desember</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#475569', marginBottom: '4px', textTransform: 'uppercase' }}>TAHUN</label>
+                      <select 
+                        value={approvalMonthFilter.year} 
+                        onChange={e => setApprovalMonthFilter({...approvalMonthFilter, year: e.target.value})}
+                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', fontSize: '0.9rem', minWidth: '100px' }}
+                      >
+                        <option value="2024">2024</option>
+                        <option value="2025">2025</option>
+                        <option value="2026">2026</option>
+                        <option value="2027">2027</option>
+                        <option value="2028">2028</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#475569', marginBottom: '4px', textTransform: 'uppercase' }}>STATUS AKTIF</label>
+                      <div style={{ padding: '6px 16px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', color: '#2563eb', fontWeight: 'bold', fontSize: '0.85rem' }}>
+                        REGISTERED
+                      </div>
+                    </div>
+                  </div>
+
+                  <button 
+                    type="button"
+                    onClick={() => fetchApplications(approvalMonthFilter.year, approvalMonthFilter.month)}
+                    style={{ background: '#10b981', color: '#ffffff', border: 'none', borderRadius: '8px', padding: '8px 24px', fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 2px 4px rgba(16,185,129,0.2)' }}
+                  >
+                    <span>🔍</span> Filter
+                  </button>
+                </div>
+              </div>
+
+              <div className="table-container">
+                <div className="table-header">Approval Pengajuan Pinjaman (HRD / Approval)</div>
+                <table>
                 <thead>
                   <tr>
                     <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>No. Pengajuan</th>
@@ -2335,7 +2601,8 @@ function App() {
                 </tbody>
               </table>
             </div>
-          )}
+          </div>
+        )}
 
           {activeTab.startsWith('master-') && (
             <div className="card" style={{ maxWidth: '1200px' }}>
@@ -2706,7 +2973,7 @@ function App() {
                   }
                 }} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                   
-                  {/* Dropdown 1: Input Search & Select Anggota (1-Line Horizontal Layout, Data from Members/Employees Table) */}
+                  {/* Dropdown 1: Input Search & Select Anggota (On-demand backend fetch & pagination) */}
                   <div style={{ background: '#ffffff', padding: '12px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
                     <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '6px', color: '#0f172a' }}>
                       1. Pilih Anggota / Karyawan *
@@ -2715,15 +2982,17 @@ function App() {
                       <input 
                         type="text"
                         value={memberSearchQuery}
-                        onChange={(e) => {
-                          setMemberSearchQuery(e.target.value);
-                          setMemberPage(1);
-                        }}
+                        onChange={(e) => handleMemberSearchChange(e.target.value)}
                         placeholder="🔍 Cari member_no / name / ID..."
                         style={{ width: '100%', padding: '8px 10px', borderRadius: '4px', border: '1px solid #94a3b8', fontSize: '0.85rem' }}
                       />
                       <select 
                         value={selectedMemberFilter}
+                        onFocus={() => {
+                          if (!memberDropdownLoaded) {
+                            fetchPaginatedMembers(memberSearchQuery, memberPage);
+                          }
+                        }}
                         onChange={(e) => {
                           const mNo = e.target.value;
                           setSelectedMemberFilter(mNo);
@@ -2747,8 +3016,8 @@ function App() {
                         }}
                         style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
                       >
-                        <option value="">-- Semua Anggota ({filteredMembers.length} Ditemukan) --</option>
-                        {paginatedMembers.map(m => (
+                        <option value="">-- Semua Anggota ({memberTotalRecords} Ditemukan) --</option>
+                        {paginatedMemberList.map(m => (
                           <option key={m.member_no} value={m.member_no}>
                             {m.member_no} - {m.name}
                           </option>
@@ -2758,21 +3027,29 @@ function App() {
                     
                     {/* Pagination Controls Anggota */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', fontSize: '0.75rem', color: '#475569' }}>
-                      <span>Hal {memberPage} dari {totalMemberPages} ({filteredMembers.length} Anggota)</span>
+                      <span>Hal {memberPage} dari {memberTotalPages} ({memberTotalRecords} Members)</span>
                       <div style={{ display: 'flex', gap: '4px' }}>
                         <button 
                           type="button"
-                          disabled={memberPage === 1}
-                          onClick={() => setMemberPage(prev => Math.max(prev - 1, 1))}
-                          style={{ padding: '2px 8px', fontSize: '0.75rem', background: memberPage === 1 ? '#e2e8f0' : '#0369a1', color: memberPage === 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '3px', cursor: memberPage === 1 ? 'not-allowed' : 'pointer' }}
+                          disabled={memberPage <= 1}
+                          onClick={() => {
+                            const newP = Math.max(memberPage - 1, 1);
+                            setMemberPage(newP);
+                            fetchPaginatedMembers(memberSearchQuery, newP);
+                          }}
+                          style={{ padding: '2px 8px', fontSize: '0.75rem', background: memberPage <= 1 ? '#e2e8f0' : '#0369a1', color: memberPage <= 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '3px', cursor: memberPage <= 1 ? 'not-allowed' : 'pointer' }}
                         >
                           ◀ Prev
                         </button>
                         <button 
                           type="button"
-                          disabled={memberPage >= totalMemberPages}
-                          onClick={() => setMemberPage(prev => Math.min(prev + 1, totalMemberPages))}
-                          style={{ padding: '2px 8px', fontSize: '0.75rem', background: memberPage >= totalMemberPages ? '#e2e8f0' : '#0369a1', color: memberPage >= totalMemberPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '3px', cursor: memberPage >= totalMemberPages ? 'not-allowed' : 'pointer' }}
+                          disabled={memberPage >= memberTotalPages}
+                          onClick={() => {
+                            const newP = memberPage + 1;
+                            setMemberPage(newP);
+                            fetchPaginatedMembers(memberSearchQuery, newP);
+                          }}
+                          style={{ padding: '2px 8px', fontSize: '0.75rem', background: memberPage >= memberTotalPages ? '#e2e8f0' : '#0369a1', color: memberPage >= memberTotalPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '3px', cursor: memberPage >= memberTotalPages ? 'not-allowed' : 'pointer' }}
                         >
                           Next ▶
                         </button>

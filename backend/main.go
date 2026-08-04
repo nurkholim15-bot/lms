@@ -65,6 +65,11 @@ func main() {
 	productUseCase := usecases.NewProductUseCase(productRepo)
 	productHandler := handlers.NewProductHandler(productUseCase)
 
+	// Load product cache saat backend startup
+	if err := productRepo.WarmCache(); err != nil {
+		log.Printf("[PRODUCT-CACHE] WARNING: Gagal load cache produk saat startup: %v", err)
+	}
+
 	paramRepo := repositories.NewParameterRepository(config.DB)
 	paramUseCase := usecases.NewParameterUseCase(paramRepo)
 	paramHandler := handlers.NewParameterHandler(paramUseCase)
@@ -233,6 +238,87 @@ func main() {
 			parameters.POST("", paramHandler.Save)
 		}
 
+		// Paginated & Filtered Members Search Endpoint for Manual Repayment & Dropdowns
+		api.GET("/members", func(c *gin.Context) {
+			type MemberDTO struct {
+				MemberNo   int64  `json:"member_no"`
+				EmployeeID int64  `json:"employee_id"`
+				Name       string `json:"name"`
+				TotalCount int64  `json:"-" gorm:"column:total_count"`
+			}
+			q := strings.TrimSpace(c.Query("q"))
+			if q == "" {
+				q = strings.TrimSpace(c.Query("query"))
+			}
+
+			page, _ := strconv.Atoi(c.Query("page"))
+			if page <= 0 {
+				page = 1
+			}
+
+			limit, _ := strconv.Atoi(c.Query("limit"))
+			if limit <= 0 {
+				limit = 10
+			}
+
+			offset := (page - 1) * limit
+
+			var dtos []MemberDTO
+
+			whereClause := ""
+			var args []interface{}
+			if q != "" {
+				likeStr := "%" + strings.ToLower(q) + "%"
+				whereClause = "WHERE LOWER(CAST(m.member_no AS VARCHAR)) LIKE ? OR LOWER(CAST(COALESCE(e.employee_id, m.employee_id) AS VARCHAR)) LIKE ? OR LOWER(COALESCE(e.name, m.bank_account_name, CONCAT('Anggota #', m.member_no))) LIKE ?"
+				args = append(args, likeStr, likeStr, likeStr)
+			}
+
+			dataQuery := fmt.Sprintf(`
+				SELECT 
+					m.member_no,
+					COALESCE(e.employee_id, m.employee_id) AS employee_id,
+					COALESCE(e.name, m.bank_account_name, CONCAT('Anggota #', m.member_no)) AS name,
+					COUNT(*) OVER() AS total_count
+				FROM lms_sch.members m
+				LEFT JOIN lms_sch.employees e ON m.employee_id = e.employee_id OR m.member_no = e.employee_id
+				%s
+				ORDER BY m.member_no ASC
+				LIMIT ? OFFSET ?
+			`, whereClause)
+
+			dataArgs := append(args, limit, offset)
+			if err := config.DB.Raw(dataQuery, dataArgs...).Scan(&dtos).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+
+			var totalRecords int64 = 0
+			if len(dtos) > 0 {
+				totalRecords = dtos[0].TotalCount
+			} else if page > 1 {
+				countQuery := fmt.Sprintf(`
+					SELECT COUNT(*)
+					FROM lms_sch.members m
+					LEFT JOIN lms_sch.employees e ON m.employee_id = e.employee_id OR m.member_no = e.employee_id
+					%s
+				`, whereClause)
+				config.DB.Raw(countQuery, args...).Scan(&totalRecords)
+			}
+
+			totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+			if totalPages < 1 {
+				totalPages = 1
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"data":          dtos,
+				"page":          page,
+				"limit":         limit,
+				"total_records": totalRecords,
+				"total_pages":   totalPages,
+			})
+		})
+
 		// Get All Members Endpoint for Manual Repayment Dropdown
 		api.GET("/members/all", func(c *gin.Context) {
 			type MemberDTO struct {
@@ -370,11 +456,11 @@ func main() {
 			}
 			config.DB.Raw(`
 				SELECT pa.id, pa.period, pa.loan_no, pa.ref_no, pa.adjustment_type, pa.original_amount, pa.deducted_amount, pa.adjusted_amount, pa.notes, pa.created_at, pa.created_user,
-				       COALESCE(e.name, CONCAT('Member #', substring(pa.ref_no from '[0-9]+$'))) as employee_name,
-				       COALESCE(CAST(l.member_no AS VARCHAR), substring(pa.ref_no from '[0-9]+$')) as member_no
+				       COALESCE(e.name, CONCAT('Member #', CAST(pa.ref_no AS VARCHAR))) as employee_name,
+				       COALESCE(CAST(l.member_no AS VARCHAR), CAST(pa.ref_no AS VARCHAR)) as member_no
 				FROM lms_sch.payroll_adjustments pa
 				LEFT JOIN lms_sch.loans l ON pa.loan_no = l.loan_no AND pa.loan_no > 0
-				LEFT JOIN lms_sch.employees e ON (CAST(l.member_no AS VARCHAR) = e.employee_id OR CAST(e.employee_id AS VARCHAR) = substring(pa.ref_no from '[0-9]+$'))
+				LEFT JOIN lms_sch.employees e ON (CAST(l.member_no AS VARCHAR) = CAST(e.employee_id AS VARCHAR) OR CAST(e.employee_id AS VARCHAR) = CAST(pa.ref_no AS VARCHAR))
 				WHERE pa.period = ?
 				ORDER BY pa.created_at DESC
 			`, searchPeriod).Scan(&adjList)
@@ -430,8 +516,19 @@ func main() {
 				NoReferensi     string  `gorm:"column:no_referensi"`
 			}
 
+			// 1. Fetch SCAN_DUEDATE_BILLING parameter (default: PERIOD)
+			var scanMode string
+			config.DB.Raw("SELECT key_value FROM lms_sch.global_parameters WHERE key_name = 'SCAN_DUEDATE_BILLING' AND deleted_at IS NULL LIMIT 1").Scan(&scanMode)
+			scanMode = strings.ToUpper(strings.TrimSpace(scanMode))
+			if scanMode == "" {
+				scanMode = "PERIOD"
+			}
+
 			var rows []RowDTO
-			query := `
+			var query string
+			var queryArgs []interface{}
+
+			baseQuery := `
 				SELECT 
 					COALESCE(m.bank_account_no, CAST(l.member_no AS VARCHAR)) AS nik_adira,
 					l.member_no AS employee_id,
@@ -449,10 +546,20 @@ func main() {
 				LEFT JOIN lms_sch.employees e ON e.employee_id = l.member_no OR e.employee_id = m.employee_id
 				WHERE ls.status IN ('UNPAID', 'PARTIAL') 
 				  AND (l.status = 'ACTIVE' OR l.status IS NULL)
-				  AND (ls.due_date <= CAST(? AS DATE) OR ls.period <= ?)
-				ORDER BY ls.due_date ASC, ls.id ASC;
 			`
-			if err := config.DB.Raw(query, cutoffDate, cutoffPeriod).Scan(&rows).Error; err != nil {
+
+			if scanMode == "PERIOD" {
+				query = baseQuery + "\n  AND ls.period <= ?\nORDER BY ls.due_date ASC, ls.id ASC;"
+				queryArgs = []interface{}{cutoffPeriod}
+			} else if scanMode == "DUEDATE" {
+				query = baseQuery + "\n  AND ls.due_date <= CAST(? AS DATE)\nORDER BY ls.due_date ASC, ls.id ASC;"
+				queryArgs = []interface{}{cutoffDate}
+			} else {
+				query = baseQuery + "\n  AND (ls.due_date <= CAST(? AS DATE) OR ls.period <= ?)\nORDER BY ls.due_date ASC, ls.id ASC;"
+				queryArgs = []interface{}{cutoffDate, cutoffPeriod}
+			}
+
+			if err := config.DB.Raw(query, queryArgs...).Scan(&rows).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Database query failed: " + err.Error()})
 				return
 			}
@@ -731,21 +838,23 @@ func main() {
 							WHERE id = ?
 						`, newAmountPaid, newRemaining, newStatus, updaterName, s.ID)
 
+						// Update loans: kurangi outstanding + set CLOSED dalam 1 query jika semua schedule sudah PAID
 						config.DB.Exec(`
 							UPDATE lms_sch.loans
-							SET outstanding_amount = GREATEST(0, outstanding_amount - ?), updated_at = NOW(), updated_user = ?
+							SET outstanding_amount = GREATEST(0, outstanding_amount - ?),
+							    status = CASE
+							        WHEN (SELECT COUNT(*) FROM lms_sch.loan_schedules WHERE loan_no = ? AND status != 'PAID') = 0
+							        THEN 'CLOSED'
+							        ELSE status
+							    END,
+							    updated_at = NOW(), updated_user = ?
 							WHERE loan_no = ?
-						`, payThis, updaterName, s.LoanNo)
+						`, payThis, s.LoanNo, updaterName, s.LoanNo)
 
-						var unpaidCount int64
-						config.DB.Raw("SELECT COUNT(*) FROM lms_sch.loan_schedules WHERE loan_no = ? AND status != 'PAID'", s.LoanNo).Scan(&unpaidCount)
-						if unpaidCount == 0 {
-							config.DB.Exec(`
-								UPDATE lms_sch.loans
-								SET status = 'CLOSED', updated_at = NOW(), updated_user = ?
-								WHERE loan_no = ?
-							`, updaterName, s.LoanNo)
-
+						// Cek apakah loan baru saja di-CLOSE untuk update loan_application
+						var loanStatus string
+						config.DB.Raw("SELECT status FROM lms_sch.loans WHERE loan_no = ?", s.LoanNo).Scan(&loanStatus)
+						if loanStatus == "CLOSED" {
 							config.DB.Exec(`
 								UPDATE lms_sch.loan_applications
 								SET status = 'CLOSED', updated_at = NOW(), updated_user = ?
@@ -833,23 +942,23 @@ func main() {
 							WHERE id = ?
 						`, newAmountPaid, newRemaining, newStatus, updaterName, s.ID)
 
-						// 2. Update loans outstanding_amount
+						// 2. Update loans: kurangi outstanding + set CLOSED dalam 1 query jika semua schedule sudah PAID
 						config.DB.Exec(`
 							UPDATE lms_sch.loans
-							SET outstanding_amount = GREATEST(0, outstanding_amount - ?), updated_at = NOW(), updated_user = ?
+							SET outstanding_amount = GREATEST(0, outstanding_amount - ?),
+							    status = CASE
+							        WHEN (SELECT COUNT(*) FROM lms_sch.loan_schedules WHERE loan_no = ? AND status != 'PAID') = 0
+							        THEN 'CLOSED'
+							        ELSE status
+							    END,
+							    updated_at = NOW(), updated_user = ?
 							WHERE loan_no = ?
-						`, payThis, updaterName, s.LoanNo)
+						`, payThis, s.LoanNo, updaterName, s.LoanNo)
 
-						// 3. Check if all schedules for loan are PAID -> CLOSE loan and loan_application
-						var unpaidCount int64
-						config.DB.Raw("SELECT COUNT(*) FROM lms_sch.loan_schedules WHERE loan_no = ? AND status != 'PAID'", s.LoanNo).Scan(&unpaidCount)
-						if unpaidCount == 0 {
-							config.DB.Exec(`
-								UPDATE lms_sch.loans
-								SET status = 'CLOSED', updated_at = NOW(), updated_user = ?
-								WHERE loan_no = ?
-							`, updaterName, s.LoanNo)
-
+						// 3. Cek apakah loan baru saja di-CLOSE untuk update loan_application
+						var loanStatusWF string
+						config.DB.Raw("SELECT status FROM lms_sch.loans WHERE loan_no = ?", s.LoanNo).Scan(&loanStatusWF)
+						if loanStatusWF == "CLOSED" {
 							config.DB.Exec(`
 								UPDATE lms_sch.loan_applications
 								SET status = 'CLOSED', updated_at = NOW(), updated_user = ?
@@ -864,11 +973,18 @@ func main() {
 			backupMsg := ""
 			if req.FileName != "" {
 				var bckFolderParam, importFolderParam string
-				config.DB.Raw("SELECT key_value FROM lms_sch.global_parameters WHERE key_name = 'FOLDER_BILL_IMPORT_BCK' LIMIT 1").Scan(&bckFolderParam)
-				if bckFolderParam == "" {
-					config.DB.Raw("SELECT key_value FROM lms_sch.global_parameters WHERE key_name = 'FOLDER_BILL_EXPORT_BCK' LIMIT 1").Scan(&bckFolderParam)
+				// Baca dari cache parameter (tidak perlu query DB)
+				if p, err := paramRepo.FindByKey("FOLDER_BILL_IMPORT_BCK"); err == nil {
+					bckFolderParam = p.KeyValue
 				}
-				config.DB.Raw("SELECT key_value FROM lms_sch.global_parameters WHERE key_name = 'FOLDER_BILL_IMPORT' LIMIT 1").Scan(&importFolderParam)
+				if bckFolderParam == "" {
+					if p, err := paramRepo.FindByKey("FOLDER_BILL_EXPORT_BCK"); err == nil {
+						bckFolderParam = p.KeyValue
+					}
+				}
+				if p, err := paramRepo.FindByKey("FOLDER_BILL_IMPORT"); err == nil {
+					importFolderParam = p.KeyValue
+				}
 
 				if bckFolderParam == "" {
 					bckFolderParam = "D:\\Data_NK\\Project5\\LMS\\Billing\\Backup\\"

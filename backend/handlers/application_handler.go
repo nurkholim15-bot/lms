@@ -18,7 +18,9 @@ func NewApplicationHandler(usecase usecases.ApplicationUseCase) *ApplicationHand
 }
 
 func (h *ApplicationHandler) GetAll(c *gin.Context) {
-	apps, err := h.usecase.GetAllApplications()
+	period := c.Query("period")
+	status := c.Query("status")
+	apps, err := h.usecase.GetApplicationsByPeriodAndStatus(period, status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
