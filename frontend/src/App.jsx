@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 
+const API_PROTOCOL = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'https:' : 'http:';
+const API_BASE_URL = import.meta.env.VITE_API_URL || `${API_PROTOCOL}//localhost:8086`;
+const KARISMA_SIMULATOR_URL = import.meta.env.VITE_KARISMA_URL || `${API_PROTOCOL}//localhost:8087`;
+
 // Konfigurasi Role dan Menu
 const MENU_CONFIG = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊', roles: ['anggota', 'admin', 'hrd'] },
@@ -63,11 +67,18 @@ function App() {
     is_full_settlement: false
   });
   const [manualLogs, setManualLogs] = useState([]);
+  const [auditLogPage, setAuditLogPage] = useState(1);
+  const [receiptData, setReceiptData] = useState(null);
+  const [receiptModalOpen, setReceiptModalOpen] = useState(false);
   const [allMembers, setAllMembers] = useState([]);
   const [selectedMemberFilter, setSelectedMemberFilter] = useState('');
   const [manualMonth, setManualMonth] = useState('08');
   const [manualYear, setManualYear] = useState('2026');
   const [memberSearchQuery, setMemberSearchQuery] = useState('');
+  const [reportMonthFilter, setReportMonthFilter] = useState({ year: '2026', month: '08' });
+  const [reportStatusFilter, setReportStatusFilter] = useState('ALL');
+  const [reportMemberSearchQuery, setReportMemberSearchQuery] = useState('');
+  const [reportPage, setReportPage] = useState(1);
   const [memberPage, setMemberPage] = useState(1);
   const [paginatedMemberList, setPaginatedMemberList] = useState([]);
   const [memberTotalRecords, setMemberTotalRecords] = useState(0);
@@ -80,7 +91,7 @@ function App() {
     memberLoadingRef.current = true;
     try {
       const pageSize = parseInt(getParamVal('DEFAULT_PAGE_SIZE', '10')) || 10;
-      const res = await axios.get(`http://localhost:8086/api/members?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
+      const res = await axios.get(`${API_BASE_URL}/api/members?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
       setPaginatedMemberList(res.data.data || []);
       setMemberTotalRecords(res.data.total_records || 0);
       setMemberTotalPages(res.data.total_pages || 1);
@@ -92,17 +103,9 @@ function App() {
     }
   };
 
-  const debouncedSearchRef = useRef(null);
-
   const handleMemberSearchChange = (newQ) => {
     setMemberSearchQuery(newQ);
     setMemberPage(1);
-    if (debouncedSearchRef.current) {
-      clearTimeout(debouncedSearchRef.current);
-    }
-    debouncedSearchRef.current = setTimeout(() => {
-      fetchPaginatedMembers(newQ, 1);
-    }, 300);
   };
   const [loanSearchQuery, setLoanSearchQuery] = useState('');
   const [loanPage, setLoanPage] = useState(1);
@@ -142,7 +145,7 @@ function App() {
 
   const fetchReconciliationStatus = async () => {
     try {
-      const res = await axios.get('http://localhost:8086/api/payroll/reconciliation-status?period=2026-08');
+      const res = await axios.get(`${API_BASE_URL}/api/payroll/reconciliation-status?period=2026-08`);
       if (res.data && res.data.data) {
         setReconcileClosingInfo(res.data.data);
       }
@@ -157,7 +160,7 @@ function App() {
 
   const fetchAdjustments = async () => {
     try {
-      const res = await axios.get('http://localhost:8086/api/payroll/adjustments?period=2026-08');
+      const res = await axios.get(`${API_BASE_URL}/api/payroll/adjustments?period=2026-08`);
       if (res.data && res.data.adjustments) {
         setAdjustmentsList(res.data.adjustments || []);
       }
@@ -189,13 +192,11 @@ function App() {
         created_user: activeUserName
       };
 
-      const res = await axios.post('http://localhost:8086/api/payroll/adjust', payload);
+      const res = await axios.post(`${API_BASE_URL}/api/payroll/adjust`, payload);
       alert(`✅ ${res.data.message}`);
       setAdjustModalOpen(false);
       setAdjustTargetItem(null);
       fetchAdjustments();
-      fetchPayrollSchedules();
-      fetchReconciliationStatus();
     } catch (err) {
       alert(`❌ Gagal menyimpan adjustment: ${err.response?.data?.error || err.message}`);
     }
@@ -214,7 +215,7 @@ function App() {
         closed_user: activeUserName
       };
 
-      const res = await axios.post('http://localhost:8086/api/payroll/close-reconciliation', payload);
+      const res = await axios.post(`${API_BASE_URL}/api/payroll/close-reconciliation`, payload);
       alert(`🔒 ${res.data.message}`);
       setCloseModalOpen(false);
       fetchReconciliationStatus();
@@ -227,7 +228,7 @@ function App() {
   const handleOpenTracking = async (applicationNo) => {
     setTrackingAppNo(applicationNo);
     try {
-      const response = await axios.get(`http://localhost:8086/api/applications/${applicationNo}/trackings`);
+      const response = await axios.get(`${API_BASE_URL}/api/applications/${applicationNo}/trackings`);
       setTrackingList(response.data.data || []);
       setTrackingModalOpen(true);
     } catch (err) {
@@ -255,11 +256,31 @@ function App() {
   const [paramForm, setParamForm] = useState({ id: 0, key_name: '', key_value: '', description: '' });
 
   const [userInfo, setUserInfo] = useState(null);
+  const [dashboardSummary, setDashboardSummary] = useState({
+    credit_limit: 15000000,
+    available_limit: 15000000,
+    total_debt: 0,
+    active_loans: 0,
+    recent_loans: []
+  });
+
+  const fetchDashboardSummary = async () => {
+    try {
+      const empId = currentUser?.employee_id || '';
+      const currentRole = roleId || userInfo?.role_id || userInfo?.role_name || realRoleName || '';
+      const res = await axios.get(`${API_BASE_URL}/api/dashboard/summary?employee_id=${encodeURIComponent(empId)}&role_id=${encodeURIComponent(currentRole)}`);
+      if (res.data) {
+        setDashboardSummary(res.data);
+      }
+    } catch (err) {
+      console.error("Error fetching dashboard summary:", err);
+    }
+  };
 
   // Fetch User Info & APM Menus directly from Backend API with SQL filters
   useEffect(() => {
     if (currentUser?.employee_id) {
-      axios.get(`http://localhost:8086/api/user-info/${currentUser.employee_id}`)
+      axios.get(`${API_BASE_URL}/api/user-info/${currentUser.employee_id}`)
         .then(res => {
           const info = res.data;
           setUserInfo(info);
@@ -283,8 +304,7 @@ function App() {
     : null;
     
   let roleId = userInfo ? userInfo.role_id : (realEmployee && realEmployee.role_id ? realEmployee.role_id : null);
-  
-  const realRoleName = userInfo ? userInfo.role_name : (realEmployee && realEmployee.role_id === 1 ? 'Admin' : (realEmployee && realEmployee.role_id === 2 ? 'Anggota' : 'Bukan Anggota'));
+  let realRoleName = userInfo ? userInfo.role_name : (realEmployee && realEmployee.role ? realEmployee.role : 'Anggota');
 
   // Menyusun Dynamic Menus dari APM (High performance backend API fallback to frontend state)
   const allowedMenuIds = referenceData.role_menus
@@ -311,7 +331,7 @@ function App() {
   const fetchProducts = async () => {
     setLoading(true);
     try {
-      const response = await axios.get('http://localhost:8086/api/products');
+      const response = await axios.get(`${API_BASE_URL}/api/products`);
       setProducts(response.data.data || []);
     } catch (error) {
       console.error("Error fetching products:", error);
@@ -342,28 +362,103 @@ function App() {
 
   const [approvalMonthFilter, setApprovalMonthFilter] = useState({ month: '08', year: '2026' });
   const [disbursementMonthFilter, setDisbursementMonthFilter] = useState({ month: '08', year: '2026', status: 'ALL' });
+  const [loanMonthFilter, setLoanMonthFilter] = useState({ month: '08', year: '2026' });
 
-  const fetchApplications = async (targetYear, targetMonth) => {
-    try {
-      const yr = targetYear || (activeTab === 'disbursement' ? disbursementMonthFilter.year : approvalMonthFilter.year) || '2026';
-      const mo = targetMonth || (activeTab === 'disbursement' ? disbursementMonthFilter.month : approvalMonthFilter.month) || '08';
-      const period = `${yr}${mo}`;
-      let url = `http://localhost:8086/api/applications?period=${period}`;
-      if (activeTab === 'disbursement') {
-        url += `&status=APPROVED,DISBURSED`;
+  const [loanSearchMemberNo, setLoanSearchMemberNo] = useState('');
+  const [hasSearchedLoans, setHasSearchedLoans] = useState(false);
+
+  // Sync loan search member no when user changes or tab changes
+  useEffect(() => {
+    if (activeTab === 'pinjaman') {
+      setHasSearchedLoans(false);
+      setApplications([]);
+      const isHighPriv = Boolean(
+        roleId === 1 || roleId === 3 || 
+        String(realRoleName).toLowerCase().includes('admin') || 
+        String(realRoleName).toLowerCase().includes('hrd')
+      );
+      if (!isHighPriv && currentUser?.employee_id) {
+        setLoanSearchMemberNo(String(currentUser.employee_id));
+      } else if (isHighPriv && !loanSearchMemberNo) {
+        setLoanSearchMemberNo('');
       }
+    }
+  }, [activeTab, currentUser, roleId, realRoleName]);
+
+  const handleSearchLoans = (overrideNo, overrideYear, overrideMonth) => {
+    const isHighPriv = Boolean(
+      roleId === 1 || roleId === 3 || 
+      String(realRoleName).toLowerCase().includes('admin') || 
+      String(realRoleName).toLowerCase().includes('hrd')
+    );
+    
+    let targetNo = overrideNo !== undefined ? overrideNo : loanSearchMemberNo;
+    if (!isHighPriv && currentUser?.employee_id) {
+      targetNo = String(currentUser.employee_id);
+      setLoanSearchMemberNo(targetNo);
+    }
+
+    const yr = overrideYear || loanMonthFilter.year;
+    const mo = overrideMonth || loanMonthFilter.month;
+
+    setHasSearchedLoans(true);
+    fetchApplications(yr, mo, targetNo);
+  };
+
+  const isReportTab = (tabPath) => {
+    const p = String(tabPath || activeTab || '').toLowerCase();
+    const title = String((visibleMenus || []).find(m => m.path === (tabPath || activeTab))?.title || '').toLowerCase();
+    return p === 'report-loan-applications' || 
+           p === 'report-applications' || 
+           p === 'laporan-pengajuan-pinjaman' || 
+           p === 'laporan-pengajuan' || 
+           p.includes('report-loan') || 
+           p.includes('laporan-pengajuan') || 
+           title.includes('laporan pengajuan');
+  };
+
+  const fetchApplications = async (targetYear, targetMonth, filterMemberNo) => {
+    try {
+      const isReport = isReportTab();
+      const yr = targetYear || (activeTab === 'disbursement' ? disbursementMonthFilter.year : (activeTab === 'pinjaman' ? loanMonthFilter.year : (isReport ? reportMonthFilter.year : approvalMonthFilter.year))) || '2026';
+      const mo = targetMonth || (activeTab === 'disbursement' ? disbursementMonthFilter.month : (activeTab === 'pinjaman' ? loanMonthFilter.month : (isReport ? reportMonthFilter.month : approvalMonthFilter.month))) || '08';
+      const period = `${yr}${mo}`;
+      let url = `${API_BASE_URL}/api/applications?period=${period}`;
+      if (activeTab === 'approval') {
+        url += `&status=SUBMITTED`;
+      } else if (activeTab === 'disbursement') {
+        url += `&status=APPROVED`;
+      } else if (isReport && reportStatusFilter && reportStatusFilter !== 'ALL') {
+        url += `&status=${encodeURIComponent(reportStatusFilter)}`;
+      }
+
+      // Pass user role and employee_id for confidentiality & privilege checks
+      const currentEmpId = currentUser?.employee_id || '';
+      const currentRole = roleId || realRoleName || '';
+      url += `&role_id=${encodeURIComponent(currentRole)}&user_employee_id=${encodeURIComponent(currentEmpId)}`;
+
+      const searchNo = filterMemberNo !== undefined ? filterMemberNo : (isReport ? reportMemberSearchQuery : loanSearchMemberNo);
+      if (searchNo) {
+        url += `&member_no=${encodeURIComponent(searchNo)}`;
+      }
+
       const response = await axios.get(url);
       setApplications(response.data.data || []);
     } catch (error) {
       console.error("Error fetching applications:", error);
+      setApplications([]);
     }
   };
 
   const [payrollSchedules, setPayrollSchedules] = useState([]);
 
-  const fetchPayrollSchedules = async () => {
+  const fetchPayrollSchedules = async (targetMemberNo) => {
     try {
-      const response = await axios.get('http://localhost:8086/api/payroll/schedules?period=2026-08');
+      let url = `${API_BASE_URL}/api/payroll/schedules?period=2026-08`;
+      if (targetMemberNo) {
+        url += `&member_no=${encodeURIComponent(targetMemberNo)}`;
+      }
+      const response = await axios.get(url);
       if (response.data) {
         if (Array.isArray(response.data)) {
           setPayrollSchedules(response.data);
@@ -386,26 +481,21 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'approval' || activeTab === 'disbursement' || activeTab === 'pengajuan' || activeTab === 'dashboard') {
+    if (activeTab === 'dashboard') {
+      fetchDashboardSummary();
+    }
+
+    if (activeTab === 'approval' || activeTab === 'disbursement' || activeTab === 'pengajuan' || isReportTab()) {
       fetchApplications();
     }
 
-    if (activeTab === 'payroll' || activeTab === 'payroll-reconciliation' || activeTab === 'manual-repayment') {
-      fetchPayrollSchedules();
-    }
-
-    if (activeTab === 'pengajuan' || activeTab === 'master' || activeTab === 'approval' || activeTab === 'disbursement') {
-      axios.get('http://localhost:8086/api/members/all')
+    if (activeTab === 'pengajuan' || activeTab === 'master') {
+      axios.get(`${API_BASE_URL}/api/members/all`)
         .then(res => setAllMembers(res.data.data || []))
         .catch(err => console.error("Error fetching all members:", err));
     }
 
-    if (activeTab === 'manual-repayment') {
-      axios.get('http://localhost:8086/api/payroll/deductions')
-        .then(res => setManualLogs(res.data.data || []))
-        .catch(err => console.error("Error fetching deduction logs:", err));
-    }
-  }, [activeTab]);
+  }, [activeTab, currentUser, userInfo, roleId, realRoleName]);
 
   const handleProcessApproval = async (applicationNo, action) => {
     const labels = {
@@ -423,7 +513,7 @@ function App() {
 
     try {
       const activeUserId = currentUser ? String(currentUser.employee_id || '10101') : '10101';
-      await axios.post(`http://localhost:8086/api/applications/${applicationNo}/approve`, {
+      await axios.post(`${API_BASE_URL}/api/applications/${applicationNo}/approve`, {
         action: action,
         notes: notes.trim(),
         updated_user: activeUserId
@@ -448,7 +538,7 @@ function App() {
     if (window.confirm(`Konfirmasi Pencairan Dana Pengajuan #${app.ApplicationNo} sebesar Rp ${(app.ApprovedAmount || app.RequestedAmount).toLocaleString('id-ID')} via ${bankName} (${accountNo})?`)) {
       try {
         const activeUserId = currentUser ? String(currentUser.employee_id || '10101') : '10101';
-        await axios.post(`http://localhost:8086/api/applications/${app.ApplicationNo}/disburse`, {
+        await axios.post(`${API_BASE_URL}/api/applications/${app.ApplicationNo}/disburse`, {
           bank_name: bankName,
           bank_account_no: accountNo,
           notes: `Dana bersih telah dicairkan via Transfer ${bankName} No. Rek: ${accountNo}`,
@@ -552,7 +642,7 @@ function App() {
       // Call Backend to update lms_sch.loan_schedules & insert lms_sch.payroll_deductions!
       try {
         const activeUserName = currentUser ? String(currentUser.employee_id || '10101') : '10101';
-        const res = await axios.post('http://localhost:8086/api/payroll/import', {
+        const res = await axios.post(`${API_BASE_URL}/api/payroll/import`, {
           file_name: file.name,
           updated_user: activeUserName,
           rows: importPayload
@@ -560,8 +650,6 @@ function App() {
         if (res.data && res.data.logs && res.data.logs.length > 0) {
           setImportedRows(res.data.logs);
         }
-        fetchPayrollSchedules();
-        fetchApplications();
         alert(`✅ Berhasil mengimpor file [${file.name}] dari folder komputer Anda!\n\n${res.data.message}`);
       } catch (err) {
         console.error("Error updating DB schedule status:", err);
@@ -581,7 +669,7 @@ function App() {
   const handlePrintReconciliationReport = async (displayList, totalAmount, totalDeducted, totalShortage) => {
     let adjList = [];
     try {
-      const res = await axios.get('http://localhost:8086/api/payroll/adjustments?period=2026-08');
+      const res = await axios.get(`${API_BASE_URL}/api/payroll/adjustments?period=2026-08`);
       adjList = res.data.adjustments || [];
     } catch (e) {
       console.error("Error fetching adjustments for print report:", e);
@@ -904,7 +992,7 @@ function App() {
                 onClick={async () => {
                   if (window.confirm('Apakah Anda yakin ingin RESET & BUKA KEMBALI status rekonsiliasi agar bisa meng-import ulang file CSV HRD-Adira?')) {
                     try {
-                      await axios.post('http://localhost:8086/api/payroll/reset-reconciliation?period=2026-08');
+                      await axios.post(`${API_BASE_URL}/api/payroll/reset-reconciliation?period=2026-08`);
                       setImportedRows([]);
                       setReconcileClosingInfo({ status: 'OPEN' });
                       fetchPayrollSchedules();
@@ -1347,7 +1435,7 @@ function App() {
 
   const fetchParameters = async () => {
     try {
-      const response = await axios.get('http://localhost:8086/api/parameters');
+      const response = await axios.get(`${API_BASE_URL}/api/parameters`);
       setParameters(response.data.data || []);
     } catch (error) {
       console.error("Error fetching parameters:", error);
@@ -1358,14 +1446,14 @@ function App() {
     try {
       if (isGranted) {
         // Revoke access
-        await axios.delete(`http://localhost:8086/api/master/role-menus/0?role_id=${roleId}&menu_id=${menuId}`);
+        await axios.delete(`${API_BASE_URL}/api/master/role-menus/0?role_id=${roleId}&menu_id=${menuId}`);
         setReferenceData(prev => ({
           ...prev,
           role_menus: prev.role_menus.filter(rm => !(String(rm.role_id) === String(roleId) && String(rm.menu_id) === String(menuId)))
         }));
       } else {
         // Grant access
-        await axios.post('http://localhost:8086/api/master/role-menus', {
+        await axios.post(`${API_BASE_URL}/api/master/role-menus`, {
           role_id: parseInt(roleId),
           menu_id: parseInt(menuId)
         });
@@ -1381,7 +1469,7 @@ function App() {
 
   const fetchMasterData = async (table) => {
     try {
-      const response = await axios.get(`http://localhost:8086/api/master/${table}`);
+      const response = await axios.get(`${API_BASE_URL}/api/master/${table}`);
       setMasterDataList(response.data.data || []);
     } catch (error) {
       console.error('Error fetching master data:', error);
@@ -1391,15 +1479,15 @@ function App() {
   const fetchReferenceData = async () => {
     try {
       const [deptRes, empStatusRes, kopkaraStatusRes, empCatRes, empRes, memRes, roleRes, menuRes, roleMenuRes] = await Promise.all([
-        axios.get('http://localhost:8086/api/master/departments'),
-        axios.get('http://localhost:8086/api/master/employee-statuses'),
-        axios.get('http://localhost:8086/api/master/kopkara-statuses'),
-        axios.get('http://localhost:8086/api/master/employee-categories'),
-        axios.get('http://localhost:8086/api/master/employees'),
-        axios.get('http://localhost:8086/api/master/members'),
-        axios.get('http://localhost:8086/api/master/roles'),
-        axios.get('http://localhost:8086/api/master/menus'),
-        axios.get('http://localhost:8086/api/master/role-menus')
+        axios.get(`${API_BASE_URL}/api/master/departments`),
+        axios.get(`${API_BASE_URL}/api/master/employee-statuses`),
+        axios.get(`${API_BASE_URL}/api/master/kopkara-statuses`),
+        axios.get(`${API_BASE_URL}/api/master/employee-categories`),
+        axios.get(`${API_BASE_URL}/api/master/employees`),
+        axios.get(`${API_BASE_URL}/api/master/members`),
+        axios.get(`${API_BASE_URL}/api/master/roles`),
+        axios.get(`${API_BASE_URL}/api/master/menus`),
+        axios.get(`${API_BASE_URL}/api/master/role-menus`)
       ]);
       setReferenceData({
         departments: deptRes.data.data || [],
@@ -1434,7 +1522,7 @@ function App() {
   const submitApplication = async (e) => {
     e.preventDefault();
     try {
-      await axios.post('http://localhost:8086/api/applications', {
+      await axios.post(`${API_BASE_URL}/api/applications`, {
         member_no: parseInt(form.member_no),
         product_id: parseInt(form.product_id),
         requested_amount: parseFloat(form.requested_amount),
@@ -1470,7 +1558,7 @@ function App() {
     if (form.product_id && form.requested_amount > 0 && form.tenor > 0) {
       const fetchSimulation = async () => {
         try {
-          const response = await axios.post('http://localhost:8086/api/applications/simulate', {
+          const response = await axios.post(`${API_BASE_URL}/api/applications/simulate`, {
             member_no: parseInt(form.member_no),
             product_id: parseInt(form.product_id),
             requested_amount: parseFloat(form.requested_amount),
@@ -1502,7 +1590,7 @@ function App() {
       const verifyAuthToken = async () => {
         try {
           // Try Karisma Simulator port 8087 first
-          const res = await axios.post('http://localhost:8087/api/karisma/verify', {}, {
+          const res = await axios.post(`${KARISMA_SIMULATOR_URL}/api/karisma/verify`, {}, {
             headers: { Authorization: `Bearer ${authToken}` }
           });
           const user = res.data.user;
@@ -1512,7 +1600,7 @@ function App() {
         } catch (err8087) {
           try {
             // Fallback to LMS Core Backend port 8086
-            const res = await axios.post('http://localhost:8086/api/karisma/verify', {}, {
+            const res = await axios.post(`${API_BASE_URL}/api/karisma/verify`, {}, {
               headers: { Authorization: `Bearer ${authToken}` }
             });
             const user = res.data.user;
@@ -1538,11 +1626,11 @@ function App() {
       let res;
       try {
         // Try Karisma Simulator port 8087 first
-        res = await axios.post('http://localhost:8087/api/karisma/login', loginForm);
+        res = await axios.post(`${KARISMA_SIMULATOR_URL}/api/karisma/login`, loginForm);
       } catch (err8087) {
         console.warn("Port 8087 unreachable, falling back to LMS Core Backend port 8086...", err8087);
         // Fallback to LMS Core Backend port 8086
-        res = await axios.post('http://localhost:8086/api/karisma/login', loginForm);
+        res = await axios.post(`${API_BASE_URL}/api/karisma/login`, loginForm);
       }
       const token = res.data.token;
       localStorage.setItem('karisma_token', token);
@@ -1575,7 +1663,7 @@ function App() {
         }
       });
 
-      await axios.post(`http://localhost:8086/api/master/${masterTab}`, payload);
+      await axios.post(`${API_BASE_URL}/api/master/${masterTab}`, payload);
       alert('Data berhasil disimpan!');
       setMasterForm({});
       fetchMasterData(masterTab);
@@ -1588,7 +1676,7 @@ function App() {
   const deleteMasterData = async (pkField, pkValue) => {
     if (window.confirm(`Yakin ingin menghapus data dengan ${pkField} = ${pkValue}?`)) {
       try {
-        await axios.delete(`http://localhost:8086/api/master/${masterTab}/${pkValue}`);
+        await axios.delete(`${API_BASE_URL}/api/master/${masterTab}/${pkValue}`);
         alert('Data berhasil dihapus!');
         fetchMasterData(masterTab);
         fetchReferenceData();
@@ -1607,7 +1695,7 @@ function App() {
   const submitParameter = async (e) => {
     e.preventDefault();
     try {
-      await axios.post('http://localhost:8086/api/parameters', {
+      await axios.post(`${API_BASE_URL}/api/parameters`, {
         id: parseInt(paramForm.id),
         key_name: paramForm.key_name,
         key_value: paramForm.key_value,
@@ -1624,7 +1712,7 @@ function App() {
   const deleteParameter = async (id) => {
     if(window.confirm('Yakin ingin menghapus parameter ini?')) {
       try {
-        await axios.delete(`http://localhost:8086/api/parameters/${id}`);
+        await axios.delete(`${API_BASE_URL}/api/parameters/${id}`);
         fetchParameters();
       } catch (error) {
         alert('Gagal menghapus parameter');
@@ -1799,45 +1887,73 @@ function App() {
               <div className="card-grid">
                 <div className="card">
                   <div className="card-title">Available Credit Limit</div>
-                  <div className="card-value">Rp 15.000.000</div>
+                  <div className="card-value" style={{ color: '#059669' }}>
+                    Rp {dashboardSummary.available_limit ? dashboardSummary.available_limit.toLocaleString('id-ID') : '0'}
+                  </div>
                 </div>
                 <div className="card">
                   <div className="card-title">Total Hutang</div>
-                  <div className="card-value">Rp 5.000.000</div>
+                  <div className="card-value" style={{ color: '#dc2626' }}>
+                    Rp {dashboardSummary.total_debt ? dashboardSummary.total_debt.toLocaleString('id-ID') : '0'}
+                  </div>
                 </div>
                 <div className="card">
                   <div className="card-title">Pinjaman Aktif</div>
-                  <div className="card-value">1</div>
+                  <div className="card-value" style={{ color: '#2563eb' }}>
+                    {dashboardSummary.active_loans || 0}
+                  </div>
                 </div>
               </div>
 
               <div className="table-container">
-                <div className="table-header">Pinjaman Terbaru</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', paddingBottom: '8px', borderBottom: '1px solid #e2e8f0' }}>
+                  <div className="table-header" style={{ marginBottom: 0 }}>Pinjaman Terbaru</div>
+                  <button 
+                    onClick={fetchDashboardSummary} 
+                    style={{ padding: '4px 12px', background: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    🔄 Refresh Real-Time Data
+                  </button>
+                </div>
+
                 <table>
                   <thead>
                     <tr>
-                      <th>No Pengajuan</th>
-                      <th>Tanggal</th>
-                      <th>Nominal</th>
-                      <th>Tenor</th>
-                      <th>Status</th>
+                      <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>No Pengajuan</th>
+                      <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Employee ID</th>
+                      <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Tanggal</th>
+                      <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Nominal</th>
+                      <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Tenor</th>
+                      <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td>APP-2026-001</td>
-                      <td>12 Jul 2026</td>
-                      <td>Rp 5.000.000</td>
-                      <td>12 Bulan</td>
-                      <td><span className="badge badge-success">ACTIVE</span></td>
-                    </tr>
-                    <tr>
-                      <td>APP-2025-089</td>
-                      <td>05 Jan 2025</td>
-                      <td>Rp 2.000.000</td>
-                      <td>6 Bulan</td>
-                      <td><span className="badge badge-warning">PAID</span></td>
-                    </tr>
+                    {!dashboardSummary.recent_loans || dashboardSummary.recent_loans.length === 0 ? (
+                      <tr>
+                        <td colSpan="6" style={{ textAlign: 'center', padding: '24px 16px', color: '#64748b' }}>
+                          Belum ada pengajuan / pinjaman aktif.
+                        </td>
+                      </tr>
+                    ) : (
+                      dashboardSummary.recent_loans.map(app => (
+                        <tr key={app.ApplicationNo || app.application_no} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                          <td style={{ padding: '8px 10px', fontSize: '0.85rem' }}><strong>{app.ApplicationNo || app.application_no}</strong></td>
+                          <td style={{ padding: '8px 10px', fontSize: '0.85rem', fontWeight: 600, color: '#0f172a' }}>{app.MemberNo || app.member_no}</td>
+                          <td style={{ padding: '8px 10px', fontSize: '0.85rem', color: '#64748B' }}>
+                            {formatDate(app.SubmissionDate || app.submission_date)}
+                          </td>
+                          <td style={{ padding: '8px 10px', fontSize: '0.85rem' }}>
+                            Rp {(app.RequestedAmount || app.requested_amount) ? (app.RequestedAmount || app.requested_amount).toLocaleString('id-ID') : '0'}
+                          </td>
+                          <td style={{ padding: '8px 10px', fontSize: '0.85rem' }}>{app.Tenor || app.tenor} Bulan</td>
+                          <td style={{ padding: '8px 10px', fontSize: '0.85rem' }}>
+                            <span className={getStatusBadge(app.Status || app.status)}>
+                              {app.Status || app.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -1990,11 +2106,128 @@ function App() {
 
           {activeTab === 'pinjaman' && (
             <div className="table-container">
-              <div className="table-header">Daftar Pengajuan & Pinjaman</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', paddingBottom: '8px', borderBottom: '1px solid #e2e8f0', flexWrap: 'wrap', gap: '8px' }}>
+                <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#1e293b' }}>
+                  Daftar Pengajuan & Pinjaman
+                </div>
+
+                {/* Badge Status Privilege Role */}
+                {(roleId === 1 || roleId === 3 || String(realRoleName).toLowerCase().includes('admin') || String(realRoleName).toLowerCase().includes('hrd')) ? (
+                  <span style={{ backgroundColor: '#e0e7ff', color: '#3730a3', border: '1px solid #c7d2fe', padding: '4px 12px', borderRadius: '16px', fontSize: '0.78rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    ⭐ Role High-Privilege ({realRoleName}): Akses Seluruh Data Pinjaman
+                  </span>
+                ) : (
+                  <span style={{ backgroundColor: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', padding: '4px 12px', borderRadius: '16px', fontSize: '0.78rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    🔒 Mode Anggota: Data Pinjaman Pribadi ({currentUser?.employee_id || 'Anggota'})
+                  </span>
+                )}
+              </div>
+
+              {/* Form Filter Pencarian No. Anggota / Employee ID & Periode */}
+              {(() => {
+                const isHighPriv = Boolean(
+                  roleId === 1 || roleId === 3 || 
+                  String(realRoleName).toLowerCase().includes('admin') || 
+                  String(realRoleName).toLowerCase().includes('hrd')
+                );
+                return (
+                  <div style={{ background: '#f8fafc', padding: '12px 14px', borderRadius: '8px', marginBottom: '16px', border: '1px solid #cbd5e1', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#334155' }}>
+                        🔍 Cari berdasarkan No. Anggota / Employee ID:
+                      </span>
+                      <input 
+                        type="text"
+                        placeholder={isHighPriv ? "Kosongkan untuk semua, atau ketik No. Anggota..." : "No. Anggota Anda"}
+                        value={isHighPriv ? loanSearchMemberNo : (currentUser?.employee_id || loanSearchMemberNo)}
+                        disabled={!isHighPriv}
+                        onChange={(e) => {
+                          if (isHighPriv) setLoanSearchMemberNo(e.target.value);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleSearchLoans();
+                          }
+                        }}
+                        style={{ 
+                          padding: '6px 12px', 
+                          fontSize: '0.85rem', 
+                          borderRadius: '6px', 
+                          border: '1px solid #94a3b8', 
+                          minWidth: '220px',
+                          backgroundColor: isHighPriv ? '#ffffff' : '#e2e8f0',
+                          color: isHighPriv ? '#0f172a' : '#475569',
+                          cursor: isHighPriv ? 'text' : 'not-allowed',
+                          fontWeight: isHighPriv ? 400 : 600
+                        }}
+                      />
+                    </div>
+
+                    {/* Filter Periode (Bulan & Tahun) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#334155' }}>
+                        📅 Periode:
+                      </span>
+                      <select
+                        value={loanMonthFilter.month}
+                        onChange={(e) => setLoanMonthFilter(prev => ({ ...prev, month: e.target.value }))}
+                        style={{ padding: '6px 10px', fontSize: '0.85rem', borderRadius: '6px', border: '1px solid #94a3b8', background: '#fff' }}
+                      >
+                        <option value="01">01 - Januari</option>
+                        <option value="02">02 - Februari</option>
+                        <option value="03">03 - Maret</option>
+                        <option value="04">04 - April</option>
+                        <option value="05">05 - Mei</option>
+                        <option value="06">06 - Juni</option>
+                        <option value="07">07 - Juli</option>
+                        <option value="08">08 - Agustus</option>
+                        <option value="09">09 - September</option>
+                        <option value="10">10 - Oktober</option>
+                        <option value="11">11 - November</option>
+                        <option value="12">12 - Desember</option>
+                      </select>
+                      <select
+                        value={loanMonthFilter.year}
+                        onChange={(e) => setLoanMonthFilter(prev => ({ ...prev, year: e.target.value }))}
+                        style={{ padding: '6px 10px', fontSize: '0.85rem', borderRadius: '6px', border: '1px solid #94a3b8', background: '#fff' }}
+                      >
+                        <option value="2024">2024</option>
+                        <option value="2025">2025</option>
+                        <option value="2026">2026</option>
+                        <option value="2027">2027</option>
+                        <option value="2028">2028</option>
+                      </select>
+                    </div>
+
+                    <button 
+                      onClick={() => handleSearchLoans()}
+                      style={{ padding: '6px 16px', background: '#2563eb', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      Cari Pinjaman
+                    </button>
+
+                    {isHighPriv && (loanSearchMemberNo || loanMonthFilter.month !== '08' || loanMonthFilter.year !== '2026') && (
+                      <button 
+                        onClick={() => {
+                          setLoanSearchMemberNo('');
+                          setLoanMonthFilter({ month: '08', year: '2026' });
+                          handleSearchLoans('', '2026', '08');
+                        }}
+                        style={{ padding: '6px 12px', background: '#64748b', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem' }}
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
+
               <table>
                 <thead>
                   <tr>
                     <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>No. Pengajuan</th>
+                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Employee ID</th>
                     <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tanggal Submit</th>
                     <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Nominal</th>
                     <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tenor</th>
@@ -2005,12 +2238,23 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {applications.length === 0 ? (
-                    <tr><td colSpan="8" style={{ textAlign: 'center', padding: '16px' }}>Belum ada data</td></tr>
+                  {!hasSearchedLoans ? (
+                    <tr>
+                      <td colSpan="9" style={{ textAlign: 'center', padding: '36px 16px', color: '#475569', fontSize: '0.9rem' }}>
+                        🔍 Silakan pilih periode & klik tombol <strong>"Cari Pinjaman"</strong> untuk menampilkan data.
+                      </td>
+                    </tr>
+                  ) : applications.length === 0 ? (
+                    <tr>
+                      <td colSpan="9" style={{ textAlign: 'center', padding: '24px 16px', color: '#dc2626', fontWeight: 600, backgroundColor: '#fef2f2', borderBottom: '1px solid #fecaca' }}>
+                        ⚠️ Data pinjaman tidak ditemukan (Periode {loanMonthFilter.year}-{loanMonthFilter.month})
+                      </td>
+                    </tr>
                   ) : (
                     applications.map(app => (
                       <tr key={app.ApplicationNo} style={{ borderBottom: '1px solid #e2e8f0' }}>
                         <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}><strong>{app.ApplicationNo}</strong></td>
+                        <td style={{ padding: '6px 10px', fontSize: '0.85rem', fontWeight: 600, color: '#0f172a' }}>{app.MemberNo}</td>
                         <td style={{ padding: '6px 10px', fontSize: '0.85rem', color: '#64748B' }}>
                           {formatDate(app.SubmissionDate)}
                         </td>
@@ -2317,7 +2561,7 @@ function App() {
                       try {
                         const scanMode = getParamVal('SCAN_DUEDATE_BILLING', 'PERIOD').toUpperCase();
                         const effectiveCutoffDate = scanMode === 'DUEDATE' ? exportCutoffDate : `${exportPeriodYear}-${exportPeriodMonth}-31`;
-                        const res = await axios.post('http://localhost:8086/api/payroll/export', {
+                        const res = await axios.post(`${API_BASE_URL}/api/payroll/export`, {
                           custom_folder: exportCustomFolder,
                           cutoff_date: effectiveCutoffDate
                         });
@@ -2478,7 +2722,7 @@ function App() {
                     <div>
                       <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#475569', marginBottom: '4px', textTransform: 'uppercase' }}>STATUS AKTIF</label>
                       <div style={{ padding: '6px 16px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', color: '#2563eb', fontWeight: 'bold', fontSize: '0.85rem' }}>
-                        REGISTERED
+                        SUBMITTED
                       </div>
                     </div>
                   </div>
@@ -2940,14 +3184,17 @@ function App() {
 
           return (
           <div>
-            <h2 style={{ marginBottom: '16px', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <h2 style={{ marginBottom: '20px', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
               💳 Pelunasan Manual & Pelunasan Dipercepat Karyawan Resign
             </h2>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '24px' }}>
-              {/* Form Input Pelunasan Manual */}
-              <div className="card" style={{ background: '#f8fafc', padding: '20px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
-                <h3 style={{ margin: 0, marginBottom: '16px', fontSize: '1.05rem', color: '#1e293b' }}>📝 Form Pelunasan Manual</h3>
+            {/* Centered Large Form Pelunasan Manual */}
+            <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+              <div className="card" style={{ background: '#ffffff', padding: '28px', borderRadius: '12px', border: '1px solid #cbd5e1', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
+                <h3 style={{ margin: 0, marginBottom: '20px', fontSize: '1.2rem', color: '#1e293b', paddingBottom: '12px', borderBottom: '2px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  📝 Form Pelunasan Manual
+                </h3>
+
                 <form onSubmit={async (e) => {
                   e.preventDefault();
                   if (!manualForm.loan_no || !manualForm.nominal) {
@@ -2956,7 +3203,7 @@ function App() {
                   }
                   try {
                     const activeUserName = currentUser ? String(currentUser.employee_id || '10101') : '10101';
-                    const res = await axios.post('http://localhost:8086/api/payroll/manual-repayment', {
+                    const res = await axios.post(`${API_BASE_URL}/api/payroll/manual-repayment`, {
                       ...manualForm,
                       period: `${manualYear}-${manualMonth}`,
                       loan_no: parseInt(manualForm.loan_no) || 0,
@@ -2964,39 +3211,74 @@ function App() {
                       nominal: parseFloat(manualForm.nominal) || 0,
                       updated_user: activeUserName
                     });
-                    alert(`✅ ${res.data.message}`);
+                    
+                    // Build Kuitansi Data
+                    const selectedMemberObj = paginatedMemberList.find(m => String(m.member_no) === String(manualForm.member_no)) ||
+                                            allMembers.find(m => String(m.member_no) === String(manualForm.member_no));
+                    const selectedLoanObj = (payrollSchedules || []).find(s => String(s.loan_no) === String(manualForm.loan_no));
+                    const paymentLabel = paymentSourceOptions.find(p => p.code === manualForm.payment_type)?.label || manualForm.payment_type;
+                    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+                    const kwtNo = `KWT/LMS/${todayStr}/${manualForm.loan_no || Math.floor(1000 + Math.random()*9000)}`;
+
+                    setReceiptData({
+                      kwtNo: kwtNo,
+                      date: new Date().toLocaleString('id-ID'),
+                      loanNo: manualForm.loan_no,
+                      memberNo: manualForm.member_no,
+                      memberName: selectedMemberObj?.name || selectedLoanObj?.employee_name || `Anggota #${manualForm.member_no}`,
+                      paymentType: manualForm.payment_type,
+                      paymentTypeLabel: paymentLabel,
+                      nominal: parseFloat(manualForm.nominal) || 0,
+                      referenceNo: manualForm.reference_no || '-',
+                      notes: manualForm.notes || '-',
+                      isFullSettlement: manualForm.is_full_settlement,
+                      createdUser: activeUserName
+                    });
+                    setReceiptModalOpen(true);
+
                     setManualForm({ loan_no: '', member_no: '', period: `${manualYear}-${manualMonth}`, payment_type: paymentSourceOptions[0]?.code || 'TRANSFER_BANK', nominal: '', reference_no: '', notes: '', is_full_settlement: false });
-                    fetchPayrollSchedules();
-                    axios.get('http://localhost:8086/api/payroll/deductions').then(r => setManualLogs(r.data.data || []));
+                    if (selectedMemberFilter) {
+                      fetchPayrollSchedules(selectedMemberFilter);
+                    }
                   } catch (err) {
                     alert("❌ Gagal memproses pelunasan manual: " + (err.response?.data?.error || err.message));
                   }
-                }} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                }} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
                   
-                  {/* Dropdown 1: Input Search & Select Anggota (On-demand backend fetch & pagination) */}
-                  <div style={{ background: '#ffffff', padding: '12px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
-                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '6px', color: '#0f172a' }}>
+                  {/* Dropdown 1: Input Search & Filter Button + Select Anggota */}
+                  <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                    <label style={{ fontSize: '0.9rem', fontWeight: 700, display: 'block', marginBottom: '8px', color: '#0f172a' }}>
                       1. Pilih Anggota / Karyawan *
                     </label>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '8px', alignItems: 'center' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr auto 3fr', gap: '8px', alignItems: 'center' }}>
                       <input 
                         type="text"
                         value={memberSearchQuery}
                         onChange={(e) => handleMemberSearchChange(e.target.value)}
-                        placeholder="🔍 Cari member_no / name / ID..."
-                        style={{ width: '100%', padding: '8px 10px', borderRadius: '4px', border: '1px solid #94a3b8', fontSize: '0.85rem' }}
-                      />
-                      <select 
-                        value={selectedMemberFilter}
-                        onFocus={() => {
-                          if (!memberDropdownLoaded) {
-                            fetchPaginatedMembers(memberSearchQuery, memberPage);
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            fetchPaginatedMembers(memberSearchQuery, 1);
                           }
                         }}
+                        placeholder="Ketik NIK / Member No / Nama..."
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #94a3b8', fontSize: '0.9rem' }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => fetchPaginatedMembers(memberSearchQuery, 1)}
+                        style={{ padding: '10px 16px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.9rem' }}
+                      >
+                        🔍 Cari
+                      </button>
+                      <select 
+                        value={selectedMemberFilter}
                         onChange={(e) => {
                           const mNo = e.target.value;
                           setSelectedMemberFilter(mNo);
-                          fetchPayrollSchedules();
+                          if (mNo) {
+                            fetchPayrollSchedules(mNo);
+                          }
                           const firstLoan = (payrollSchedules || []).find(s => String(s.member_no) === String(mNo) && s.status === 'PARTIAL') ||
                                             (payrollSchedules || []).find(s => String(s.member_no) === String(mNo) && s.status !== 'PAID' && s.status !== 'CLOSED');
                           if (firstLoan) {
@@ -3014,21 +3296,21 @@ function App() {
                             setManualForm({ ...manualForm, loan_no: '', member_no: mNo, period: `${manualYear}-${manualMonth}` });
                           }
                         }}
-                        style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem' }}
                       >
                         <option value="">-- Semua Anggota ({memberTotalRecords} Ditemukan) --</option>
                         {paginatedMemberList.map(m => (
                           <option key={m.member_no} value={m.member_no}>
-                            {m.member_no} - {m.name}
+                            {m.name} (ID: {m.employee_id || m.member_no})
                           </option>
                         ))}
                       </select>
                     </div>
                     
                     {/* Pagination Controls Anggota */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', fontSize: '0.75rem', color: '#475569' }}>
-                      <span>Hal {memberPage} dari {memberTotalPages} ({memberTotalRecords} Members)</span>
-                      <div style={{ display: 'flex', gap: '4px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', fontSize: '0.8rem', color: '#475569' }}>
+                      <span>Hal {memberPage} dari {memberTotalPages} ({memberTotalRecords} Members Ditemukan)</span>
+                      <div style={{ display: 'flex', gap: '6px' }}>
                         <button 
                           type="button"
                           disabled={memberPage <= 1}
@@ -3037,7 +3319,7 @@ function App() {
                             setMemberPage(newP);
                             fetchPaginatedMembers(memberSearchQuery, newP);
                           }}
-                          style={{ padding: '2px 8px', fontSize: '0.75rem', background: memberPage <= 1 ? '#e2e8f0' : '#0369a1', color: memberPage <= 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '3px', cursor: memberPage <= 1 ? 'not-allowed' : 'pointer' }}
+                          style={{ padding: '4px 10px', fontSize: '0.8rem', background: memberPage <= 1 ? '#e2e8f0' : '#0369a1', color: memberPage <= 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: memberPage <= 1 ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
                         >
                           ◀ Prev
                         </button>
@@ -3049,7 +3331,7 @@ function App() {
                             setMemberPage(newP);
                             fetchPaginatedMembers(memberSearchQuery, newP);
                           }}
-                          style={{ padding: '2px 8px', fontSize: '0.75rem', background: memberPage >= memberTotalPages ? '#e2e8f0' : '#0369a1', color: memberPage >= memberTotalPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '3px', cursor: memberPage >= memberTotalPages ? 'not-allowed' : 'pointer' }}
+                          style={{ padding: '4px 10px', fontSize: '0.8rem', background: memberPage >= memberTotalPages ? '#e2e8f0' : '#0369a1', color: memberPage >= memberTotalPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: memberPage >= memberTotalPages ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
                         >
                           Next ▶
                         </button>
@@ -3057,9 +3339,9 @@ function App() {
                     </div>
                   </div>
 
-                  {/* Dropdown 2: Input Search & Select Pinjaman Aktif (1-Line Horizontal Layout, Filtered by Active Loans & Member) */}
-                  <div style={{ background: '#ffffff', padding: '12px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
-                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '6px', color: '#0f172a' }}>
+                  {/* Dropdown 2: Input Search & Select Pinjaman Aktif */}
+                  <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                    <label style={{ fontSize: '0.9rem', fontWeight: 700, display: 'block', marginBottom: '8px', color: '#0f172a' }}>
                       2. Pilih Pinjaman Aktif *
                     </label>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '8px', alignItems: 'center' }}>
@@ -3070,8 +3352,8 @@ function App() {
                           setLoanSearchQuery(e.target.value);
                           setLoanPage(1);
                         }}
-                        placeholder="🔍 Cari No. Pinjaman / Periode..."
-                        style={{ width: '100%', padding: '8px 10px', borderRadius: '4px', border: '1px solid #94a3b8', fontSize: '0.85rem' }}
+                        placeholder="🔍 Filter No. Pinjaman / Periode..."
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #94a3b8', fontSize: '0.9rem' }}
                       />
                       <select 
                         value={manualForm.loan_no} 
@@ -3096,7 +3378,7 @@ function App() {
                           }
                         }}
                         required
-                        style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem' }}
                       >
                         <option value="">-- Pilih Pinjaman Aktif ({filteredLoans.length} Ditemukan) --</option>
                         {paginatedLoans.map(s => {
@@ -3114,14 +3396,14 @@ function App() {
                     </div>
 
                     {/* Pagination Controls Pinjaman */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', fontSize: '0.75rem', color: '#475569' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', fontSize: '0.8rem', color: '#475569' }}>
                       <span>Hal {loanPage} dari {totalLoanPages} ({filteredLoans.length} Pinjaman)</span>
-                      <div style={{ display: 'flex', gap: '4px' }}>
+                      <div style={{ display: 'flex', gap: '6px' }}>
                         <button 
                           type="button"
                           disabled={loanPage === 1}
                           onClick={() => setLoanPage(prev => Math.max(prev - 1, 1))}
-                          style={{ padding: '2px 8px', fontSize: '0.75rem', background: loanPage === 1 ? '#e2e8f0' : '#0369a1', color: loanPage === 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '3px', cursor: loanPage === 1 ? 'not-allowed' : 'pointer' }}
+                          style={{ padding: '4px 10px', fontSize: '0.8rem', background: loanPage === 1 ? '#e2e8f0' : '#0369a1', color: loanPage === 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: loanPage === 1 ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
                         >
                           ◀ Prev
                         </button>
@@ -3129,7 +3411,7 @@ function App() {
                           type="button"
                           disabled={loanPage >= totalLoanPages}
                           onClick={() => setLoanPage(prev => Math.min(prev + 1, totalLoanPages))}
-                          style={{ padding: '2px 8px', fontSize: '0.75rem', background: loanPage >= totalLoanPages ? '#e2e8f0' : '#0369a1', color: loanPage >= totalLoanPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '3px', cursor: loanPage >= totalLoanPages ? 'not-allowed' : 'pointer' }}
+                          style={{ padding: '4px 10px', fontSize: '0.8rem', background: loanPage >= totalLoanPages ? '#e2e8f0' : '#0369a1', color: loanPage >= totalLoanPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: loanPage >= totalLoanPages ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
                         >
                           Next ▶
                         </button>
@@ -3137,13 +3419,13 @@ function App() {
                     </div>
                   </div>
 
-                  {/* Dropdown 3: Metode / Sumber Pelunasan (Dinamis Master Parameter) */}
+                  {/* Dropdown 3: Metode / Sumber Pelunasan */}
                   <div>
-                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>3. Metode / Sumber Pelunasan (Dinamis Master Parameter) *</label>
+                    <label style={{ fontSize: '0.9rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>3. Metode / Sumber Pelunasan (Dinamis Master Parameter) *</label>
                     <select 
                       value={manualForm.payment_type}
                       onChange={(e) => setManualForm({ ...manualForm, payment_type: e.target.value })}
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem' }}
                     >
                       {paymentSourceOptions.map(opt => (
                         <option key={opt.code} value={opt.code}>
@@ -3151,15 +3433,15 @@ function App() {
                         </option>
                       ))}
                     </select>
-                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '2px' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '4px' }}>
                       💡 <em>Dapat ditambah/diubah di menu Pengaturan Parameter (key: <code>PAYMENT_SOURCES</code>)</em>
                     </div>
                   </div>
 
-                  {/* Dropdown 4: Periode Tagihan (Dropdown Bulan & Dropdown Tahun) */}
+                  {/* Dropdown 4: Periode Tagihan */}
                   <div>
-                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>4. Periode Tagihan (Bulan & Tahun) *</label>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                    <label style={{ fontSize: '0.9rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>4. Periode Tagihan (Bulan & Tahun) *</label>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                       <select 
                         value={manualMonth}
                         onChange={(e) => {
@@ -3167,7 +3449,7 @@ function App() {
                           setManualMonth(m);
                           setManualForm(prev => ({ ...prev, period: `${manualYear}-${m}` }));
                         }}
-                        style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem' }}
                       >
                         {monthOptions.map(mo => (
                           <option key={mo.code} value={mo.code}>{mo.name}</option>
@@ -3181,20 +3463,20 @@ function App() {
                           setManualYear(y);
                           setManualForm(prev => ({ ...prev, period: `${y}-${manualMonth}` }));
                         }}
-                        style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem' }}
                       >
                         {yearOptions.map(yr => (
                           <option key={yr} value={yr}>Tahun {yr}</option>
                         ))}
                       </select>
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: '#0369a1', marginTop: '4px', fontWeight: 500 }}>
+                    <div style={{ fontSize: '0.8rem', color: '#0369a1', marginTop: '6px', fontWeight: 500 }}>
                       📅 Periode Terpilih: <strong>{manualYear}-{manualMonth}</strong>
                     </div>
                   </div>
 
                   <div>
-                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Nominal Pembayaran (Rp) *</label>
+                    <label style={{ fontSize: '0.9rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>Nominal Pembayaran (Rp) *</label>
                     <input 
                       type="text" 
                       value={manualForm.nominal !== '' && manualForm.nominal !== null && manualForm.nominal !== undefined ? (Math.round(parseFloat(String(manualForm.nominal).replace(/[^0-9]/g, '')) || 0) > 0 ? Math.round(parseFloat(String(manualForm.nominal).replace(/[^0-9]/g, '')) || 0).toLocaleString('id-ID') : '') : ''} 
@@ -3204,111 +3486,142 @@ function App() {
                       }}
                       placeholder="0" 
                       required 
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1', fontWeight: 600, fontSize: '0.95rem', color: '#0f172a' }}
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontWeight: 700, fontSize: '1.05rem', color: '#0f172a' }}
                     />
                   </div>
 
                   <div>
-                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>No. Bukti Transfer / Ref Bank</label>
+                    <label style={{ fontSize: '0.9rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>No. Bukti Transfer / Ref Bank</label>
                     <input 
                       type="text" 
                       value={manualForm.reference_no} 
                       onChange={(e) => setManualForm({ ...manualForm, reference_no: e.target.value })}
                       placeholder="Contoh: TRF-BCA-987123" 
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem' }}
                     />
                   </div>
 
                   <div>
-                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Catatan Pelunasan / Karyawan Resign</label>
+                    <label style={{ fontSize: '0.9rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>Catatan Pelunasan / Karyawan Resign</label>
                     <input 
                       type="text" 
                       value={manualForm.notes} 
                       onChange={(e) => setManualForm({ ...manualForm, notes: e.target.value })}
                       placeholder="Catatan pelunasan mandiri / pesangon" 
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem' }}
                     />
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px', background: '#fef3c7', borderRadius: '4px', border: '1px solid #f59e0b' }}>
-                    <input 
-                      type="checkbox" 
-                      id="isFull" 
-                      checked={manualForm.is_full_settlement}
-                      onChange={(e) => setManualForm({ ...manualForm, is_full_settlement: e.target.checked })}
-                      style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                    />
-                    <label htmlFor="isFull" style={{ fontSize: '0.85rem', fontWeight: 600, color: '#92400e', cursor: 'pointer' }}>
-                      🔥 Pelunasan Lunas Sekaligus (Early Full Settlement)
-                    </label>
+                  {/* Clarified Box Pink: Early Full Settlement */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '12px 16px', background: '#fef2f2', borderRadius: '8px', border: '1px solid #fca5a5' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <input 
+                        type="checkbox" 
+                        id="isFull" 
+                        checked={manualForm.is_full_settlement}
+                        onChange={(e) => setManualForm({ ...manualForm, is_full_settlement: e.target.checked })}
+                        style={{ width: '20px', height: '20px', cursor: 'pointer' }}
+                      />
+                      <label htmlFor="isFull" style={{ fontSize: '0.95rem', fontWeight: 700, color: '#991b1b', cursor: 'pointer' }}>
+                        🔥 Pelunasan Lunas Sekaligus (Lunas Total / Early Full Settlement)
+                      </label>
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: '#7f1d1d', marginLeft: '30px', lineHeight: '1.4' }}>
+                      💡 <em>Beri tanda centang jika pembayaran ini melunasi seluruh sisa hutang pinjaman secara permanen (misal: Karyawan Resign / Pelunasan Dipercepat). Status pinjaman akan otomatis diubah menjadi <strong>CLOSED</strong>.</em>
+                    </div>
                   </div>
 
                   <button 
                     type="submit" 
-                    style={{ marginTop: '8px', padding: '10px 16px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.9rem' }}
+                    style={{ marginTop: '12px', padding: '14px 24px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', fontSize: '1.05rem', boxShadow: '0 4px 6px -1px rgba(2, 132, 199, 0.3)' }}
                   >
-                    💳 Eksekusi Pelunasan Manual
+                    💳 Proses
                   </button>
                 </form>
               </div>
+            </div>
 
-              {/* Tabel Log Audit Pelunasan */}
-              <div className="card" style={{ padding: '0px', overflow: 'hidden' }}>
-                <div style={{ padding: '16px 20px', background: 'var(--primary-blue)', color: 'white', fontWeight: 'bold', fontSize: '1.05rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>📜 Riwayat Audit Log Pelunasan & Rekonsiliasi (`lms_sch.payroll_deductions`)</span>
-                  <button 
-                    onClick={() => axios.get('http://localhost:8086/api/payroll/deductions').then(r => setManualLogs(r.data.data || []))}
-                    style={{ padding: '4px 10px', background: 'rgba(255,255,255,0.2)', color: 'white', border: '1px solid white', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
-                  >
-                    🔄 Refresh Log
-                  </button>
-                </div>
+            {/* Modal Kuitansi Bukti Pelunasan Manual */}
+            {receiptModalOpen && receiptData && (
+              <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1050, backdropFilter: 'blur(4px)' }}>
+                <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '32px', width: '90%', maxWidth: '650px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', border: '2px solid #0284c7' }}>
+                  
+                  <div style={{ textAlign: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '16px', marginBottom: '20px' }}>
+                    <h3 style={{ margin: 0, color: '#0369a1', fontSize: '1.1rem', textTransform: 'uppercase', letterSpacing: '1px' }}>KOPERASI KARYAWAN (KOPKARA) - LMS SYSTEM</h3>
+                    <h2 style={{ margin: '6px 0 0 0', color: '#0f172a', fontSize: '1.4rem', fontWeight: 800 }}>🧾 KUITANSI BUKTI PELUNASAN PINJAMAN</h2>
+                    <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '4px', fontFamily: 'monospace' }}>No: {receiptData.kwtNo} | Tanggal: {receiptData.date}</div>
+                  </div>
 
-                <div style={{ overflowX: 'auto', maxHeight: '550px' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                    <thead>
-                      <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                        <th style={{ padding: '10px 12px', textAlign: 'left' }}>Log ID</th>
-                        <th style={{ padding: '10px 12px', textAlign: 'left' }}>No Pinjaman / Anggota</th>
-                        <th style={{ padding: '10px 12px', textAlign: 'left' }}>Periode</th>
-                        <th style={{ padding: '10px 12px', textAlign: 'right' }}>Nominal Tagihan</th>
-                        <th style={{ padding: '10px 12px', textAlign: 'right' }}>Terpotong / Dibayar</th>
-                        <th style={{ padding: '10px 12px', textAlign: 'center' }}>Status</th>
-                        <th style={{ padding: '10px 12px', textAlign: 'left' }}>Keterangan / Ref</th>
-                        <th style={{ padding: '10px 12px', textAlign: 'left' }}>User ID</th>
-                      </tr>
-                    </thead>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem', marginBottom: '24px' }}>
                     <tbody>
-                      {manualLogs.length === 0 ? (
-                        <tr><td colSpan="8" style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>Belum ada histori pelunasan manual / rekonsiliasi tersimpan.</td></tr>
-                      ) : (
-                        manualLogs.map(log => (
-                          <tr key={log.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                            <td style={{ padding: '8px 12px', fontWeight: 'bold' }}>#{log.id}</td>
-                            <td style={{ padding: '8px 12px' }}>
-                              <div><strong>{log.loan_no ? `Pinjaman #${log.loan_no}` : 'Tanpa No Pinjaman'}</strong></div>
-                              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>{log.employee_name} ({log.member_no})</div>
-                            </td>
-                            <td style={{ padding: '8px 12px' }}>{log.period || '-'}</td>
-                            <td style={{ padding: '8px 12px', textAlign: 'right' }}>Rp {Math.round(log.nominal_original || 0).toLocaleString('id-ID')}</td>
-                            <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 'bold', color: log.status?.includes('SUCCESS') ? '#047857' : '#b45309' }}>
-                              Rp {Math.round(log.nominal_deducted || 0).toLocaleString('id-ID')}
-                            </td>
-                            <td style={{ padding: '8px 12px', textAlign: 'center' }}>
-                              <span className={log.status?.includes('SUCCESS') ? 'badge badge-success' : (log.status === 'FAILED' ? 'badge badge-danger' : 'badge badge-warning')}>
-                                {log.status}
-                              </span>
-                            </td>
-                            <td style={{ padding: '8px 12px', fontSize: '0.8rem', color: '#334155' }}>{log.failure_reason || '-'}</td>
-                            <td style={{ padding: '8px 12px', fontSize: '0.8rem', fontFamily: 'monospace' }}>{log.created_user || '10101'}</td>
-                          </tr>
-                        ))
-                      )}
+                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '8px 0', color: '#64748b', width: '38%' }}>No. Pinjaman</td>
+                        <td style={{ padding: '8px 0', fontWeight: 'bold', color: '#0f172a' }}>#{receiptData.loanNo}</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '8px 0', color: '#64748b' }}>NIK / No. Anggota</td>
+                        <td style={{ padding: '8px 0', fontWeight: 'bold', color: '#0f172a' }}>{receiptData.memberNo}</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '8px 0', color: '#64748b' }}>Nama Anggota / Pemohon</td>
+                        <td style={{ padding: '8px 0', fontWeight: 'bold', color: '#0f172a' }}>{receiptData.memberName}</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '8px 0', color: '#64748b' }}>Metode / Sumber Dana</td>
+                        <td style={{ padding: '8px 0', fontWeight: 600, color: '#2563eb' }}>{receiptData.paymentTypeLabel}</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '8px 0', color: '#64748b' }}>No. Referensi / Bukti</td>
+                        <td style={{ padding: '8px 0', fontFamily: 'monospace', color: '#475569' }}>{receiptData.referenceNo}</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '8px 0', color: '#64748b' }}>Jenis Pelunasan</td>
+                        <td style={{ padding: '8px 0', fontWeight: 'bold', color: receiptData.isFullSettlement ? '#047857' : '#0284c7' }}>
+                          {receiptData.isFullSettlement ? '🔥 Pelunasan Lunas Sekaligus (CLOSED)' : 'Angsuran / Pelunasan Partial'}
+                        </td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '8px 0', color: '#64748b' }}>Catatan Petugas</td>
+                        <td style={{ padding: '8px 0', color: '#475569' }}>{receiptData.notes}</td>
+                      </tr>
+                      <tr style={{ background: '#f0fdf4', borderTop: '2px solid #16a34a' }}>
+                        <td style={{ padding: '12px 10px', fontSize: '1rem', fontWeight: 800, color: '#166534' }}>JUMLAH DIBAYAR</td>
+                        <td style={{ padding: '12px 10px', fontSize: '1.25rem', fontWeight: 800, color: '#15803d', textAlign: 'left' }}>
+                          Rp {receiptData.nominal.toLocaleString('id-ID')}
+                        </td>
+                      </tr>
                     </tbody>
                   </table>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '16px', borderTop: '1px solid #cbd5e1' }}>
+                    <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                      Petugas Operasional: <strong>{receiptData.createdUser}</strong>
+                    </div>
+                    <div style={{ display: 'flex', gap: '12px' }}>
+                      <button
+                        onClick={() => {
+                          const originalTitle = document.title;
+                          document.title = "Kopkara LMS - Pelunasan Manual";
+                          window.print();
+                          setTimeout(() => {
+                            document.title = originalTitle;
+                          }, 1000);
+                        }}
+                        style={{ padding: '8px 18px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        🖨️ Cetak Kuitansi
+                      </button>
+                      <button
+                        onClick={() => setReceiptModalOpen(false)}
+                        style={{ padding: '8px 18px', background: '#64748b', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.85rem' }}
+                      >
+                        Tutup
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
           );
         })()}
@@ -3453,7 +3766,7 @@ function App() {
                                 onClick={async () => {
                                   if (window.confirm(`Hapus produk pinjaman "${p.name}"?`)) {
                                     try {
-                                      await axios.delete(`http://localhost:8086/api/products/${p.id}`);
+                                      await axios.delete(`${API_BASE_URL}/api/products/${p.id}`);
                                       alert("✅ Produk pinjaman berhasil dihapus!");
                                       fetchProducts();
                                     } catch (err) {
@@ -3500,10 +3813,10 @@ function App() {
                       };
 
                       if (editingProduct) {
-                        await axios.put(`http://localhost:8086/api/products/${editingProduct.id}`, payload);
+                        await axios.put(`${API_BASE_URL}/api/products/${editingProduct.id}`, payload);
                         alert("✅ Produk pinjaman berhasil diperbarui!");
                       } else {
-                        await axios.post('http://localhost:8086/api/products', payload);
+                        await axios.post(`${API_BASE_URL}/api/products`, payload);
                         alert("✅ Produk pinjaman baru berhasil ditambahkan!");
                       }
                       setProductModalOpen(false);
@@ -3626,7 +3939,391 @@ function App() {
           );
         })()}
 
-          {activeTab !== 'dashboard' && activeTab !== 'pengajuan' && activeTab !== 'pinjaman' && activeTab !== 'parameters' && activeTab !== 'master' && activeTab !== 'approval' && activeTab !== 'disbursement' && activeTab !== 'payroll' && activeTab !== 'payroll-reconciliation' && activeTab !== 'manual-repayment' && activeTab !== 'products' && !activeTab.startsWith('master-') && (
+        {isReportTab() && (() => {
+          const pageSize = 10;
+          const safeApps = Array.isArray(applications) ? applications : [];
+
+          const curYear = new Date().getFullYear();
+          const reportYearOptions = [curYear - 3, curYear - 2, curYear - 1, curYear, curYear + 1, curYear + 2, curYear + 3];
+          const reportMonthOptions = [
+            { code: '01', name: '01 - Januari' },
+            { code: '02', name: '02 - Februari' },
+            { code: '03', name: '03 - Maret' },
+            { code: '04', name: '04 - April' },
+            { code: '05', name: '05 - Mei' },
+            { code: '06', name: '06 - Juni' },
+            { code: '07', name: '07 - Juli' },
+            { code: '08', name: '08 - Agustus' },
+            { code: '09', name: '09 - September' },
+            { code: '10', name: '10 - Oktober' },
+            { code: '11', name: '11 - November' },
+            { code: '12', name: '12 - Desember' }
+          ];
+
+          const monthNameMap = {
+            '01': 'Januari', '02': 'Februari', '03': 'Maret', '04': 'April',
+            '05': 'Mei', '06': 'Juni', '07': 'Juli', '08': 'Agustus',
+            '09': 'September', '10': 'Oktober', '11': 'November', '12': 'Desember'
+          };
+          const selectedMonthName = monthNameMap[reportMonthFilter.month] || reportMonthFilter.month;
+          const dynamicReportTitle = `Laporan loan periode ${selectedMonthName} ${reportMonthFilter.year}`;
+
+          const filteredReportApps = safeApps.filter(app => {
+            if (!reportMemberSearchQuery) return true;
+            const q = reportMemberSearchQuery.toLowerCase();
+            return String(app.ApplicationNo || '').toLowerCase().includes(q) ||
+                   String(app.MemberNo || '').toLowerCase().includes(q) ||
+                   String(app.Status || '').toLowerCase().includes(q);
+          });
+          const totalReportPages = Math.ceil(filteredReportApps.length / pageSize) || 1;
+          const startIndex = (reportPage - 1) * pageSize;
+          const paginatedReportApps = filteredReportApps.slice(startIndex, startIndex + pageSize);
+
+          // Metrics Summary Calculation
+          const totalCount = safeApps.length;
+          const totalRequested = safeApps.reduce((sum, a) => sum + (parseFloat(a.RequestedAmount) || 0), 0);
+          const approvedOrDisbursedApps = safeApps.filter(a => a.Status === 'APPROVED' || a.Status === 'DISBURSED');
+          const approvedCount = approvedOrDisbursedApps.length;
+          const totalApprovedNominal = approvedOrDisbursedApps.reduce((sum, a) => sum + (parseFloat(a.ApprovedAmount || a.RequestedAmount) || 0), 0);
+          const rejectedCount = safeApps.filter(a => a.Status === 'REJECTED').length;
+          const submittedCount = safeApps.filter(a => a.Status === 'SUBMITTED').length;
+
+          const paramLmsTitle = getParamVal('LMS_Title', 'kopkara.jfif');
+          const logoFileName = (paramLmsTitle && (paramLmsTitle.endsWith('.jfif') || paramLmsTitle.endsWith('.png') || paramLmsTitle.endsWith('.jpg') || paramLmsTitle.endsWith('.jpeg') || paramLmsTitle.endsWith('.svg')))
+            ? paramLmsTitle
+            : 'kopkara.jfif';
+          const logoPath = '/' + logoFileName;
+
+          const printNow = new Date();
+          const monthNamesIndo = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+          const formattedPrintDateTime = `${printNow.getDate()} ${monthNamesIndo[printNow.getMonth()]} ${printNow.getFullYear()} ${String(printNow.getHours()).padStart(2, '0')}:${String(printNow.getMinutes()).padStart(2, '0')}:${String(printNow.getSeconds()).padStart(2, '0')}`;
+
+          return (
+            <div>
+              {/* Header Cetak PDF (Tampak hanya saat Cetak / Print) - Logo & H1 Judul Periode Rata Kiri */}
+              <div className="print-only" style={{ marginBottom: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '10px' }}>
+                  {/* Left: Logo & H1 Judul Periode */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                    <img 
+                      src={logoPath} 
+                      alt="Logo" 
+                      style={{ height: '54px', width: 'auto', objectFit: 'contain' }}
+                      onError={(e) => {
+                        e.target.onerror = null;
+                        e.target.src = '/kopkara.jfif';
+                      }}
+                    />
+                    <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 900, color: '#0A2540', lineHeight: 1.2 }}>
+                      {dynamicReportTitle}
+                    </h1>
+                  </div>
+
+                  {/* Right: Tanggal Cetak Dengan Jam */}
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 600 }}>
+                      Tanggal Cetak: {formattedPrintDateTime}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Garis Pembatas Tebal */}
+                <div style={{ borderBottom: '3.5px solid #0A2540', width: '100%', marginTop: '4px', marginBottom: '16px' }}></div>
+              </div>
+
+              {/* Kotak Merah - Disembunyikan Saat Cetak (no-print) */}
+              <div className="no-print">
+                {/* Header Title & Export Buttons */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                  <div>
+                    <h2 style={{ margin: 0, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      📊 Laporan Pengajuan Pinjaman
+                    </h2>
+                    <p style={{ margin: '4px 0 0 0', color: '#64748b', fontSize: '0.9rem' }}>
+                      Rekapitulasi dan laporan detail status seluruh pengajuan pinjaman anggota Kopkara per periode.
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button
+                      onClick={() => {
+                        const originalTitle = document.title;
+                        document.title = dynamicReportTitle;
+                        window.print();
+                        setTimeout(() => {
+                          document.title = originalTitle;
+                        }, 1000);
+                      }}
+                      style={{ padding: '9px 16px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      🖨️ Cetak PDF
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (!safeApps || safeApps.length === 0) {
+                          alert("Tidak ada data laporan untuk diekspor.");
+                          return;
+                        }
+                        const headers = ["No.", "No. Pengajuan", "Tanggal", "NIK / Employee ID", "Nominal Pengajuan (Rp)", "Nominal Disetujui (Rp)", "Tenor (Bln)", "Angsuran/Bln (Rp)", "Status"];
+                        const rows = safeApps.map((app, idx) => [
+                          idx + 1,
+                          app.ApplicationNo,
+                          app.SubmissionDate ? new Date(app.SubmissionDate).toLocaleDateString('id-ID') : '',
+                          app.MemberNo,
+                          app.RequestedAmount || 0,
+                          app.ApprovedAmount || app.RequestedAmount || 0,
+                          app.Tenor || 0,
+                          app.TotalInstallment || 0,
+                          app.Status || ''
+                        ]);
+                        const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+                        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.setAttribute('download', `${dynamicReportTitle.replace(/\s+/g, '_')}.csv`);
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                      }}
+                      style={{ padding: '9px 16px', background: '#10b981', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      📊 Ekspor CSV
+                    </button>
+                  </div>
+                </div>
+
+                {/* Metrics Summary Cards */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+                  <div style={{ background: '#ffffff', padding: '18px', borderRadius: '10px', border: '1px solid #cbd5e1', boxShadow: '0 2px 6px rgba(0,0,0,0.03)' }}>
+                    <div style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Total Pengajuan</div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#0f172a', margin: '4px 0' }}>{totalCount} Record</div>
+                    <div style={{ fontSize: '0.85rem', color: '#0284c7', fontWeight: 700 }}>Rp {Math.round(totalRequested).toLocaleString('id-ID')}</div>
+                  </div>
+
+                  <div style={{ background: '#ffffff', padding: '18px', borderRadius: '10px', border: '1px solid #cbd5e1', boxShadow: '0 2px 6px rgba(0,0,0,0.03)' }}>
+                    <div style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Disetujui / Dicairkan</div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#059669', margin: '4px 0' }}>{approvedCount} Record</div>
+                    <div style={{ fontSize: '0.85rem', color: '#10b981', fontWeight: 700 }}>Rp {Math.round(totalApprovedNominal).toLocaleString('id-ID')}</div>
+                  </div>
+
+                  <div style={{ background: '#ffffff', padding: '18px', borderRadius: '10px', border: '1px solid #cbd5e1', boxShadow: '0 2px 6px rgba(0,0,0,0.03)' }}>
+                    <div style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Dalam Proses (Submitted)</div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#2563eb', margin: '4px 0' }}>{submittedCount} Record</div>
+                    <div style={{ fontSize: '0.8rem', color: '#64748b' }}>Menunggu Review HRD</div>
+                  </div>
+
+                  <div style={{ background: '#ffffff', padding: '18px', borderRadius: '10px', border: '1px solid #cbd5e1', boxShadow: '0 2px 6px rgba(0,0,0,0.03)' }}>
+                    <div style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Ditolak (Rejected)</div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#dc2626', margin: '4px 0' }}>{rejectedCount} Record</div>
+                    <div style={{ fontSize: '0.8rem', color: '#64748b' }}>Tidak Memenuhi Syarat</div>
+                  </div>
+                </div>
+
+                {/* Filter Controls Card */}
+                <div className="card" style={{ background: '#ffffff', padding: '20px', borderRadius: '10px', border: '1px solid #cbd5e1', marginBottom: '24px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', alignItems: 'end' }}>
+                    
+                    {/* Dropdown Periode */}
+                    <div>
+                      <label style={{ fontSize: '0.85rem', fontWeight: 700, color: '#334155', display: 'block', marginBottom: '6px' }}>Periode (Tahun & Bulan)</label>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <select 
+                          value={reportMonthFilter.year}
+                          onChange={(e) => {
+                            const newY = e.target.value;
+                            setReportMonthFilter(prev => ({ ...prev, year: newY }));
+                            fetchApplications(newY, reportMonthFilter.month);
+                          }}
+                          style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.88rem', flex: 1 }}
+                        >
+                          {reportYearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+                        </select>
+
+                        <select 
+                          value={reportMonthFilter.month}
+                          onChange={(e) => {
+                            const newM = e.target.value;
+                            setReportMonthFilter(prev => ({ ...prev, month: newM }));
+                            fetchApplications(reportMonthFilter.year, newM);
+                          }}
+                          style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.88rem', flex: 1 }}
+                        >
+                          {reportMonthOptions.map(m => <option key={m.code} value={m.code}>{m.name}</option>)}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Filter Status */}
+                    <div>
+                      <label style={{ fontSize: '0.85rem', fontWeight: 700, color: '#334155', display: 'block', marginBottom: '6px' }}>Status Pengajuan</label>
+                      <select 
+                        value={reportStatusFilter}
+                        onChange={(e) => {
+                          setReportStatusFilter(e.target.value);
+                        }}
+                        style={{ width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.88rem' }}
+                      >
+                        <option value="ALL">-- Semua Status --</option>
+                        <option value="SUBMITTED">SUBMITTED (Diajukan)</option>
+                        <option value="APPROVED">APPROVED (Disetujui)</option>
+                        <option value="DISBURSED">DISBURSED (Dicairkan)</option>
+                        <option value="REJECTED">REJECTED (Ditolak)</option>
+                      </select>
+                    </div>
+
+                    {/* Input Search NIK / Employee ID */}
+                    <div>
+                      <label style={{ fontSize: '0.85rem', fontWeight: 700, color: '#334155', display: 'block', marginBottom: '6px' }}>Cari NIK / Member No</label>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <input 
+                          type="text"
+                          value={reportMemberSearchQuery}
+                          onChange={(e) => setReportMemberSearchQuery(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              setReportPage(1);
+                              fetchApplications(reportMonthFilter.year, reportMonthFilter.month, reportMemberSearchQuery);
+                            }
+                          }}
+                          placeholder="Ketik NIK / App No..."
+                          style={{ width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.88rem' }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReportPage(1);
+                            fetchApplications(reportMonthFilter.year, reportMonthFilter.month, reportMemberSearchQuery);
+                          }}
+                          style={{ padding: '8px 14px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.88rem' }}
+                        >
+                          🔍 Cari
+                        </button>
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+              </div>
+
+              {/* Data Table */}
+              <div className="card" style={{ background: '#ffffff', padding: '20px', borderRadius: '10px', border: '1px solid #cbd5e1' }}>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                    <thead>
+                      <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                        <th style={{ padding: '10px', textAlign: 'center', color: '#475569', whiteSpace: 'nowrap', width: '50px' }}>No.</th>
+                        <th style={{ padding: '10px', textAlign: 'left', color: '#475569', whiteSpace: 'nowrap' }}>No. Pengajuan</th>
+                        <th style={{ padding: '10px', textAlign: 'left', color: '#475569', whiteSpace: 'nowrap' }}>Tanggal</th>
+                        <th style={{ padding: '10px', textAlign: 'left', color: '#475569', whiteSpace: 'nowrap' }}>NIK / Employee ID</th>
+                        <th style={{ padding: '10px', textAlign: 'right', color: '#475569', whiteSpace: 'nowrap' }}>Nominal Pengajuan</th>
+                        <th style={{ padding: '10px', textAlign: 'right', color: '#475569', whiteSpace: 'nowrap' }}>Nominal Disetujui</th>
+                        <th style={{ padding: '10px', textAlign: 'center', color: '#475569', whiteSpace: 'nowrap' }}>Tenor</th>
+                        <th style={{ padding: '10px', textAlign: 'right', color: '#475569', whiteSpace: 'nowrap' }}>Angsuran / Bln</th>
+                        <th style={{ padding: '10px', textAlign: 'center', color: '#475569', whiteSpace: 'nowrap' }}>Status</th>
+                        <th className="no-print" style={{ padding: '10px', textAlign: 'center', color: '#475569', whiteSpace: 'nowrap' }}>Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginatedReportApps.length === 0 ? (
+                        <tr>
+                          <td colSpan="10" style={{ padding: '32px', textAlign: 'center', color: '#64748b' }}>
+                            📭 Tidak ada data pengajuan pinjaman untuk periode dan filter yang dipilih.
+                          </td>
+                        </tr>
+                      ) : (
+                        paginatedReportApps.map((app, idx) => {
+                          const statusColor = 
+                            app.Status === 'DISBURSED' ? { bg: '#dcfce7', fg: '#15803d' } :
+                            app.Status === 'APPROVED' ? { bg: '#e0f2fe', fg: '#0369a1' } :
+                            app.Status === 'SUBMITTED' ? { bg: '#fef3c7', fg: '#b45309' } :
+                            { bg: '#fee2e2', fg: '#b91c1c' };
+
+                          return (
+                            <tr key={app.ApplicationNo} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                              <td style={{ padding: '10px', textAlign: 'center', color: '#475569', fontWeight: 600 }}>
+                                {startIndex + idx + 1}
+                              </td>
+                              <td style={{ padding: '10px', fontWeight: 'bold', fontFamily: 'monospace', color: '#0f172a' }}>
+                                #{app.ApplicationNo}
+                              </td>
+                              <td style={{ padding: '10px', color: '#475569', whiteSpace: 'nowrap' }}>
+                                {app.SubmissionDate ? new Date(app.SubmissionDate).toLocaleDateString('id-ID') : '-'}
+                              </td>
+                              <td style={{ padding: '10px', fontWeight: 600, color: '#1e293b' }}>
+                                {app.MemberNo}
+                              </td>
+                              <td style={{ padding: '10px', textAlign: 'right', fontWeight: 600, color: '#0f172a' }}>
+                                Rp {Math.round(app.RequestedAmount || 0).toLocaleString('id-ID')}
+                              </td>
+                              <td style={{ padding: '10px', textAlign: 'right', fontWeight: 700, color: '#047857' }}>
+                                Rp {Math.round(app.ApprovedAmount || app.RequestedAmount || 0).toLocaleString('id-ID')}
+                              </td>
+                              <td style={{ padding: '10px', textAlign: 'center', color: '#475569' }}>
+                                {app.Tenor} Bln
+                              </td>
+                              <td style={{ padding: '10px', textAlign: 'right', fontWeight: 600, color: '#2563eb' }}>
+                                Rp {Math.round(app.TotalInstallment || 0).toLocaleString('id-ID')}
+                              </td>
+                              <td style={{ padding: '10px', textAlign: 'center' }}>
+                                <span style={{ padding: '4px 10px', borderRadius: '12px', background: statusColor.bg, color: statusColor.fg, fontWeight: 'bold', fontSize: '0.75rem' }}>
+                                  {app.Status}
+                                </span>
+                              </td>
+                              <td className="no-print" style={{ padding: '10px', textAlign: 'center' }}>
+                                <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                                  {(app.Status === 'APPROVED' || app.Status === 'DISBURSED') && (
+                                    <button 
+                                      onClick={() => handlePrintContract(app)}
+                                      style={{ padding: '3px 8px', background: '#0f172a', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                      title="Cetak Kontrak"
+                                    >
+                                      📄 Kontrak
+                                    </button>
+                                  )}
+                                  <button 
+                                    onClick={() => handleOpenTracking(app.ApplicationNo)}
+                                    style={{ padding: '3px 8px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                    title="Lihat Tracking Status"
+                                  >
+                                    📜 Track
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination Controls - Disembunyikan saat cetak */}
+                <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', fontSize: '0.85rem', color: '#475569' }}>
+                  <span>Halaman <strong>{reportPage}</strong> dari <strong>{totalReportPages}</strong> ({filteredReportApps.length} Data)</span>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      disabled={reportPage <= 1}
+                      onClick={() => setReportPage(prev => Math.max(prev - 1, 1))}
+                      style={{ padding: '5px 12px', background: reportPage <= 1 ? '#e2e8f0' : '#0284c7', color: reportPage <= 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: reportPage <= 1 ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+                    >
+                      ◀ Prev
+                    </button>
+                    <button
+                      disabled={reportPage >= totalReportPages}
+                      onClick={() => setReportPage(prev => Math.min(prev + 1, totalReportPages))}
+                      style={{ padding: '5px 12px', background: reportPage >= totalReportPages ? '#e2e8f0' : '#0284c7', color: reportPage >= totalReportPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: reportPage >= totalReportPages ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+                    >
+                      Next ▶
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+          {!isReportTab() && activeTab !== 'dashboard' && activeTab !== 'pengajuan' && activeTab !== 'pinjaman' && activeTab !== 'parameters' && activeTab !== 'master' && activeTab !== 'approval' && activeTab !== 'disbursement' && activeTab !== 'payroll' && activeTab !== 'payroll-reconciliation' && activeTab !== 'manual-repayment' && activeTab !== 'products' && activeTab !== 'report-loan-applications' && !activeTab.startsWith('master-') && (
             <div className="card">
               <h2>Module: {visibleMenus.find(m => m.path === activeTab)?.title || activeTab}</h2>
               <p style={{ marginTop: '16px', color: '#64748B' }}>
@@ -3637,7 +4334,7 @@ function App() {
       {/* LIMS Style Riwayat Status / Loan Tracking Modal */}
       {trackingModalOpen && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
-          <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '24px', width: '90%', maxWidth: '850px', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)' }}>
+          <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '24px', width: '95%', maxWidth: '1200px', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', paddingBottom: '12px', borderBottom: '2px solid #e2e8f0' }}>
               <h2 style={{ margin: 0, fontSize: '1.25rem', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 📜 Riwayat Status Pengajuan Pinjaman <span style={{ color: 'var(--primary-blue)', fontFamily: 'monospace' }}>#{trackingAppNo}</span>
@@ -3648,32 +4345,46 @@ function App() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
               <thead>
                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569' }}>Tanggal</th>
-                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569' }}>Status</th>
-                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569' }}>User</th>
-                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569' }}>SLA (Durasi)</th>
-                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569' }}>Catatan</th>
-                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569' }}>IP Address</th>
-                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569' }}>User Agent</th>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569', whiteSpace: 'nowrap' }}>Tanggal</th>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569', whiteSpace: 'nowrap' }}>Status</th>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569', whiteSpace: 'nowrap' }}>Employee ID</th>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569', whiteSpace: 'nowrap' }}>Nama</th>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569', whiteSpace: 'nowrap' }}>SLA (Durasi)</th>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569', minWidth: '260px' }}>Catatan</th>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569', whiteSpace: 'nowrap' }}>IP Address</th>
+                  <th style={{ padding: '10px', textAlign: 'left', color: '#475569', whiteSpace: 'nowrap' }}>User Agent</th>
                 </tr>
               </thead>
               <tbody>
                 {trackingList.length === 0 ? (
-                  <tr><td colSpan="7" style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>Belum ada catatan riwayat status.</td></tr>
+                  <tr><td colSpan="8" style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>Belum ada catatan riwayat status.</td></tr>
                 ) : (
                   trackingList.map(t => (
                     <tr key={t.ID} style={{ borderBottom: '1px solid #f1f5f9' }}>
                       <td style={{ padding: '8px 10px', color: '#334155', whiteSpace: 'nowrap' }}>{formatDate(t.ActionDate)}</td>
-                      <td style={{ padding: '8px 10px' }}>
+                      <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
                         <span className={getStatusBadge(t.Status)} style={{ backgroundColor: t.Status === 'REVISION_REQUIRED' ? '#f59e0b' : undefined, fontSize: '0.75rem' }}>
                           {t.Status === 'REVISION_REQUIRED' ? 'REVISI' : t.Status}
                         </span>
                       </td>
-                      <td style={{ padding: '8px 10px', fontWeight: 600, color: '#1e293b' }}>{t.UserName || t.UserID}</td>
-                      <td style={{ padding: '8px 10px', fontFamily: 'monospace', color: '#2563eb', fontWeight: 600 }}>{t.SLADuration || '-'}</td>
-                      <td style={{ padding: '8px 10px', color: '#475569' }}>{t.Notes || '-'}</td>
-                      <td style={{ padding: '8px 10px', fontFamily: 'monospace', fontSize: '0.8rem', color: '#64748b' }}>{t.IPAddress || '127.0.0.1'}</td>
-                      <td style={{ padding: '8px 10px', fontSize: '0.8rem', color: '#64748b', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.UserAgent || 'Chrome'}</td>
+                      <td style={{ padding: '8px 10px', fontWeight: 600, color: '#0f172a', whiteSpace: 'nowrap' }}>{t.UserID || t.user_id || '-'}</td>
+                      <td style={{ padding: '8px 10px', fontWeight: 600, color: '#1e293b', whiteSpace: 'nowrap' }}>{t.UserName || t.user_name || '-'}</td>
+                      <td style={{ padding: '8px 10px', fontFamily: 'monospace', color: '#2563eb', fontWeight: 600, whiteSpace: 'nowrap' }}>{t.SLADuration || '-'}</td>
+                      <td style={{ padding: '8px 10px', color: '#475569', minWidth: '260px', maxWidth: '450px' }}>
+                        <div style={{
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          lineHeight: '1.35',
+                          wordBreak: 'break-word'
+                        }}>
+                          {t.Notes || '-'}
+                        </div>
+                      </td>
+                      <td style={{ padding: '8px 10px', fontFamily: 'monospace', fontSize: '0.8rem', color: '#64748b', whiteSpace: 'nowrap' }}>{t.IPAddress || '127.0.0.1'}</td>
+                      <td style={{ padding: '8px 10px', fontSize: '0.8rem', color: '#64748b', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.UserAgent || 'Chrome'}</td>
                     </tr>
                   ))
                 )}

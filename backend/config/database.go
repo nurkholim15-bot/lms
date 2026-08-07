@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 
+	"lms-backend/utils"
+
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -18,8 +20,23 @@ func ConnectDatabase() {
 	host := os.Getenv("DB_HOST")
 	port := os.Getenv("DB_PORT")
 	user := os.Getenv("DB_USER")
-	password := os.Getenv("DB_PASSWORD")
 	dbname := os.Getenv("DB_NAME")
+
+	// Gunakan DB_PASSWORD_ENCRYPTED jika tersedia, fallback ke DB_PASSWORD biasa
+	password := os.Getenv("DB_PASSWORD")
+	encryptedPassword := strings.TrimSpace(os.Getenv("DB_PASSWORD_ENCRYPTED"))
+	if encryptedPassword != "" {
+		secretKey := os.Getenv("JWT_SECRET")
+		if secretKey == "" {
+			log.Fatal("GAGAL: DB_PASSWORD_ENCRYPTED ditemukan tapi JWT_SECRET kosong di file .env")
+		}
+		decrypted, err := utils.DecryptAES(encryptedPassword, secretKey)
+		if err != nil {
+			log.Fatalf("GAGAL mendekripsi DB_PASSWORD_ENCRYPTED: %v", err)
+		}
+		password = decrypted
+		log.Println("Database: Menggunakan password terenkripsi (DB_PASSWORD_ENCRYPTED).")
+	}
 
 	if host == "" {
 		log.Println("Database configuration not fully provided, skipping DB connection for now.")
@@ -41,11 +58,16 @@ func ConnectDatabase() {
 		gormLogger = logger.Default.LogMode(logger.Silent) // Off
 	}
 
+	// Ambil schema dari environment, default ke "lms_sch"
+	schemaName := os.Getenv("DB_SCHEMA")
+	if schemaName == "" {
+		schemaName = "lms_sch"
+	}
+
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: gormLogger,
-		// Force GORM to use the lms_sch schema by default
 		NamingStrategy: schema.NamingStrategy{
-			TablePrefix:   "lms_sch.",
+			TablePrefix:   schemaName + ".",
 			SingularTable: false,
 		},
 	})
@@ -57,3 +79,4 @@ func ConnectDatabase() {
 	DB = db
 	log.Println("Database connection successfully established.")
 }
+

@@ -154,6 +154,33 @@ D:\Data_NK\Project5\LMS\
 - **User:** `admin_lms`
 - **Table Prefix:** semua tabel di-prefix `lms_sch.` via GORM `NamingStrategy`
 
+### Create User `lms_app` & Grant Privileges
+
+```sql
+-- 1. Buat user (role) dengan password yang sama seperti yang dipakai di .env
+CREATE ROLE lms_app WITH LOGIN PASSWORD 'Nkl@130200';
+
+-- 2. Izinkan koneksi ke database
+GRANT CONNECT ON DATABASE lms_db TO lms_app;
+
+-- 3. Izinkan penggunaan schema lms_sch
+GRANT USAGE ON SCHEMA lms_sch TO lms_app;
+
+-- 4. Beri hak akses pada semua tabel yang sudah ada
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA lms_sch TO lms_app;
+
+-- 5. Beri hak akses pada semua sequence (auto‑increment)
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA lms_sch TO lms_app;
+
+-- 6. Pastikan tabel/sequence yang dibuat di masa depan otomatis memiliki hak yang sama
+ALTER DEFAULT PRIVILEGES IN SCHEMA lms_sch
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO lms_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA lms_sch
+  GRANT USAGE, SELECT ON SEQUENCES TO lms_app;
+```
+
+> **Catatan:** Pastikan password di atas sama dengan nilai `DB_PASSWORD` (atau gunakan `DB_PASSWORD_ENCRYPTED` bersama `JWT_SECRET`). Setelah menjalankan perintah ini, restart aplikasi LMS untuk memastikan user dapat mengakses schema `lms_sch`.
+
 ### Daftar Tabel
 
 #### Master Data
@@ -244,6 +271,23 @@ Cache    →  in-memory untuk loan_products dan global_parameters
 | `GET` | `/api/health` | Health check backend |
 | `POST` | `/api/karisma/login` | Login (admin / admin123) |
 | `GET` | `/api/user-info/:employee_id` | Info user berdasarkan employee_id |
+| `GET` | `/api/dashboard/summary` | Summary metriks real-time (Available Limit, Total Hutang, Pinjaman Aktif, & 5 Pinjaman Terbaru) |
+
+##### Kueri & Mesin Kalkulasi Real-Time Dashboard:
+1. **Plafon Kredit Maksimum (Credit Limit)**:  
+   Mengkalkulasi secara presisi menggunakan **Rumus Resmi LMS** dari Cache `paramRepo.FindByKey("LOAN_LIMIT_FORMULA")` (`(DAY/30) * SALARY * 0.5`) dan dibatasi oleh Batas Maksimum Kategori (`c.max_limit` pada `lms_sch.employee_categories`):
+   - **Anggota (Individu)**: `calculateLMSCreditLimitFromCache(employee_id)` $\rightarrow$ Mengevaluasi `LOAN_LIMIT_FORMULA` dari cache dengan parameter `SALARY` dan `DAY`, dibatasi oleh `category.max_limit`.
+   - **Admin / HRD (Global)**: Membaca parameter `GLOBAL_CREDIT_LIMIT` langsung dari in-memory cache `paramRepo.FindByKey("GLOBAL_CREDIT_LIMIT")` tanpa kueri SQL berulang-ulang.
+   - **Available Credit Limit**: $\text{Credit Limit Terhitung} - \text{Total Sisa Hutang}$.
+   - **Logging**: Setiap pemanggilan endpoint ini mencetak log resmi pada console backend:  
+     `[DASHBOARD-SUMMARY] UserID: 10101 | Role: 'admin' | HighPriv: true | Formula: 'GLOBAL_CREDIT_LIMIT (CACHE)' | CreditLimit (CL): Rp 5000000000.00 | TotalDebt: Rp 0.00 | AvailableLimit: Rp 5000000000.00`
+   - **Sinkronisasi Reaktif Initial Load**: `useEffect` React dikonfigurasi mereaksi perubahan `[activeTab, currentUser, userInfo, roleId, realRoleName]` sehingga data real-time langsung di-fetch otomatis begitu autentikasi user siap tanpa perlu refresh manual.
+2. **Total Pinjaman Aktif (Count)**:  
+   `SELECT COUNT(*) FROM lms_sch.loan_applications WHERE status IN ('DISBURSED', 'APPROVED')`
+3. **Total Sisa Hutang Real-Time (Termasuk Angsuran / Pembayaran Parsial)**:  
+   `SELECT COALESCE(SUM(GREATEST(0, s.principal - COALESCE(s.amount_paid, 0))), 0) FROM lms_sch.loan_schedules s JOIN lms_sch.loans l ON s.loan_no = l.loan_no WHERE l.status IN ('DISBURSED', 'APPROVED', 'ACTIVE') AND s.status != 'PAID'`
+4. **5 Pinjaman Terbaru**:  
+   `SELECT application_no, member_no, product_id, submission_date, requested_amount, tenor, status FROM lms_sch.loan_applications ORDER BY created_at DESC LIMIT 5`
 
 #### Master Data
 | Method | Endpoint | Deskripsi |
@@ -865,17 +909,163 @@ Next GET  → cache miss → DB reload → ProductCache.Set()
 
 File: `backend/.env`
 
-| Variable | Nilai | Deskripsi |
+| Variable | Nilai Contoh | Deskripsi |
 |---|---|---|
 | `PORT` | `8086` | Port API server |
 | `APP_ENV` | `development` | Environment mode |
 | `DB_HOST` | `localhost` | Host PostgreSQL |
 | `DB_PORT` | `5433` | Port PostgreSQL |
 | `DB_USER` | `admin_lms` | Username database |
-| `DB_PASSWORD` | `Nkl@130200` | Password database |
+| `DB_PASSWORD` | *(kosong jika pakai enkripsi)* | Password plain-text (fallback) |
+| `DB_PASSWORD_ENCRYPTED` | `D9M/DJaw9Hz...` | Password database terenkripsi AES-256 |
 | `DB_NAME` | `lms_db` | Nama database |
+| `JWT_SECRET` | `LMS_K0pK4r4_S3cr3t...` | Kunci enkripsi/dekripsi password DB |
+| `ALLOWED_ORIGINS` | `http://lims.local:3000,https://localhost` | Daftar origin terpilih yang diizinkan CORS |
+| `HIGH_PRIVILEGE_ROLES` | `1,3,admin,hrd` | Daftar ID/Nama role yang memiliki hak akses seluruh pinjaman |
 | `KARISMA_API_URL` | `http://localhost:8086` | URL simulator Karisma |
 | `TRACE_LEVEL` | `3` | SQL log level (0=off, 1=warn, 3=detail) |
+
+> **Catatan Keamanan:** Jika `DB_PASSWORD_ENCRYPTED` terisi, sistem akan otomatis mendekripsi menggunakan `JWT_SECRET`. Jika kosong, sistem akan menggunakan `DB_PASSWORD` biasa sebagai *fallback*.
+
+---
+
+### 11.1 Membuat JWT_SECRET
+
+`JWT_SECRET` adalah kunci rahasia yang digunakan untuk **mengenkripsi dan mendekripsi password database**. Kunci ini harus:
+- **Panjang** minimal 32 karakter
+- **Acak** dan tidak bisa ditebak
+- **Konsisten** — kunci yang dipakai enkripsi harus sama dengan yang dipakai dekripsi
+- **Rahasia** — jangan di-*commit* ke Git atau dibagikan sembarangan
+
+#### Cara Generate JWT_SECRET
+
+**Pilihan 1 — OpenSSL di terminal WSL/Linux (Recommended):**
+```bash
+openssl rand -hex 32
+# Contoh output: a3f9c2d81b7e4506c0e2f3a8d1b9c7e4a5f6d2b8c1e0f3a7b4d9c6e2f1a0b5d8
+```
+
+**Pilihan 2 — Base64 random:**
+```bash
+openssl rand -base64 48
+# Contoh output: X9kLm3pQr7sBvN2wA1jH5tYu8eZcF4dG6oIqK0nM+WvR=
+```
+
+**Pilihan 3 — Random string alphanumeric:**
+```bash
+cat /dev/urandom | tr -dc 'a-zA-Z0-9!@#$%^&*' | head -c 48
+```
+
+#### Workflow Lengkap Setup Enkripsi DB Password
+
+```
+# Langkah 1: Generate JWT_SECRET dan tambahkan ke .env
+openssl rand -hex 32
+# → Salin hasilnya sebagai nilai JWT_SECRET di backend/.env
+
+# Langkah 2: Generate encrypted password dari password DB asli
+go run generate_db_password.go "PasswordDBAnda"
+# → Salin output (string panjang) sebagai nilai DB_PASSWORD_ENCRYPTED di backend/.env
+
+# Langkah 3: Kosongkan DB_PASSWORD di .env (opsional, untuk keamanan)
+# DB_PASSWORD=
+
+# Langkah 4: Restart LMS — log akan tampil:
+# "Database: Menggunakan password terenkripsi (DB_PASSWORD_ENCRYPTED)."
+```
+
+> **⚠️ PENTING:** Simpan nilai `JWT_SECRET` di tempat yang aman (misalnya *password manager*). Jika hilang, Anda **tidak bisa mendekripsi** password DB yang sudah terenkripsi dan harus mengulang proses enkripsi dari awal.
+
+---
+
+### 11.2 Konfigurasi CORS (ALLOWED_ORIGINS) & Security Proxies
+
+Variabel `ALLOWED_ORIGINS` di file `backend/.env` digunakan untuk membatasi domain/origin mana saja yang diizinkan mengakses API LMS Backend melalui Cross-Origin Resource Sharing (CORS).
+
+#### Contoh Konfigurasi di `backend/.env`:
+```env
+ALLOWED_ORIGINS=http://lims.local:3000,http://lims.local:8082,http://lims.local:8087,https://lims.local,http://localhost,https://localhost,capacitor://localhost
+```
+
+#### Cara Kerja di Backend (`main.go`):
+1. **Membaca Allowed Origins**: Middleware membaca string `ALLOWED_ORIGINS` dari `.env` dan memisahkan setiap origin berdasarkan tanda koma (`,`).
+2. **Dynamic Origin Matching**:
+   - Jika `Origin` pemanggil ada dalam daftar (misal `https://localhost:3005` atau `https://lims.local`), backend merespons dengan header:
+     - `Access-Control-Allow-Origin: <origin_pemanggil>`
+     - `Vary: Origin`
+     - `Access-Control-Allow-Credentials: true`
+   - Jika request berasal dari domain luar yang tidak terdaftar, header `Access-Control-Allow-Origin` tidak dikirim, sehingga browser akan **memblokir** request tersebut secara otomatis.
+   - Jika `ALLOWED_ORIGINS` tidak diisi (kosong), sistem fallback mengizinkan `*` untuk kemudahan pengujian di lingkungan lokal/development.
+3. **Keamanan Trusted Proxies**:
+   - Backend memanggil `_ = r.SetTrustedProxies(nil)` untuk menghilangkan peringatan `[WARNING] You trusted all proxies` dari framework Gin secara aman ketika tidak berjalan di belakang reverse proxy khusus.
+
+---
+
+### 11.3 Konfigurasi High-Privilege Roles & Proteksi Kerahasiaan Data Pinjaman
+
+Demi menjaga kerahasiaan data keuangan anggota, sistem LMS membedakan hak akses daftar pinjaman (*loan applications*) antara **User Biasa (Anggota)** dan **User High-Privilege (Admin / HRD)**.
+
+#### Parameter Konfigurasi:
+1. **Aturan di `backend/.env`**:
+   ```env
+   HIGH_PRIVILEGE_ROLES=1,3,admin,hrd
+   ```
+2. **Aturan di `lms_sch.global_parameters` (Opsional)**:
+   Key Name: `HIGH_PRIVILEGE_ROLES`  
+   Key Value: `1,3,admin,hrd`
+
+#### Aturan Akses & Workflow UI:
+1. **Initial Load (Pembukaan Tab)**:
+   - Data pinjaman **TIDAK di-load otomatis** saat tab "Daftar Pinjaman" pertama kali dibuka.
+   - Tabel menampilkan instruksi: `🔍 Silakan pilih periode & klik tombol "Cari Pinjaman" untuk menampilkan data.`
+2. **Filter Periode (Bulan & Tahun)**:
+   - Disediakan dropdown **Bulan** (01-12) dan **Tahun** (2024-2028) agar pengguna dapat melihat data pinjaman pada periode mana saja secara terstruktur.
+3. **User Biasa (Role `Anggota` / ID 2)**:
+   - Text field pencarian **pre-filled otomatis dengan Nomor Anggota / Employee ID pengguna yang sedang login** dan statusnya **Disabled / Greyed out** (tidak bisa diedit).
+   - Saat pengguna memilih periode dan meng-klik **"Cari Pinjaman"**, backend secara ketat memfilter data pinjaman hanya milik anggota tersebut (`member_no = current_user_employee_id`).
+4. **User High-Privilege (Role `Admin` ID 1 / `HRD` ID 3 / Sesuai Konfigurasi)**:
+   - Text field pencarian **Enabled** dan dapat diketik secara bebas.
+   - **Jika text field kosong** lalu diklik "Cari Pinjaman" → Menampilkan **seluruh pinjaman** semua anggota pada periode terpilih.
+   - **Jika text field diisi** (misal `10104`) lalu diklik "Cari Pinjaman" → Menampilkan pinjaman spesifik milik anggota tersebut pada periode terpilih.
+5. **Fallback Notifikasi Tabel Partisi**:
+   - Jika tabel partisi periode tidak ada atau data kosong, UI menampilkan notifikasi: `⚠️ Data pinjaman tidak ditemukan (Periode YYYY-MM)`.
+6. **Kolom Employee ID**:
+   - Tabel "Daftar Pengajuan & Pinjaman" mencantumkan kolom **Employee ID** di samping kolom No. Pengajuan untuk kejelasan identitas pemilik pinjaman.
+7. **Modal Riwayat Status Pengajuan Pinjaman (Tracking Modal)**:
+   - Kolom **Employee ID** ditambahkan tepat sebelum kolom **Nama**.
+   - Nama kolom **User** diperbarui/diubah menjadi **Nama** untuk kejelasan identitas pengguna/petugas yang melakukan aksi.
+   - Ukuran lebar modal diperluas hingga `1200px` dan kolom **Catatan** diatur dengan batas maksimal 2 baris (*line clamp*) agar tampilan ringkas dan rapi.
+8. **Filter Status Tab Approval Pengajuan Pinjaman**:
+   - Badge `STATUS AKTIF` pada box filter Verifikasi Administratif diubah secara resmi menjadi **`SUBMITTED`**.
+   - Pemanggilan API dari tab Approval dikirim dengan parameter `&status=SUBMITTED` sehingga kueri SQL yang dieksekusi ke PostgreSQL secara ketat memfilter:  
+     `SELECT * FROM "lms_sch"."loan_applications_YYYYMM" WHERE status = 'SUBMITTED' ORDER BY created_at desc`
+9. **Filter Status Tab Pencairan Dana (Disbursement Treasury)**:
+   - Pemanggilan API dari tab Pencairan Dana dikirim dengan parameter `&status=APPROVED` sehingga kueri SQL yang dieksekusi ke PostgreSQL secara ketat memfilter:  
+     `SELECT * FROM "lms_sch"."loan_applications_YYYYMM" WHERE status IN ('APPROVED') ORDER BY created_at desc`
+10. **Optimasi Performa Pengambilan Data Anggota (`/api/members/all`)**:
+    - Pemanggilan API `/api/members/all` dihilangkan pada perpindahan ke tab Approval dan Pencairan Dana sehingga tidak menjalankan kueri berat `SELECT m.member_no, COALESCE(e.employee_id...) FROM lms_sch.members LEFT JOIN lms_sch.employees`.
+11. **Pembaruan & Optimasi Tab Pelunasan Manual (`manual-repayment`)**:
+    - **Penghapusan Tabel Audit Log Pelunasan & Query `GET /api/payroll/deductions`**: Card Riwayat Audit Log (`lms_sch.payroll_deductions`) serta pemanggilan API `GET /api/payroll/deductions` pada `useEffect` tab *manual-repayment* dihapus sepenuhnya untuk membebaskan database dari *full table scan & sorting* PostgreSQL (`SELECT pd.id, pd.loan_no... FROM lms_sch.payroll_deductions... ORDER BY pd.id DESC`).
+    - **Form Lebih Besar & Lebar**: Container form dibuat menjadi layout terpusat yang luas (`maxWidth: 900px`) dengan tampilan visual yang lebih bersih dan nyaman digunakan.
+    - **Tombol Filter Eksplisit `🔍 Cari`**: Fitur pencarian anggota menggunakan tombol **`🔍 Cari`** (atau tekan `Enter`), sehingga proses ketik `employee_id` tidak lagi memicu kueri berulang (0 kueri saat pengetikan).
+    - **Penjelasan Box Pink (Early Full Settlement)**: Diberikan penjelasan eksplisit bahwa opsi centang `🔥 Pelunasan Lunas Sekaligus (Lunas Total / Early Full Settlement)` berguna untuk melunasi seluruh sisa hutang pinjaman secara permanen (misal: Karyawan Resign) hingga status menjadi **`CLOSED`**.
+    - **Auto-Generate Kuitansi Bukti Pembayaran & Nama File PDF**: Setelah tombol **`💳 Proses`** diklik dan pelunasan berhasil diproses, LMS secara otomatis menerbitkan Modal **Kuitansi Bukti Pelunasan Pinjaman**. Saat mengeklik tombol **`🖨️ Cetak Kuitansi`**, judul dokumen secara otomatis disesuaikan menjadi **`Kopkara LMS - Pelunasan Manual`** sehingga nama file PDF bawaan saat disimpan berubah menjadi **`Kopkara LMS - Pelunasan Manual.pdf`**.
+    - **Eliminasi Kueri `payroll_adjustments` & `UNION ALL` (`/api/payroll/schedules`)**: Kueri `payroll_adjustments` serta sub-kueri `UNION ALL` dihapus sepenuhnya dari endpoint `/api/payroll/schedules`. Endpoint kini 100% hanya mengeksekusi 1 kueri tunggal ke `lms_sch.loan_schedules` dengan filter `WHERE ls.status != 'PAID' AND ls.status != 'CLOSED'`, sehingga tidak ada kueri berlebih ke tabel adjustment maupun deductions.
+    - **Eliminasi Auto-Fetch `loan_schedules` pada Tab Potong Gaji (`payroll`)**: Pemanggilan otomatis `fetchPayrollSchedules()` pada `useEffect` tab *payroll* (Potong Gaji) dihapus sepenuhnya, sehingga saat membuka form Potong Gaji tidak ada kueri SQL berlebih yang mengeksekusi tabel `loan_schedules`.
+    - **Eliminasi Auto-Fetch `loan_applications` Pasca-Import CSV**: Pemanggilan `fetchApplications()` pasca-eksekusi impor CSV hasil rekonsiliasi gaji dihilangkan dari callback `App.jsx`, sehingga PostgreSQL tidak lagi mengeksekusi kueri `SELECT * FROM "lms_sch"."loan_applications_YYYYMM" ORDER BY created_at desc` saat proses impor CSV selesai.
+    - **Eliminasi Kueri `payroll_reconciliation_closings` Pasca-Adjustment**: Pemanggilan `fetchReconciliationStatus()` pasca-eksekusi simpan adjustment (`/api/payroll/adjust`) dihilangkan dari `App.jsx`, sehingga PostgreSQL tidak lagi mengeksekusi kueri `SELECT ... FROM lms_sch.payroll_reconciliation_closings WHERE period = '2026-08' LIMIT 1` saat adjustment selesai disimpan.
+    - **Pengurutan Laporan Pengajuan (`loan_applications`) Berdasarkan Employee ID / Member No**: Kueri pengajuan pinjaman pada `application_repository.go` diubah urutannya menjadi `ORDER BY member_no ASC, created_at DESC`, sehingga laporan dan daftar pengajuan pinjaman diurutkan secara berurutan sesuai NIK/ID Karyawan.
+    - **Modul Resmi Laporan Pengajuan Pinjaman (`report-loan-applications`) & Layout Cetak PDF**: Modul UI lengkap untuk *Laporan Pengajuan Pinjaman* resmi diaktifkan di frontend (`App.jsx`). Dilengkapi penyesuaian layout cetak profesional:
+      1. Header cetak dengan Logo Gambar yang dibaca secara dinamis dari `/frontend/public/<nama file>` berdasarkan parameter `LMS_Title` (default: `kopkara.jfif`).
+      2. Judul utama laporan (H1) **`Laporan loan periode [NamaBulan] [Tahun]`** diletakkan rapat kiri (*left-aligned*) berdampingan di sebelah kanan logo, menggantikan judul default sebelumnya.
+      3. Format Tanggal Cetak lengkap beserta jam: **`Tanggal Cetak: 7 Agustus 2026 20:18:10`** (format: `DD MMMM YYYY HH:mm:ss`).
+      4. Pemeliharaan penomoran halaman resmi browser (*"Halaman X dari Y"*) dan judul file default PDF (**`Laporan loan periode [NamaBulan] [Tahun].pdf`**) dengan margin `@page { margin: 10mm; }`.
+      5. Garis pembatas tebal (`3.5px solid #0A2540`) di bawah header cetak.
+      6. Menyembunyikan header navigasi, card metrics summary, dan filter kontrol saat dicetak (`@media print` / `.no-print`).
+      7. Penambahan kolom nomor urut **`No.`** (1, 2, 3...) di sebelah kiri sebelum kolom *No. Pengajuan*.
+      8. Penghapusan kolom *Catatan* dari tabel detail.
+    - **Database Index `application_no` (`lms_sch.loan_trackings`)**: Tag GORM `gorm:"column:application_no;index"` dikonfigurasi pada `LoanTracking` struct. Seluruh eksekusi DDL & Seeding programmatic dari backend startup telah dihapus sepenuhnya sesuai arahan user.
+    - **Penamaan Tombol**: Tombol eksekusi resmi diubah namanya menjadi **`💳 Proses`**.
 
 ---
 

@@ -20,12 +20,40 @@ func NewApplicationHandler(usecase usecases.ApplicationUseCase) *ApplicationHand
 func (h *ApplicationHandler) GetAll(c *gin.Context) {
 	period := c.Query("period")
 	status := c.Query("status")
-	apps, err := h.usecase.GetApplicationsByPeriodAndStatus(period, status)
+
+	memberNoStr := c.Query("member_no")
+	if memberNoStr == "" {
+		memberNoStr = c.Query("employee_id")
+	}
+	var memberNo int64
+	if memberNoStr != "" {
+		memberNo, _ = strconv.ParseInt(memberNoStr, 10, 64)
+	}
+
+	roleId := c.Query("role_id")
+	if roleId == "" {
+		roleId = c.Query("role")
+	}
+
+	userEmpIdStr := c.Query("user_employee_id")
+	if userEmpIdStr == "" {
+		userEmpIdStr = c.Query("current_user_id")
+	}
+	var userEmpId int64
+	if userEmpIdStr != "" {
+		userEmpId, _ = strconv.ParseInt(userEmpIdStr, 10, 64)
+	}
+
+	apps, err := h.usecase.GetApplicationsFiltered(period, status, memberNo, roleId, userEmpId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": apps})
+
+	c.JSON(http.StatusOK, gin.H{
+		"data":              apps,
+		"is_high_privilege": h.usecase.IsHighPrivilegeRole(roleId),
+	})
 }
 
 func (h *ApplicationHandler) Simulate(c *gin.Context) {

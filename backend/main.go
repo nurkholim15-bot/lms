@@ -16,14 +16,122 @@ import (
 	"lms-backend/repositories"
 	"lms-backend/usecases"
 
+	"github.com/Knetic/govaluate"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"gorm.io/gorm"
 )
 
-// CORSMiddleware enables cross-origin resource sharing
+// calculateLMSCreditLimitFromCache calculates employee credit limit using exact LMS formula from paramRepo cache
+func calculateLMSCreditLimitFromCache(db *gorm.DB, paramRepo repositories.ParameterRepository, empId int64) float64 {
+	if empId <= 0 {
+		log.Printf("[CALCULATE-CL-STEP] Employee ID is invalid (%d), returning fallback Rp 15.000.000", empId)
+		return 15000000
+	}
+
+	type EmpCat struct {
+		Salary   float64
+		MaxLimit float64
+	}
+	var res EmpCat
+	err := db.Raw(`
+		SELECT COALESCE(e.salary, 0) as salary, COALESCE(c.max_limit, 15000000) as max_limit
+		FROM lms_sch.employees e
+		LEFT JOIN lms_sch.employee_categories c ON e.category_code = c.category_code
+		WHERE e.employee_id = ? LIMIT 1
+	`, empId).Scan(&res).Error
+
+	if err != nil || res.MaxLimit <= 0 {
+		res.MaxLimit = 15000000
+	}
+
+	// Read LOAN_LIMIT_FORMULA directly from paramRepo cache
+	formulaStr := "(DAY/30) * SALARY * 0.5"
+	if p, errP := paramRepo.FindByKey("LOAN_LIMIT_FORMULA"); errP == nil && strings.TrimSpace(p.KeyValue) != "" {
+		formulaStr = strings.TrimSpace(p.KeyValue)
+	}
+
+	salary := res.Salary
+	if salary <= 0 {
+		salary = 10000000
+	}
+	currentDay := float64(time.Now().Day())
+
+	params := map[string]interface{}{
+		"SALARY": salary,
+		"salary": salary,
+		"DAY":    currentDay,
+		"Day":    currentDay,
+		"day":    currentDay,
+	}
+
+	limitVal := res.MaxLimit
+	rawFormulaResult := 0.0
+
+	expr, errExpr := govaluate.NewEvaluableExpression(formulaStr)
+	if errExpr == nil {
+		evalRes, errEval := expr.Evaluate(params)
+		if errEval == nil {
+			if val, ok := evalRes.(float64); ok && val > 0 {
+				rawFormulaResult = val
+				limitVal = val
+			}
+		} else {
+			log.Printf("[CALCULATE-CL-ERROR] Error evaluating formula '%s': %v", formulaStr, errEval)
+		}
+	} else {
+		log.Printf("[CALCULATE-CL-ERROR] Error parsing formula '%s': %v", formulaStr, errExpr)
+	}
+
+	log.Printf("[CALCULATE-CL-STEP 1] EmployeeID: %d | Salary: Rp %.2f | Current Day: %.0f", empId, salary, currentDay)
+	log.Printf("[CALCULATE-CL-STEP 2] Formula: '%s' => Result: Rp %.2f", formulaStr, rawFormulaResult)
+	log.Printf("[CALCULATE-CL-STEP 3] Category Max Limit: Rp %.2f", res.MaxLimit)
+
+	if res.MaxLimit > 0 && limitVal > res.MaxLimit {
+		log.Printf("[CALCULATE-CL-STEP 4] Formula result Rp %.2f exceeds Category Max Limit Rp %.2f -> Capped at Rp %.2f", rawFormulaResult, res.MaxLimit, res.MaxLimit)
+		limitVal = res.MaxLimit
+	} else {
+		log.Printf("[CALCULATE-CL-STEP 4] Final Approved Credit Limit (CL): Rp %.2f", limitVal)
+	}
+
+	return limitVal
+}
+
+// CORSMiddleware enables cross-origin resource sharing for allowed origins
 func CORSMiddleware() gin.HandlerFunc {
+	rawOrigins := os.Getenv("ALLOWED_ORIGINS")
+	var allowedOrigins []string
+	if rawOrigins != "" {
+		for _, o := range strings.Split(rawOrigins, ",") {
+			if trimmed := strings.TrimSpace(o); trimmed != "" {
+				allowedOrigins = append(allowedOrigins, trimmed)
+			}
+		}
+	}
+
 	return func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := c.Request.Header.Get("Origin")
+
+		if origin != "" {
+			if len(allowedOrigins) == 0 {
+				c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+			} else {
+				isAllowed := false
+				for _, allowed := range allowedOrigins {
+					if allowed == "*" || origin == allowed || strings.HasPrefix(origin, allowed+":") {
+						isAllowed = true
+						break
+					}
+				}
+				if isAllowed {
+					c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+					c.Writer.Header().Set("Vary", "Origin")
+				}
+			}
+		} else {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		}
+
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
@@ -46,7 +154,8 @@ func main() {
 	config.ConnectDatabase()
 
 	r := gin.Default()
-	r.Use(CORSMiddleware()) // Enable CORS for frontend
+	_ = r.SetTrustedProxies(nil) // Safe setting for trusted proxies to suppress warning
+	r.Use(CORSMiddleware())      // Enable CORS for frontend
 
 	// Custom Request Logger Middleware for complete Backend Investigation
 	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
@@ -209,6 +318,117 @@ func main() {
 		api.GET("/health", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"status": "LMS Backend is running smoothly."})
 		})
+
+		// Real-time Dashboard Summary Endpoint
+		api.GET("/dashboard/summary", func(c *gin.Context) {
+			empIDStr := strings.TrimSpace(c.Query("employee_id"))
+			roleIDStr := strings.TrimSpace(c.Query("role_id"))
+			if roleIDStr == "" {
+				roleIDStr = strings.TrimSpace(c.Query("role"))
+			}
+
+			isHighPriv := false
+			if roleIDStr == "1" || roleIDStr == "3" || strings.EqualFold(roleIDStr, "admin") || strings.EqualFold(roleIDStr, "hrd") {
+				isHighPriv = true
+			}
+
+			var totalHutang float64 = 0
+			var pinjamanAktif int64 = 0
+			var creditLimit float64 = 15000000
+			formulaUsed := "DEFAULT"
+
+			var empIdInt int64
+			if id, err := strconv.ParseInt(empIDStr, 10, 64); err == nil && id > 0 {
+				empIdInt = id
+			}
+
+			// Menentukan Credit Limit (CL) dari Cache tanpa SQL-1 Loop Karyawan
+			if isHighPriv {
+				// Untuk Admin/HRD: Membaca GLOBAL_CREDIT_LIMIT langsung dari in-memory cache paramRepo
+				creditLimit = 5000000000 // Default 5 Milyar
+				formulaUsed = "GLOBAL_CREDIT_LIMIT (CACHE)"
+				if p, errP := paramRepo.FindByKey("GLOBAL_CREDIT_LIMIT"); errP == nil && strings.TrimSpace(p.KeyValue) != "" {
+					if val, errV := strconv.ParseFloat(strings.TrimSpace(p.KeyValue), 64); errV == nil && val > 0 {
+						creditLimit = val
+					}
+				}
+			} else {
+				// Untuk User Biasa (Anggota): Hitung CL individu menggunakan LOAN_LIMIT_FORMULA dari cache paramRepo
+				creditLimit = calculateLMSCreditLimitFromCache(config.DB, paramRepo, empIdInt)
+				if p, errP := paramRepo.FindByKey("LOAN_LIMIT_FORMULA"); errP == nil {
+					formulaUsed = p.KeyValue
+				} else {
+					formulaUsed = "(DAY/30) * SALARY * 0.5"
+				}
+			}
+
+			// Hitung Pinjaman Aktif (count status DISBURSED / APPROVED)
+			queryActiveCount := "SELECT COUNT(*) FROM lms_sch.loan_applications WHERE status IN ('DISBURSED', 'APPROVED')"
+			var argsActive []interface{}
+			if !isHighPriv && empIdInt > 0 {
+				queryActiveCount += " AND (member_no = ? OR member_no IN (SELECT member_no FROM lms_sch.members WHERE employee_id = ?))"
+				argsActive = append(argsActive, empIdInt, empIdInt)
+			}
+			config.DB.Raw(queryActiveCount, argsActive...).Scan(&pinjamanAktif)
+
+			// Hitung Total Sisa Hutang Real-Time dari lms_sch.loan_schedules (termasuk pembayaran parsial)
+			querySchedDebt := `
+				SELECT COALESCE(SUM(GREATEST(0, s.principal - COALESCE(s.amount_paid, 0))), 0)
+				FROM lms_sch.loan_schedules s
+				JOIN lms_sch.loans l ON s.loan_no = l.loan_no
+				WHERE l.status IN ('DISBURSED', 'APPROVED', 'ACTIVE') AND s.status != 'PAID'
+			`
+			var argsSched []interface{}
+			if !isHighPriv && empIdInt > 0 {
+				querySchedDebt += " AND (l.member_no = ? OR l.member_no IN (SELECT member_no FROM lms_sch.members WHERE employee_id = ?))"
+				argsSched = append(argsSched, empIdInt, empIdInt)
+			}
+
+			var schedDebt float64 = 0
+			errSched := config.DB.Raw(querySchedDebt, argsSched...).Scan(&schedDebt).Error
+			if errSched == nil && schedDebt > 0 {
+				totalHutang = schedDebt
+			} else {
+				// Fallback jika loan_schedules belum di-generate: Hitung dari loan_applications
+				queryTotalHutang := "SELECT COALESCE(SUM(COALESCE(approved_amount, requested_amount)), 0) FROM lms_sch.loan_applications WHERE status IN ('DISBURSED', 'APPROVED')"
+				var argsHutang []interface{}
+				if !isHighPriv && empIdInt > 0 {
+					queryTotalHutang += " AND (member_no = ? OR member_no IN (SELECT member_no FROM lms_sch.members WHERE employee_id = ?))"
+					argsHutang = append(argsHutang, empIdInt, empIdInt)
+				}
+				config.DB.Raw(queryTotalHutang, argsHutang...).Scan(&totalHutang)
+			}
+
+			availableLimit := creditLimit - totalHutang
+			if availableLimit < 0 {
+				availableLimit = 0
+			}
+
+			// Query 5 Pinjaman Terbaru
+			queryLatest := "SELECT application_no, member_no, product_id, submission_date, requested_amount, tenor, status FROM lms_sch.loan_applications "
+			var argsLatest []interface{}
+			if !isHighPriv && empIdInt > 0 {
+				queryLatest += " WHERE (member_no = ? OR member_no IN (SELECT member_no FROM lms_sch.members WHERE employee_id = ?)) "
+				argsLatest = append(argsLatest, empIdInt, empIdInt)
+			}
+			queryLatest += " ORDER BY created_at DESC LIMIT 5"
+
+			var recentApps []models.LoanApplication
+			config.DB.Raw(queryLatest, argsLatest...).Scan(&recentApps)
+
+			// LOG CONSOLE RESMI BACKEND UNTUK DASHBOARD CREDIT LIMIT (CL)
+			log.Printf("[DASHBOARD-SUMMARY] UserID: %d | Role: '%s' | HighPriv: %t | Formula: '%s' | CreditLimit (CL): Rp %.2f | TotalDebt: Rp %.2f | AvailableLimit: Rp %.2f",
+				empIdInt, roleIDStr, isHighPriv, formulaUsed, creditLimit, totalHutang, availableLimit)
+
+			c.JSON(http.StatusOK, gin.H{
+				"credit_limit":    creditLimit,
+				"available_limit": availableLimit,
+				"total_debt":      totalHutang,
+				"active_loans":    pinjamanAktif,
+				"recent_loans":    recentApps,
+				"is_high_priv":    isHighPriv,
+			})
+		})
 		
 		// Master Data: Products
 		products := api.Group("/products")
@@ -365,16 +585,29 @@ func main() {
 				RefNo                string    `json:"ref_no"`
 			}
 			periodParam := strings.TrimSpace(c.Query("period"))
-			whereSqlLs := ""
-			whereSqlPd := ""
-			var queryParams []interface{}
+			memberNoParam := strings.TrimSpace(c.Query("member_no"))
+
+			var conditionsLs []string
+			var argsLs []interface{}
+
+			// Filter non-PAID and non-CLOSED schedules directly in SQL
+			conditionsLs = append(conditionsLs, "ls.status != 'PAID'", "ls.status != 'CLOSED'")
 
 			if periodParam != "" {
-				whereSqlLs = "WHERE ls.period = ?"
-				whereSqlPd = "WHERE pd.status = 'FAILED' AND pd.period = ?"
-				queryParams = append(queryParams, periodParam, periodParam)
-			} else {
-				whereSqlPd = "WHERE pd.status = 'FAILED'"
+				conditionsLs = append(conditionsLs, "ls.period = ?")
+				argsLs = append(argsLs, periodParam)
+			}
+
+			if memberNoParam != "" {
+				if mNo, err := strconv.ParseInt(memberNoParam, 10, 64); err == nil && mNo > 0 {
+					conditionsLs = append(conditionsLs, "(l.member_no = ? OR m.employee_id = ? OR e.employee_id = ?)")
+					argsLs = append(argsLs, mNo, mNo, mNo)
+				}
+			}
+
+			whereSqlLs := ""
+			if len(conditionsLs) > 0 {
+				whereSqlLs = "WHERE " + strings.Join(conditionsLs, " AND ")
 			}
 
 			var dtos []PayrollScheduleDTO
@@ -402,73 +635,15 @@ func main() {
 				LEFT JOIN lms_sch.members m ON l.member_no = m.member_no
 				LEFT JOIN lms_sch.employees e ON e.employee_id = l.member_no OR e.employee_id = m.employee_id
 				%s
-
-				UNION ALL
-
-				SELECT 
-					(pd.id + 999999) AS id,
-					COALESCE(pd.loan_no, 0) AS loan_no,
-					0 AS application_no,
-					0 AS member_no,
-					COALESCE(e.name, m.bank_account_name, CONCAT('Pinjaman #', pd.loan_no)) AS employee_name,
-					'SYSTEM' AS dept_no,
-					COALESCE(m.bank_account_no, '3171000000000000') AS nik,
-					pd.period,
-					0 AS installment_no,
-					pd.nominal_original AS principal,
-					0 AS interest,
-					pd.nominal_original AS total_installment,
-					0 AS amount_paid,
-					pd.nominal_original AS remaining_installment,
-					'FAILED' AS status,
-					pd.process_date AS due_date,
-					CONCAT('LMS-PAY-FAIL-', pd.id) AS ref_no
-				FROM lms_sch.payroll_deductions pd
-				LEFT JOIN lms_sch.loans l ON pd.loan_no = l.loan_no
-				LEFT JOIN lms_sch.members m ON l.member_no = m.member_no
-				LEFT JOIN lms_sch.employees e ON e.employee_id = l.member_no OR e.employee_id = m.employee_id
-				%s
-
-				ORDER BY due_date ASC, id ASC;
-			`, whereSqlLs, whereSqlPd)
-			if err := config.DB.Raw(query, queryParams...).Scan(&dtos).Error; err != nil {
+				ORDER BY ls.due_date ASC, ls.id ASC;
+			`, whereSqlLs)
+			if err := config.DB.Raw(query, argsLs...).Scan(&dtos).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
-			var adjList []struct {
-				ID             int64     `json:"id"`
-				Period         string    `json:"period"`
-				LoanNo         int64     `json:"loan_no"`
-				RefNo          string    `json:"ref_no"`
-				AdjustmentType string    `json:"adjustment_type"`
-				OriginalAmount float64   `json:"original_amount"`
-				DeductedAmount float64   `json:"deducted_amount"`
-				AdjustedAmount float64   `json:"adjusted_amount"`
-				Notes          string    `json:"notes"`
-				CreatedAt      time.Time `json:"created_at"`
-				CreatedUser    string    `json:"created_user"`
-				EmployeeName   string    `json:"employee_name"`
-				MemberNo       string    `json:"member_no"`
-			}
-			searchPeriod := periodParam
-			if searchPeriod == "" {
-				searchPeriod = "2026-08"
-			}
-			config.DB.Raw(`
-				SELECT pa.id, pa.period, pa.loan_no, pa.ref_no, pa.adjustment_type, pa.original_amount, pa.deducted_amount, pa.adjusted_amount, pa.notes, pa.created_at, pa.created_user,
-				       COALESCE(e.name, CONCAT('Member #', CAST(pa.ref_no AS VARCHAR))) as employee_name,
-				       COALESCE(CAST(l.member_no AS VARCHAR), CAST(pa.ref_no AS VARCHAR)) as member_no
-				FROM lms_sch.payroll_adjustments pa
-				LEFT JOIN lms_sch.loans l ON pa.loan_no = l.loan_no AND pa.loan_no > 0
-				LEFT JOIN lms_sch.employees e ON (CAST(l.member_no AS VARCHAR) = CAST(e.employee_id AS VARCHAR) OR CAST(e.employee_id AS VARCHAR) = CAST(pa.ref_no AS VARCHAR))
-				WHERE pa.period = ?
-				ORDER BY pa.created_at DESC
-			`, searchPeriod).Scan(&adjList)
-
 			c.JSON(http.StatusOK, gin.H{
-				"status":      "success",
-				"data":        dtos,
-				"adjustments": adjList,
+				"status": "success",
+				"data":   dtos,
 			})
 		})
 
@@ -1454,9 +1629,19 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	
-	log.Printf("Server starting on port %s", port)
-	if err := r.Run(":" + port); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+
+	certPath := os.Getenv("SSL_CERT_PATH")
+	keyPath := os.Getenv("SSL_KEY_PATH")
+
+	if certPath != "" && keyPath != "" {
+		log.Printf("Starting HTTPS server on port %s using cert %s and key %s", port, certPath, keyPath)
+		if err := r.RunTLS(":"+port, certPath, keyPath); err != nil {
+			log.Fatalf("Failed to start HTTPS server: %v", err)
+		}
+	} else {
+		log.Printf("SSL_CERT_PATH or SSL_KEY_PATH not set, falling back to HTTP on port %s", port)
+		if err := r.Run(":" + port); err != nil {
+			log.Fatalf("Failed to start HTTP server: %v", err)
+		}
 	}
 }

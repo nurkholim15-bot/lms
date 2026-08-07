@@ -14,6 +14,7 @@ type ApplicationRepository interface {
 	FindAll() ([]models.LoanApplication, error)
 	FindByPeriod(period string) ([]models.LoanApplication, error)
 	FindByPeriodAndStatus(period string, status string) ([]models.LoanApplication, error)
+	FindByPeriodStatusAndMember(period string, status string, memberNo int64) ([]models.LoanApplication, error)
 	FindByID(applicationNo int64) (models.LoanApplication, error)
 	Create(app *models.LoanApplication) error
 	Update(app *models.LoanApplication) error
@@ -39,10 +40,14 @@ func (r *applicationRepository) FindAll() ([]models.LoanApplication, error) {
 }
 
 func (r *applicationRepository) FindByPeriod(period string) ([]models.LoanApplication, error) {
-	return r.FindByPeriodAndStatus(period, "")
+	return r.FindByPeriodStatusAndMember(period, "", 0)
 }
 
 func (r *applicationRepository) FindByPeriodAndStatus(period string, status string) ([]models.LoanApplication, error) {
+	return r.FindByPeriodStatusAndMember(period, status, 0)
+}
+
+func (r *applicationRepository) FindByPeriodStatusAndMember(period string, status string, memberNo int64) ([]models.LoanApplication, error) {
 	var apps []models.LoanApplication
 	cleanPeriod := strings.TrimSpace(strings.ReplaceAll(period, "-", ""))
 	if cleanPeriod == "" {
@@ -70,7 +75,12 @@ func (r *applicationRepository) FindByPeriodAndStatus(period string, status stri
 					query = query.Where("status IN ?", statuses)
 				}
 			}
-			err := query.Order("created_at desc").Find(&apps).Error
+
+			if memberNo > 0 {
+				query = query.Where("member_no = ? OR member_no IN (SELECT member_no FROM lms_sch.members WHERE employee_id = ?)", memberNo, memberNo)
+			}
+
+			err := query.Order("member_no ASC, created_at DESC").Find(&apps).Error
 			return apps, err
 		}
 
@@ -90,7 +100,12 @@ func (r *applicationRepository) FindByPeriodAndStatus(period string, status stri
 			query = query.Where("status IN ?", statuses)
 		}
 	}
-	err := query.Order("created_at desc").Find(&apps).Error
+
+	if memberNo > 0 {
+		query = query.Where("member_no = ? OR member_no IN (SELECT member_no FROM lms_sch.members WHERE employee_id = ?)", memberNo, memberNo)
+	}
+
+	err := query.Order("member_no ASC, created_at DESC").Find(&apps).Error
 	return apps, err
 }
 

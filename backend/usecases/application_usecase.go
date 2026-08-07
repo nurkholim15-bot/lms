@@ -3,6 +3,7 @@ package usecases
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,8 @@ type ApplicationUseCase interface {
 	GetAllApplications() ([]models.LoanApplication, error)
 	GetApplicationsByPeriod(period string) ([]models.LoanApplication, error)
 	GetApplicationsByPeriodAndStatus(period string, status string) ([]models.LoanApplication, error)
+	GetApplicationsFiltered(period string, status string, memberNo int64, roleId string, userEmployeeId int64) ([]models.LoanApplication, error)
+	IsHighPrivilegeRole(roleId string) bool
 	SimulateApplication(req SubmitApplicationRequest) (SimulationResult, error)
 	SubmitApplication(req SubmitApplicationRequest) (*models.LoanApplication, error)
 	ApproveApplication(applicationNo int64, approvedAmount float64, notes string) error
@@ -185,6 +188,45 @@ func (u *applicationUseCase) SimulateApplication(req SubmitApplicationRequest) (
 		return SimulationResult{}, errors.New("product not found")
 	}
 	return u.runSimulation(req, product)
+}
+
+func (u *applicationUseCase) IsHighPrivilegeRole(roleId string) bool {
+	cleanRole := strings.TrimSpace(strings.ToLower(roleId))
+	if cleanRole == "" {
+		return false
+	}
+
+	highPrivConfig := strings.TrimSpace(os.Getenv("HIGH_PRIVILEGE_ROLES"))
+	if param, err := u.paramRepo.FindByKey("HIGH_PRIVILEGE_ROLES"); err == nil && strings.TrimSpace(param.KeyValue) != "" {
+		highPrivConfig = strings.TrimSpace(param.KeyValue)
+	}
+
+	if highPrivConfig == "" {
+		highPrivConfig = "1,3,admin,hrd"
+	}
+
+	allowedRoles := strings.Split(highPrivConfig, ",")
+	for _, r := range allowedRoles {
+		if strings.TrimSpace(strings.ToLower(r)) == cleanRole {
+			return true
+		}
+	}
+	return false
+}
+
+func (u *applicationUseCase) GetApplicationsFiltered(period string, status string, memberNo int64, roleId string, userEmployeeId int64) ([]models.LoanApplication, error) {
+	isHighPriv := u.IsHighPrivilegeRole(roleId)
+
+	targetMemberNo := memberNo
+	if !isHighPriv {
+		if userEmployeeId > 0 {
+			targetMemberNo = userEmployeeId
+		} else if memberNo > 0 {
+			targetMemberNo = memberNo
+		}
+	}
+
+	return u.appRepo.FindByPeriodStatusAndMember(period, status, targetMemberNo)
 }
 
 func (u *applicationUseCase) GetAllApplications() ([]models.LoanApplication, error) {
