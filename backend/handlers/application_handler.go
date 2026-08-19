@@ -44,7 +44,29 @@ func (h *ApplicationHandler) GetAll(c *gin.Context) {
 		userEmpId, _ = strconv.ParseInt(userEmpIdStr, 10, 64)
 	}
 
-	apps, err := h.usecase.GetApplicationsFiltered(period, status, memberNo, roleId, userEmpId)
+	limitStr := c.Query("limit")
+	offsetStr := c.Query("offset")
+	pageStr := c.Query("page")
+	pageSizeStr := c.Query("page_size")
+
+	var limit, offset int
+	if limitStr != "" {
+		limit, _ = strconv.Atoi(limitStr)
+	}
+	if offsetStr != "" {
+		offset, _ = strconv.Atoi(offsetStr)
+	}
+	if limit <= 0 && pageSizeStr != "" {
+		limit, _ = strconv.Atoi(pageSizeStr)
+	}
+	if limit > 0 && pageStr != "" {
+		p, _ := strconv.Atoi(pageStr)
+		if p > 1 {
+			offset = (p - 1) * limit
+		}
+	}
+
+	apps, err := h.usecase.GetApplicationsFiltered(period, status, memberNo, roleId, userEmpId, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

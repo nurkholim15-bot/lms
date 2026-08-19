@@ -2,6 +2,8 @@ package models
 
 import (
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // Base Model for Audit Fields
@@ -12,9 +14,9 @@ type BaseModel struct {
 	UpdatedUser *string    `gorm:"column:updated_user"`
 }
 
-// BaseModel with Soft Delete for Master Tables
+// BaseModel with Soft Delete for Master Tables & Audit Protection
 type MasterBaseModel struct {
 	BaseModel
-	DeletedAt   *time.Time `gorm:"column:deleted_at"`
-	DeletedUser *string    `gorm:"column:deleted_user"`
+	DeletedAt   gorm.DeletedAt `gorm:"column:deleted_at;index"`
+	DeletedUser *string        `gorm:"column:deleted_user"`
 }

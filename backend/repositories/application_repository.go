@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,7 +15,7 @@ type ApplicationRepository interface {
 	FindAll() ([]models.LoanApplication, error)
 	FindByPeriod(period string) ([]models.LoanApplication, error)
 	FindByPeriodAndStatus(period string, status string) ([]models.LoanApplication, error)
-	FindByPeriodStatusAndMember(period string, status string, memberNo int64) ([]models.LoanApplication, error)
+	FindByPeriodStatusAndMember(period string, status string, memberNo int64, limit int, offset int) ([]models.LoanApplication, error)
 	FindByID(applicationNo int64) (models.LoanApplication, error)
 	Create(app *models.LoanApplication) error
 	Update(app *models.LoanApplication) error
@@ -26,7 +27,7 @@ type applicationRepository struct {
 }
 
 func NewApplicationRepository(db *gorm.DB) ApplicationRepository {
-	return &applicationRepository{db}
+	return &applicationRepository{db: db}
 }
 
 func (r *applicationRepository) GetDB() *gorm.DB {
@@ -40,14 +41,14 @@ func (r *applicationRepository) FindAll() ([]models.LoanApplication, error) {
 }
 
 func (r *applicationRepository) FindByPeriod(period string) ([]models.LoanApplication, error) {
-	return r.FindByPeriodStatusAndMember(period, "", 0)
+	return r.FindByPeriodStatusAndMember(period, "", 0, 0, 0)
 }
 
 func (r *applicationRepository) FindByPeriodAndStatus(period string, status string) ([]models.LoanApplication, error) {
-	return r.FindByPeriodStatusAndMember(period, status, 0)
+	return r.FindByPeriodStatusAndMember(period, status, 0, 0, 0)
 }
 
-func (r *applicationRepository) FindByPeriodStatusAndMember(period string, status string, memberNo int64) ([]models.LoanApplication, error) {
+func (r *applicationRepository) FindByPeriodStatusAndMember(period string, status string, memberNo int64, limit int, offset int) ([]models.LoanApplication, error) {
 	var apps []models.LoanApplication
 	cleanPeriod := strings.TrimSpace(strings.ReplaceAll(period, "-", ""))
 	if cleanPeriod == "" {
@@ -80,15 +81,27 @@ func (r *applicationRepository) FindByPeriodStatusAndMember(period string, statu
 				query = query.Where("member_no = ? OR member_no IN (SELECT member_no FROM lms_sch.members WHERE employee_id = ?)", memberNo, memberNo)
 			}
 
-			err := query.Order("member_no ASC, created_at DESC").Find(&apps).Error
+			if limit > 0 {
+				query = query.Limit(limit).Offset(offset)
+			}
+
+			err := query.Order("created_at DESC, application_no DESC").Find(&apps).Error
 			return apps, err
 		}
-
-		// Partition table does not exist: return empty array immediately (NO parent table query)
-		return []models.LoanApplication{}, nil
 	}
 
+	// Dynamic fallback for main table lms_sch.loan_applications with submission_date period filter
 	query := r.db.Model(&models.LoanApplication{})
+	if cleanPeriod != "" && len(cleanPeriod) == 6 {
+		year, _ := strconv.Atoi(cleanPeriod[:4])
+		month, _ := strconv.Atoi(cleanPeriod[4:])
+		if year > 2000 && month >= 1 && month <= 12 {
+			startDate := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.Local)
+			endDate := startDate.AddDate(0, 1, 0)
+			query = query.Where("submission_date >= ? AND submission_date < ?", startDate, endDate)
+		}
+	}
+
 	if strings.TrimSpace(status) != "" && strings.TrimSpace(status) != "ALL" {
 		statuses := strings.Split(status, ",")
 		for i := range statuses {
@@ -105,7 +118,11 @@ func (r *applicationRepository) FindByPeriodStatusAndMember(period string, statu
 		query = query.Where("member_no = ? OR member_no IN (SELECT member_no FROM lms_sch.members WHERE employee_id = ?)", memberNo, memberNo)
 	}
 
-	err := query.Order("member_no ASC, created_at DESC").Find(&apps).Error
+	if limit > 0 {
+		query = query.Limit(limit).Offset(offset)
+	}
+
+	err := query.Order("submission_date DESC, application_no DESC").Find(&apps).Error
 	return apps, err
 }
 

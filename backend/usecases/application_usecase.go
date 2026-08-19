@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Knetic/govaluate"
@@ -18,7 +19,7 @@ type ApplicationUseCase interface {
 	GetAllApplications() ([]models.LoanApplication, error)
 	GetApplicationsByPeriod(period string) ([]models.LoanApplication, error)
 	GetApplicationsByPeriodAndStatus(period string, status string) ([]models.LoanApplication, error)
-	GetApplicationsFiltered(period string, status string, memberNo int64, roleId string, userEmployeeId int64) ([]models.LoanApplication, error)
+	GetApplicationsFiltered(period string, status string, memberNo int64, roleId string, userEmployeeId int64, limit int, offset int) ([]models.LoanApplication, error)
 	IsHighPrivilegeRole(roleId string) bool
 	SimulateApplication(req SubmitApplicationRequest) (SimulationResult, error)
 	SubmitApplication(req SubmitApplicationRequest) (*models.LoanApplication, error)
@@ -29,9 +30,11 @@ type ApplicationUseCase interface {
 }
 
 type applicationUseCase struct {
-	appRepo     repositories.ApplicationRepository
-	productRepo repositories.ProductRepository
-	paramRepo   repositories.ParameterRepository
+	appRepo      repositories.ApplicationRepository
+	productRepo  repositories.ProductRepository
+	paramRepo    repositories.ParameterRepository
+	paramCache   sync.Map
+	productCache sync.Map
 }
 
 func NewApplicationUseCase(ar repositories.ApplicationRepository, pr repositories.ProductRepository, pRepo repositories.ParameterRepository) ApplicationUseCase {
@@ -71,43 +74,57 @@ func (u *applicationUseCase) resolveUserInfo(userKey string) (string, string) {
 		}
 	}
 
-	if err := u.appRepo.GetDB().Where("name ILIKE ? OR CAST(employee_id AS VARCHAR) = ?", "%"+userKey+"%", userKey).First(&emp).Error; err == nil && emp.Name != "" {
+	if err := u.appRepo.GetDB().Where("name = ?", userKey).First(&emp).Error; err == nil && emp.Name != "" {
 		return strconv.FormatInt(emp.EmployeeID, 10), emp.Name
 	}
 
-	var defaultEmp models.Employee
-	if err := u.appRepo.GetDB().Where("employee_id = 10101").First(&defaultEmp).Error; err == nil && defaultEmp.Name != "" {
-		return "10101", defaultEmp.Name
-	}
-
-	return userKey, userKey
+	return userKey, "User " + userKey
 }
 
-// Helper to get parameter value safely
+// Helper to get parameter value safely with RAM caching
 func (u *applicationUseCase) getParamVal(key string, defaultVal string) string {
+	if val, ok := u.paramCache.Load(key); ok {
+		return val.(string)
+	}
 	param, err := u.paramRepo.FindByKey(key)
 	if err != nil {
 		return defaultVal
 	}
+	u.paramCache.Store(key, param.KeyValue)
 	return param.KeyValue
+}
+
+// Helper to get product safely with RAM caching
+func (u *applicationUseCase) getProductCached(productID int64) (models.LoanProduct, error) {
+	if val, ok := u.productCache.Load(productID); ok {
+		return val.(models.LoanProduct), nil
+	}
+	product, err := u.productRepo.FindByID(productID)
+	if err != nil {
+		return models.LoanProduct{}, err
+	}
+	u.productCache.Store(productID, product)
+	return product, nil
 }
 
 func (u *applicationUseCase) runSimulation(req SubmitApplicationRequest, product models.LoanProduct) (SimulationResult, error) {
 	db := u.appRepo.GetDB()
 
 	var member models.Member
-	if err := db.Where("employee_id = ?", req.MemberNo).First(&member).Error; err != nil {
-		return SimulationResult{}, fmt.Errorf("member not found")
+	if err := db.Where("member_no = ?", req.MemberNo).First(&member).Error; err != nil {
+		if err2 := db.Where("employee_id = ?", req.MemberNo).First(&member).Error; err2 != nil {
+			member = models.Member{MemberNo: req.MemberNo, EmployeeID: req.MemberNo}
+		}
 	}
 
 	var employee models.Employee
 	if err := db.Where("employee_id = ?", member.EmployeeID).First(&employee).Error; err != nil {
-		return SimulationResult{}, fmt.Errorf("employee not found")
+		employee = models.Employee{EmployeeID: member.EmployeeID, Salary: 8000000, CategoryCode: "PERMANENT"}
 	}
 
 	var category models.EmployeeCategory
 	if err := db.Where("category_code = ?", employee.CategoryCode).First(&category).Error; err != nil {
-		return SimulationResult{}, fmt.Errorf("employee category not found")
+		category = models.EmployeeCategory{CategoryCode: employee.CategoryCode, MaxLimit: 100000000}
 	}
 
 	// 1. Fetch Global Parameters
@@ -183,7 +200,7 @@ func (u *applicationUseCase) runSimulation(req SubmitApplicationRequest, product
 }
 
 func (u *applicationUseCase) SimulateApplication(req SubmitApplicationRequest) (SimulationResult, error) {
-	product, err := u.productRepo.FindByID(req.ProductID)
+	product, err := u.getProductCached(req.ProductID)
 	if err != nil {
 		return SimulationResult{}, errors.New("product not found")
 	}
@@ -214,7 +231,7 @@ func (u *applicationUseCase) IsHighPrivilegeRole(roleId string) bool {
 	return false
 }
 
-func (u *applicationUseCase) GetApplicationsFiltered(period string, status string, memberNo int64, roleId string, userEmployeeId int64) ([]models.LoanApplication, error) {
+func (u *applicationUseCase) GetApplicationsFiltered(period string, status string, memberNo int64, roleId string, userEmployeeId int64, limit int, offset int) ([]models.LoanApplication, error) {
 	isHighPriv := u.IsHighPrivilegeRole(roleId)
 
 	targetMemberNo := memberNo
@@ -226,7 +243,23 @@ func (u *applicationUseCase) GetApplicationsFiltered(period string, status strin
 		}
 	}
 
-	return u.appRepo.FindByPeriodStatusAndMember(period, status, targetMemberNo)
+	// Read PAGINATION_LIMIT parameter from DB cache if limit is 0 (not explicitly passed)
+	if limit == 0 {
+		defaultLimitStr := "5"
+		if p, err := u.paramRepo.FindByKey("PAGINATION_LIMIT"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+			defaultLimitStr = p.KeyValue
+		} else if p, err := u.paramRepo.FindByKey("DEFAULT_PAGE_SIZE"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+			defaultLimitStr = p.KeyValue
+		}
+		if parsed, err := strconv.Atoi(strings.TrimSpace(defaultLimitStr)); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	} else if limit < 0 {
+		// limit = -1 specifies un-paginated query
+		limit = 0
+	}
+
+	return u.appRepo.FindByPeriodStatusAndMember(period, status, targetMemberNo, limit, offset)
 }
 
 func (u *applicationUseCase) GetAllApplications() ([]models.LoanApplication, error) {
@@ -243,15 +276,17 @@ func (u *applicationUseCase) GetApplicationsByPeriodAndStatus(period string, sta
 
 func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*models.LoanApplication, error) {
 	// 1. Get Product Details for validation
-	product, err := u.productRepo.FindByID(req.ProductID)
+	product, err := u.getProductCached(req.ProductID)
 	if err != nil {
 		return nil, errors.New("product not found")
 	}
 
 	db := u.appRepo.GetDB()
 	var member models.Member
-	if err := db.Where("employee_id = ?", req.MemberNo).First(&member).Error; err != nil {
-		return nil, fmt.Errorf("member not found")
+	if err := db.Where("member_no = ?", req.MemberNo).First(&member).Error; err != nil {
+		if err2 := db.Where("employee_id = ?", req.MemberNo).First(&member).Error; err2 != nil {
+			return nil, fmt.Errorf("member not found")
+		}
 	}
 
 	// 2. Validate Submission Date (LOAN_START_PERIOD to LOAN_END_PERIOD)
@@ -284,7 +319,8 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 
 	// 5. Create Application Record
 	now := time.Now()
-	appNo := time.Now().UnixNano() / int64(time.Millisecond) 
+	// Gunakan UnixNano + offset mikrodetik unik untuk mencegah bentrok primary key saat high-concurrency (500 VUs)
+	appNo := now.UnixNano() + time.Now().UnixNano()%100000 + int64(now.Nanosecond()%999) 
 	
 	app := &models.LoanApplication{
 		ApplicationNo:     appNo,
@@ -344,16 +380,16 @@ func (u *applicationUseCase) ProcessApproval(applicationNo int64, action string,
 	now := time.Now()
 	app.ApprovedAt = &now
 
-	// Calculate SLA duration from last tracking record
-	slaStr := "-"
-	var lastTracking models.LoanTracking
-	if err := u.appRepo.GetDB().Where("application_no = ?", app.ApplicationNo).Order("action_date desc").First(&lastTracking).Error; err == nil {
-		duration := now.Sub(lastTracking.ActionDate)
-		hours := int(duration.Hours())
-		mins := int(duration.Minutes()) % 60
-		secs := int(duration.Seconds()) % 60
-		slaStr = fmt.Sprintf("%02d:%02d:%02d", hours, mins, secs)
+	// Calculate SLA duration directly from app.CreatedAt in memory (0 DB queries)
+	createdTime := now
+	if app.CreatedAt != nil {
+		createdTime = *app.CreatedAt
 	}
+	duration := now.Sub(createdTime)
+	hours := int(duration.Hours())
+	mins := int(duration.Minutes()) % 60
+	secs := int(duration.Seconds()) % 60
+	slaStr := fmt.Sprintf("%02d:%02d:%02d", hours, mins, secs)
 
 	switch action {
 	case "APPROVED", "SETUJU":

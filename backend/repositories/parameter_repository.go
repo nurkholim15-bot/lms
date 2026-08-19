@@ -70,9 +70,11 @@ func (r *parameterRepository) FindByKey(keyName string) (models.GlobalParameter,
 		if exists {
 			return param, nil
 		}
-	} else {
-		r.mu.RUnlock()
+		// Jika cache sudah dimuat (isLoaded = true), key yang tidak ada di cacheMap memang tidak ada di DB.
+		// Kembalikan ErrRecordNotFound langsung dari RAM tanpa query DB redundan!
+		return models.GlobalParameter{}, gorm.ErrRecordNotFound
 	}
+	r.mu.RUnlock()
 
 	r.refreshCache()
 	r.mu.RLock()

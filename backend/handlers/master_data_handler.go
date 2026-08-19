@@ -2,27 +2,31 @@ package handlers
 
 import (
 	"lms-backend/models"
+	"lms-backend/repositories"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 type MasterDataHandler struct {
-	db *gorm.DB
+	db        *gorm.DB
+	paramRepo repositories.ParameterRepository
 }
 
-func NewMasterDataHandler(db *gorm.DB) *MasterDataHandler {
-	return &MasterDataHandler{db: db}
+func NewMasterDataHandler(db *gorm.DB, pRepo repositories.ParameterRepository) *MasterDataHandler {
+	return &MasterDataHandler{db: db, paramRepo: pRepo}
 }
 
 func (h *MasterDataHandler) GetAll(c *gin.Context) {
 	table := c.Param("table")
 
-	// Dynamic Filtering Map
+	// Dynamic Filtering Map for standard tables (excluding employees)
 	filters := make(map[string]interface{})
 	for key, values := range c.Request.URL.Query() {
-		if len(values) > 0 && values[0] != "" {
+		if key != "page" && key != "limit" && key != "q" && len(values) > 0 && values[0] != "" {
 			filters[key] = values[0]
 		}
 	}
@@ -46,9 +50,62 @@ func (h *MasterDataHandler) GetAll(c *gin.Context) {
 		query.Find(&data)
 		c.JSON(http.StatusOK, gin.H{"data": data})
 	case "employees":
+		q := strings.TrimSpace(c.Query("q"))
+		page, _ := strconv.Atoi(c.Query("page"))
+		if page <= 0 {
+			page = 1
+		}
+
+		// 1. Baca LIMIT dari paramRepo RAM cache (tanpa kueri DB ke global_parameters)
+		limit := 10
+		if h.paramRepo != nil {
+			if p, err := h.paramRepo.FindByKey("DEFAULT_PAGE_SIZE"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+				if parsed, err := strconv.Atoi(strings.TrimSpace(p.KeyValue)); err == nil && parsed > 0 {
+					limit = parsed
+				}
+			} else if p, err := h.paramRepo.FindByKey("PAGINATION_LIMIT"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+				if parsed, err := strconv.Atoi(strings.TrimSpace(p.KeyValue)); err == nil && parsed > 0 {
+					limit = parsed
+				}
+			}
+		}
+
+		if userLimit, _ := strconv.Atoi(c.Query("limit")); userLimit > 0 {
+			limit = userLimit
+		}
+
+		offset := (page - 1) * limit
+
 		var data []models.Employee
-		query.Find(&data)
-		c.JSON(http.StatusOK, gin.H{"data": data})
+		var totalRecords int64 = 0
+
+		// 2. Kueri bersih: WHERE (employee_id = ? OR LOWER(name) LIKE ?) AND deleted_at IS NULL
+		empQuery := h.db.Model(&models.Employee{}).Where("deleted_at IS NULL")
+		if q != "" {
+			empIDSearch, _ := strconv.ParseInt(q, 10, 64)
+			likeStr := "%" + strings.ToLower(q) + "%"
+			if empIDSearch > 0 {
+				empQuery = empQuery.Where("(employee_id = ? OR LOWER(name) LIKE ?)", empIDSearch, likeStr)
+			} else {
+				empQuery = empQuery.Where("LOWER(name) LIKE ?", likeStr)
+			}
+		}
+
+		empQuery.Count(&totalRecords)
+		empQuery.Order("employee_id ASC").Limit(limit).Offset(offset).Find(&data)
+
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 {
+			totalPages = 1
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"data":          data,
+			"page":          page,
+			"limit":         limit,
+			"total_records": totalRecords,
+			"total_pages":   totalPages,
+		})
 	case "members":
 		var data []models.Member
 		query.Find(&data)

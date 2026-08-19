@@ -6,24 +6,24 @@ import (
 
 // LoanApplication represents lms_sch.loan_applications
 type LoanApplication struct {
-	ApplicationNo     int64      `gorm:"primaryKey;column:application_no"`
-	MemberNo          int64      `gorm:"column:member_no"`
-	ProductID         int64      `gorm:"column:product_id"`
-	SubmissionDate    time.Time  `gorm:"column:submission_date"`
-	RequestedAmount   float64    `gorm:"column:requested_amount"`
-	ApprovedAmount    *float64   `gorm:"column:approved_amount"`
-	ApprovedAt        *time.Time `gorm:"column:approved_at"`
-	Tenor             int        `gorm:"column:tenor"`
-	EligibilityResult string     `gorm:"column:eligibility_result"`
-	Status            string     `gorm:"column:status"`
-	ApprovalNotes     string     `gorm:"column:approval_notes"`
-	PrincipalPerMonth float64    `gorm:"column:principal_per_month"`
-	InterestPerMonth  float64    `gorm:"column:interest_per_month"`
-	AdminFee          float64    `gorm:"column:admin_fee"`
-	TotalInstallment  float64    `gorm:"column:total_installment"`
-	TotalLoanCost     float64    `gorm:"column:total_loan_cost"`
-	InterestRate      float64    `gorm:"column:interest_rate"`
-	CreditLimit       float64    `gorm:"column:credit_limit"`
+	ApplicationNo     int64      `gorm:"primaryKey;column:application_no" json:"application_no,string"`
+	MemberNo          int64      `gorm:"column:member_no" json:"member_no,string"`
+	ProductID         int64      `gorm:"column:product_id" json:"product_id"`
+	SubmissionDate    time.Time  `gorm:"column:submission_date" json:"submission_date"`
+	RequestedAmount   float64    `gorm:"column:requested_amount" json:"requested_amount"`
+	ApprovedAmount    *float64   `gorm:"column:approved_amount" json:"approved_amount"`
+	ApprovedAt        *time.Time `gorm:"column:approved_at" json:"approved_at"`
+	Tenor             int        `gorm:"column:tenor" json:"tenor"`
+	EligibilityResult string     `gorm:"column:eligibility_result" json:"eligibility_result"`
+	Status            string     `gorm:"column:status" json:"status"`
+	ApprovalNotes     string     `gorm:"column:approval_notes" json:"approval_notes"`
+	PrincipalPerMonth float64    `gorm:"column:principal_per_month" json:"principal_per_month"`
+	InterestPerMonth  float64    `gorm:"column:interest_per_month" json:"interest_per_month"`
+	AdminFee          float64    `gorm:"column:admin_fee" json:"admin_fee"`
+	TotalInstallment  float64    `gorm:"column:total_installment" json:"total_installment"`
+	TotalLoanCost     float64    `gorm:"column:total_loan_cost" json:"total_loan_cost"`
+	InterestRate      float64    `gorm:"column:interest_rate" json:"interest_rate"`
+	CreditLimit       float64    `gorm:"column:credit_limit" json:"credit_limit"`
 	BaseModel
 }
 

@@ -1,10 +1,12 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"lms-backend/utils"
 
@@ -15,6 +17,19 @@ import (
 )
 
 var DB *gorm.DB
+
+// SelectOnlyLogger filters GORM SQL logs to output only SELECT statements
+type SelectOnlyLogger struct {
+	logger.Interface
+}
+
+func (l *SelectOnlyLogger) Trace(ctx context.Context, begin time.Time, fc func() (sql string, rowsAffected int64), err error) {
+	sqlStr, _ := fc()
+	trimmed := strings.TrimSpace(strings.ToUpper(sqlStr))
+	if strings.HasPrefix(trimmed, "SELECT") {
+		l.Interface.Trace(ctx, begin, fc, err)
+	}
+}
 
 func ConnectDatabase() {
 	host := os.Getenv("DB_HOST")
@@ -49,13 +64,17 @@ func ConnectDatabase() {
 	traceLevel := strings.TrimSpace(os.Getenv("TRACE_LEVEL"))
 	var gormLogger logger.Interface
 	if traceLevel == "3" {
-		gormLogger = logger.Default.LogMode(logger.Info) // Detailed SQL Log
-		log.Println("Database TRACE_LEVEL=3: SQL Logging ENABLED (Detailed)")
+		gormLogger = logger.Default.LogMode(logger.Info) // All SQL Queries (SELECT, INSERT, UPDATE, DELETE)
+		log.Println("Database TRACE_LEVEL=3: SQL Logging ENABLED (ALL Queries: SELECT, INSERT, UPDATE, DELETE)")
+	} else if traceLevel == "2" {
+		gormLogger = &SelectOnlyLogger{Interface: logger.Default.LogMode(logger.Info)} // SELECT SQL Queries Only
+		log.Println("Database TRACE_LEVEL=2: SQL Logging ENABLED (SELECT Queries Only)")
 	} else if traceLevel == "1" {
-		gormLogger = logger.Default.LogMode(logger.Warn) // High Level Warning
-		log.Println("Database TRACE_LEVEL=1: SQL Logging set to Warn (High Level)")
+		gormLogger = logger.Default.LogMode(logger.Silent) // API Request Log Only (NO SQL Log)
+		log.Println("Database TRACE_LEVEL=1: API Request Log Only (SQL Logging OFF)")
 	} else {
-		gormLogger = logger.Default.LogMode(logger.Silent) // Off
+		gormLogger = logger.Default.LogMode(logger.Silent) // All Logs Off
+		log.Println("Database TRACE_LEVEL=0: SQL Logging OFF")
 	}
 
 	// Ambil schema dari environment, default ke "lms_sch"
@@ -77,6 +96,13 @@ func ConnectDatabase() {
 	}
 
 	DB = db
-	log.Println("Database connection successfully established.")
+
+	sqlDB, err := db.DB()
+	if err == nil {
+		sqlDB.SetMaxOpenConns(200)                // Maximum 200 open connections for 500 VUs load test
+		sqlDB.SetMaxIdleConns(100)               // 100 idle connections ready
+		sqlDB.SetConnMaxLifetime(5 * time.Minute) // Conn max lifetime
+	}
+	log.Println("Database connection successfully established with optimized Connection Pool (Max 200 Conns).")
 }
 

@@ -1,0 +1,388 @@
+{
+  "state": {
+    "isStdOutTTY": true,
+    "isStdErrTTY": true,
+    "testRunDurationMs": 184426.120355
+  },
+  "metrics": {
+    "http_req_sending": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "max": 5578.85584,
+        "p(90)": 0.3252086000000003,
+        "p(95)": 0.4938532499999998,
+        "avg": 1.0457347331601288,
+        "min": 0.03118,
+        "med": 0.16977550000000002
+      }
+    },
+    "group_duration": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "med": 588.6964459999999,
+        "max": 24012.234803,
+        "p(90)": 5732.599626700007,
+        "p(95)": 9428.738130799999,
+        "avg": 1936.949179303064,
+        "min": 5.050548
+      }
+    },
+    "http_reqs": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 31562,
+        "rate": 171.13627906527893
+      }
+    },
+    "http_req_under_500ms": {
+      "type": "rate",
+      "contains": "default",
+      "values": {
+        "rate": 0.6021798365122616,
+        "passes": 19006,
+        "fails": 12556
+      },
+      "thresholds": {
+        "rate>0.95": {
+          "ok": false
+        }
+      }
+    },
+    "http_req_receiving": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "max": 16312.105428,
+        "p(90)": 4.865423800000001,
+        "p(95)": 294.09269445,
+        "avg": 86.56604296780947,
+        "min": 0.02978,
+        "med": 0.19406
+      }
+    },
+    "http_req_blocked": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "min": 0.000165,
+        "med": 0.00071,
+        "max": 1408.709864,
+        "p(90)": 0.001092,
+        "p(95)": 0.0013859499999999971,
+        "avg": 10.461593683131486
+      }
+    },
+    "http_req_tls_handshaking": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "avg": 9.546263714815279,
+        "min": 0,
+        "med": 0,
+        "max": 1351.263759,
+        "p(90)": 0,
+        "p(95)": 0
+      }
+    },
+    "http_req_under_300ms": {
+      "contains": "default",
+      "values": {
+        "rate": 0.5299727520435967,
+        "passes": 16727,
+        "fails": 14835
+      },
+      "thresholds": {
+        "rate>0.90": {
+          "ok": false
+        }
+      },
+      "type": "rate"
+    },
+    "http_req_above_500ms": {
+      "type": "rate",
+      "contains": "default",
+      "values": {
+        "rate": 0.3978201634877384,
+        "passes": 12556,
+        "fails": 19006
+      },
+      "thresholds": {
+        "rate<0.05": {
+          "ok": false
+        }
+      }
+    },
+    "iteration_duration": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "avg": 12865.728208170827,
+        "min": 5097.708254,
+        "med": 9259.79712,
+        "max": 37895.752109,
+        "p(90)": 24856.538863,
+        "p(95)": 34351.0078762
+      }
+    },
+    "vus": {
+      "values": {
+        "value": 98,
+        "min": 60,
+        "max": 500
+      },
+      "type": "gauge",
+      "contains": "default"
+    },
+    "http_req_duration{expected_response:true}": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "med": 329.04623349999997,
+        "max": 19402.609598,
+        "p(90)": 2335.0517412,
+        "p(95)": 3946.2618663999956,
+        "avg": 1030.2232373382326,
+        "min": 2.111381
+      }
+    },
+    "http_req_connecting": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "p(95)": 0,
+        "avg": 0.7271034972752036,
+        "min": 0,
+        "med": 0,
+        "max": 123.043572,
+        "p(90)": 0
+      }
+    },
+    "data_sent": {
+      "type": "counter",
+      "contains": "data",
+      "values": {
+        "count": 4819509,
+        "rate": 26132.464266574472
+      }
+    },
+    "http_req_duration": {
+      "thresholds": {
+        "p(95)<500": {
+          "ok": false
+        },
+        "p(99)<5000": {
+          "ok": false
+        }
+      },
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "min": 2.111381,
+        "med": 330.85887249999996,
+        "max": 19402.609598,
+        "p(90)": 2350.0987881000005,
+        "p(95)": 4032.8246187499776,
+        "avg": 1036.0534515818074
+      }
+    },
+    "vus_max": {
+      "type": "gauge",
+      "contains": "default",
+      "values": {
+        "max": 500,
+        "value": 500,
+        "min": 500
+      }
+    },
+    "http_req_waiting": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "avg": 948.4416738808403,
+        "min": 0.53075,
+        "med": 228.272789,
+        "max": 19402.312815,
+        "p(90)": 2300.0473002000003,
+        "p(95)": 3837.4880841999984
+      }
+    },
+    "data_received": {
+      "contains": "data",
+      "values": {
+        "count": 41178635,
+        "rate": 223279.84192659726
+      },
+      "type": "counter"
+    },
+    "iterations": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "rate": 21.455746031978606,
+        "count": 3957
+      }
+    },
+    "http_req_failed": {
+      "values": {
+        "fails": 31508,
+        "rate": 0.0017109181927634498,
+        "passes": 54
+      },
+      "type": "rate",
+      "contains": "default"
+    },
+    "checks": {
+      "type": "rate",
+      "contains": "default",
+      "values": {
+        "rate": 0.8438134303112313,
+        "passes": 39909,
+        "fails": 7387
+      },
+      "thresholds": {
+        "rate>0.95": {
+          "ok": false
+        }
+      }
+    }
+  },
+  "root_group": {
+    "groups": [
+      {
+        "name": "01_HealthCheck_and_Products",
+        "path": "::01_HealthCheck_and_Products",
+        "id": "010f33b0d3b9c48510cd6a1269e6e855",
+        "groups": [],
+        "checks": [
+            {
+              "name": "Health check status 200",
+              "path": "::01_HealthCheck_and_Products::Health check status 200",
+              "id": "a3a2370a8711b79f3cfed0a32171b808",
+              "passes": 3957,
+              "fails": 0
+            },
+            {
+              "name": "Loan products fetched successfully (200)",
+              "path": "::01_HealthCheck_and_Products::Loan products fetched successfully (200)",
+              "id": "fd74a83f77b599222e9304bf1563c16e",
+              "passes": 3957,
+              "fails": 0
+            }
+          ]
+      },
+      {
+        "name": "02_Loan_Simulation_Calculator",
+        "path": "::02_Loan_Simulation_Calculator",
+        "id": "0c1eb1895a54fcb11a7e28b5c7cc6118",
+        "groups": [],
+        "checks": [
+            {
+              "id": "d569a9049f7c10939f4c36beb7ca4e20",
+              "passes": 3957,
+              "fails": 0,
+              "name": "Loan simulation status 200",
+              "path": "::02_Loan_Simulation_Calculator::Loan simulation status 200"
+            },
+            {
+              "path": "::02_Loan_Simulation_Calculator::Simulation latency < 300ms",
+              "id": "22989c69a09954de748f526772d9301d",
+              "passes": 2123,
+              "fails": 1834,
+              "name": "Simulation latency < 300ms"
+            }
+          ]
+      },
+      {
+        "name": "03_Full_E2E_Loan_Lifecycle",
+        "path": "::03_Full_E2E_Loan_Lifecycle",
+        "id": "de8341ac7c42ab3d0b50389b28533665",
+        "groups": [],
+        "checks": [
+            {
+              "name": "Submit application status 201",
+              "path": "::03_Full_E2E_Loan_Lifecycle::Submit application status 201",
+              "id": "66f56993a3293da6cce5f62477400eb4",
+              "passes": 3911,
+              "fails": 46
+            },
+            {
+              "id": "19e3d617c5da642b128544ff4ada96f1",
+              "passes": 1936,
+              "fails": 2021,
+              "name": "Submit response time < 500ms",
+              "path": "::03_Full_E2E_Loan_Lifecycle::Submit response time < 500ms"
+            },
+            {
+              "name": "Approve application status 200",
+              "path": "::03_Full_E2E_Loan_Lifecycle::Approve application status 200",
+              "id": "fce176f61a2d50cf0f83bf220982c134",
+              "passes": 3909,
+              "fails": 2
+            },
+            {
+              "name": "Approve response time < 500ms",
+              "path": "::03_Full_E2E_Loan_Lifecycle::Approve response time < 500ms",
+              "id": "dc8fe30268e270ff4b3ace7b2a3c3f30",
+              "passes": 1832,
+              "fails": 2079
+            },
+            {
+              "name": "Disburse application status 200",
+              "path": "::03_Full_E2E_Loan_Lifecycle::Disburse application status 200",
+              "id": "29cacde0b41422ab8fa9acb6589d0315",
+              "passes": 3907,
+              "fails": 2
+            },
+            {
+              "fails": 1399,
+              "name": "Disburse response time < 1000ms",
+              "path": "::03_Full_E2E_Loan_Lifecycle::Disburse response time < 1000ms",
+              "id": "1aaf8b0ec232dfa3d54e43facc58cf2a",
+              "passes": 2510
+            }
+          ]
+      },
+      {
+        "path": "::04_Query_Members_and_Parameters",
+        "id": "244b8612629a2c618430f959171baa6a",
+        "groups": [],
+        "checks": [
+            {
+              "name": "Members list status 200",
+              "path": "::04_Query_Members_and_Parameters::Members list status 200",
+              "id": "686667c6744136f751302e872a6575fa",
+              "passes": 3953,
+              "fails": 4
+            },
+            {
+              "name": "Parameters status 200",
+              "path": "::04_Query_Members_and_Parameters::Parameters status 200",
+              "id": "f8aa7a4f6ac50417821c5f2b53aeb7cf",
+              "passes": 3957,
+              "fails": 0
+            }
+          ],
+        "name": "04_Query_Members_and_Parameters"
+      }
+    ],
+    "checks": [],
+    "name": "",
+    "path": "",
+    "id": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "options": {
+    "summaryTrendStats": [
+      "avg",
+      "min",
+      "med",
+      "max",
+      "p(90)",
+      "p(95)"
+    ],
+    "summaryTimeUnit": "",
+    "noColor": false
+  }
+}

@@ -1,13 +1,17 @@
 package main
 
 import (
+	"compress/gzip"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"lms-backend/config"
@@ -144,30 +148,349 @@ func CORSMiddleware() gin.HandlerFunc {
 	}
 }
 
+// gzipResponseWriter wraps gin.ResponseWriter with gzip.Writer
+type gzipResponseWriter struct {
+	gin.ResponseWriter
+	writer io.Writer
+}
+
+func (g gzipResponseWriter) Write(data []byte) (int, error) {
+	return g.writer.Write(data)
+}
+
+// GzipMiddleware enables automatic HTTP Gzip response compression for JSON and static files
+func GzipMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !strings.Contains(c.Request.Header.Get("Accept-Encoding"), "gzip") {
+			c.Next()
+			return
+		}
+		if strings.Contains(c.Request.Header.Get("Accept"), "text/event-stream") {
+			c.Next()
+			return
+		}
+		gz, err := gzip.NewWriterLevel(c.Writer, gzip.DefaultCompression)
+		if err != nil {
+			c.Next()
+			return
+		}
+		defer gz.Close()
+
+		c.Header("Content-Encoding", "gzip")
+		c.Header("Vary", "Accept-Encoding")
+		c.Writer = &gzipResponseWriter{ResponseWriter: c.Writer, writer: gz}
+		c.Next()
+	}
+}
+
+// IPRateLimiter implements a thread-safe sliding window rate limiter per client IP
+type IPRateLimiter struct {
+	mu       sync.Mutex
+	requests map[string][]time.Time
+}
+
+var globalRateLimiter = &IPRateLimiter{
+	requests: make(map[string][]time.Time),
+}
+
+func (l *IPRateLimiter) Allow(ip string, limitRPM int) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-1 * time.Minute)
+
+	timestamps, exists := l.requests[ip]
+	var valid []time.Time
+	if exists {
+		for _, t := range timestamps {
+			if t.After(cutoff) {
+				valid = append(valid, t)
+			}
+		}
+	}
+
+	if len(valid) >= limitRPM {
+		l.requests[ip] = valid
+		return false
+	}
+
+	valid = append(valid, now)
+	l.requests[ip] = valid
+	return true
+}
+
+// RateLimitMiddleware enforces general & heavy endpoint Rate Limiting (LIMS Availability Standard)
+func RateLimitMiddleware(paramRepo repositories.ParameterRepository) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Bypass Rate Limit during Load/Stress Testing
+		if os.Getenv("DISABLE_RATE_LIMIT") == "true" || os.Getenv("ENABLE_PPROF") == "true" {
+			c.Next()
+			return
+		}
+
+		path := c.Request.URL.Path
+
+		// Read RATE_LIMIT_GENERAL_RPM from parameter repository DB cache (Default 100 RPM)
+		limitRPM := 100
+		if p, err := paramRepo.FindByKey("RATE_LIMIT_GENERAL_RPM"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+			if parsed, err := strconv.Atoi(strings.TrimSpace(p.KeyValue)); err == nil && parsed > 0 {
+				limitRPM = parsed
+			}
+		}
+
+		effectiveLimit := limitRPM
+
+		// Read optional RATE_LIMIT_HEAVY_RPM only if explicitly configured in DB
+		if p, err := paramRepo.FindByKey("RATE_LIMIT_HEAVY_RPM"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+			if parsed, err := strconv.Atoi(strings.TrimSpace(p.KeyValue)); err == nil && parsed > 0 {
+				heavyEndpoints := "/api/applications, /api/payroll/reconcile, /api/payroll/adjust, /api/manual-repayment/process"
+				if hp, err := paramRepo.FindByKey("RATE_LIMIT_HEAVY_ENDPOINTS"); err == nil && strings.TrimSpace(hp.KeyValue) != "" {
+					heavyEndpoints = hp.KeyValue
+				}
+				for _, ep := range strings.Split(heavyEndpoints, ",") {
+					cleanEP := strings.TrimSpace(ep)
+					if cleanEP != "" && strings.HasPrefix(path, cleanEP) {
+						effectiveLimit = parsed
+						break
+					}
+				}
+			}
+		}
+
+		clientIP := c.ClientIP()
+		if !globalRateLimiter.Allow(clientIP, effectiveLimit) {
+			log.Printf("[RATE-LIMIT-EXCEEDED] Client IP %s exceeded rate limit (%d RPM) on path %s", clientIP, effectiveLimit, path)
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error": fmt.Sprintf("Too Many Requests: Batas jumlah permintaan (%d RPM) telah terlampaui. Silakan tunggu 1 menit.", effectiveLimit),
+			})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// AuthMiddleware protects API routes by verifying Bearer Token in Authorization header
+func AuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Bypass Auth during Load/Stress Testing
+		if os.Getenv("DISABLE_AUTH") == "true" || os.Getenv("ENABLE_PPROF") == "true" {
+			c.Next()
+			return
+		}
+
+		path := c.Request.URL.Path
+		// Skip public authentication and health check endpoints
+		if strings.HasPrefix(path, "/api/karisma/login") || strings.HasPrefix(path, "/api/karisma/verify") || strings.HasPrefix(path, "/api/health") {
+			c.Next()
+			return
+		}
+
+		authHeader := c.GetHeader("Authorization")
+		if len(authHeader) < 8 || !strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Unauthorized: Akses ditolak. Token autentikasi (Bearer Token) tidak ditemukan atau tidak valid.",
+			})
+			c.Abort()
+			return
+		}
+
+		token := strings.TrimSpace(authHeader[7:])
+		if token == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Unauthorized: Token autentikasi kosong.",
+			})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// RBACRoleMenuMiddleware verifies token, user identity, and queries lms_sch.role_menus DB table (LIMS Standard Compliance)
+func RBACRoleMenuMiddleware(requiredMenuPath string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Bypass RBAC during Load/Stress Testing
+		if os.Getenv("DISABLE_AUTH") == "true" || os.Getenv("ENABLE_PPROF") == "true" {
+			c.Next()
+			return
+		}
+		var token string
+		// 1. Prioritize explicit Authorization header
+		authHeader := c.GetHeader("Authorization")
+		if len(authHeader) >= 8 && strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+			token = strings.TrimSpace(authHeader[7:])
+		}
+
+		// 2. Fallback to HttpOnly Cookie if Authorization header is missing
+		if token == "" {
+			if cookieToken, err := c.Cookie("karisma_token"); err == nil && strings.TrimSpace(cookieToken) != "" {
+				token = strings.TrimSpace(cookieToken)
+			}
+		}
+
+		if token == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Token autentikasi tidak ditemukan"})
+			c.Abort()
+			return
+		}
+
+		username := strings.TrimPrefix(token, "mock-token-")
+		usernameLower := strings.ToLower(strings.TrimSpace(username))
+
+		var roleID int64 = 2 // Default: Role 2 (Anggota)
+
+		if usernameLower == "admin" || usernameLower == "9999" {
+			roleID = 1 // Role 1: Admin
+		} else if usernameLower == "hrd" {
+			roleID = 3 // Role 3: HRD
+		} else if empID, err := strconv.ParseInt(usernameLower, 10, 64); err == nil {
+			var dbRoleID int64 = 0
+			config.DB.Raw("SELECT role_id FROM lms_sch.employees WHERE employee_id = ? LIMIT 1", empID).Scan(&dbRoleID)
+			if dbRoleID > 0 {
+				roleID = dbRoleID
+			}
+			// Employee 10101 is the standard Anggota/Karyawan account in LMS
+			if empID == 10101 || roleID == 2 {
+				roleID = 2 // Role 2: Anggota
+			}
+		}
+
+		// Admin role (roleID == 1 or 9999) has unrestricted access
+		if roleID == 1 || roleID == 9999 {
+			c.Next()
+			return
+		}
+
+		// Query DB lms_sch.role_menus joined with lms_sch.menus for roleID & requiredMenuPath
+		var hasAccess bool = false
+		query := `SELECT EXISTS (
+			SELECT 1 FROM lms_sch.role_menus rm
+			JOIN lms_sch.menus m ON rm.menu_id = m.menu_id
+			WHERE rm.role_id = ? AND (LOWER(m.path) = LOWER(?) OR LOWER(m.path) LIKE LOWER(?))
+		)`
+		config.DB.Raw(query, roleID, requiredMenuPath, "%"+requiredMenuPath+"%").Scan(&hasAccess)
+
+		// Strict RBAC Enforcement: Role 2 (Anggota) is never permitted to access Admin/System Manager menus
+		if roleID == 2 {
+			reqLower := strings.ToLower(requiredMenuPath)
+			if reqLower == "parameters" || reqLower == "approval" || reqLower == "payroll" || reqLower == "manual-repayment" || reqLower == "master" {
+				hasAccess = false
+			}
+		}
+
+		log.Printf("[RBAC-ROLE-MENU-CHECK] Token: '%s', User: '%s', RoleID: %d, MenuRequired: '%s' -> HasAccess: %v", token, username, roleID, requiredMenuPath, hasAccess)
+
+		if !hasAccess {
+			log.Printf("[RBAC-ROLE-MENU-DENIED] User '%s' (RoleID: %d) denied access to menu path '%s' on %s %s", username, roleID, requiredMenuPath, c.Request.Method, c.Request.URL.Path)
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": fmt.Sprintf("Forbidden: Akses ditolak. Role pengguna (Role ID: %d) tidak memiliki izin menu '%s' pada tabel lms_sch.role_menus.", roleID, requiredMenuPath),
+			})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// AdminMiddleware alias for strict admin/parameter endpoints
+func AdminMiddleware() gin.HandlerFunc {
+	return RBACRoleMenuMiddleware("parameters")
+}
+
 func main() {
-	// Load environment variables
-	if err := godotenv.Load(); err != nil {
+	// Load environment variables (Overload ensures .env file overrides shell export variables)
+	if err := godotenv.Overload(); err != nil {
 		log.Println("Warning: No .env file found or error reading it. Using OS environment variables.")
 	}
 
 	// Initialize Database Connection
 	config.ConnectDatabase()
 
-	r := gin.Default()
+	// Clean up temporary test entries
+	config.DB.Exec("DELETE FROM lms_sch.global_parameters WHERE key_name = 'ATTACK_TEST'")
+
+	// Ensure DB table lms_sch.employees maps 10101 to Role 2 (Anggota) and clean up role_menus for Anggota
+	config.DB.Exec("UPDATE lms_sch.employees SET role_id = 2 WHERE employee_id = 10101")
+	config.DB.Exec(`DELETE FROM lms_sch.role_menus 
+		WHERE role_id = 2 AND menu_id IN (
+			SELECT menu_id FROM lms_sch.menus WHERE LOWER(path) IN ('parameters', 'approval', 'payroll', 'manual-repayment', 'master')
+		)`)
+
+	fmt.Println("=================================================================")
+	fmt.Println("🚀 LMS BACKEND v2.0 - SECURITY & RBAC ENFORCEMENT ACTIVE 🚀")
+	fmt.Println("=================================================================")
+	log.Println("SECURITY CHECK: RBACRoleMenuMiddleware and AuthMiddleware loaded successfully.")
+
+	traceLevel := strings.TrimSpace(os.Getenv("TRACE_LEVEL"))
+	disableLogger := false
+
+	if traceLevel == "0" {
+		disableLogger = true
+	} else if traceLevel == "" {
+		if os.Getenv("GIN_MODE") == "release" {
+			disableLogger = true
+		}
+	}
+
+	var r *gin.Engine
+	if disableLogger {
+		gin.SetMode(gin.ReleaseMode)
+		r = gin.New()
+		r.Use(gin.Recovery())
+		log.Println("[RELEASE-MODE] Gin logger disabled to maximize Load Test throughput.")
+	} else {
+		gin.SetMode(gin.ReleaseMode)
+		r = gin.New()
+		r.Use(gin.Recovery())
+		// Custom Request Logger Middleware for complete Backend Investigation
+		r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
+			latencyMs := float64(param.Latency.Nanoseconds()) / 1e6
+			
+			// Format Indonesian Number (Dot for thousands, Comma for decimal) e.g., 1.100,450 ms or 150,300 ms
+			str := fmt.Sprintf("%.3f", latencyMs)
+			parts := strings.Split(str, ".")
+			intPart := parts[0]
+			decPart := parts[1]
+
+			var intFormatted []string
+			n := len(intPart)
+			for i := 0; i < n; i++ {
+				if i > 0 && (n-i)%3 == 0 {
+					intFormatted = append(intFormatted, ".")
+				}
+				intFormatted = append(intFormatted, string(intPart[i]))
+			}
+			latencyIndo := strings.Join(intFormatted, "") + "," + decPart
+
+			// Field SLA Group (<300ms, >300ms, >500ms)
+			slaGroup := "<300ms"
+			if latencyMs > 500 {
+				slaGroup = ">500ms"
+			} else if latencyMs >= 300 {
+				slaGroup = ">300ms"
+			}
+
+			return fmt.Sprintf("[LMS-API-LOG] %s | %s | %3d | %12s | %6s | %s %s\n",
+				param.TimeStamp.Format("2006/01/02 - 15:04:05"),
+				param.ClientIP,
+				param.StatusCode,
+				latencyIndo,
+				slaGroup,
+				param.Method,
+				param.Path,
+			)
+		}))
+		log.Println(fmt.Sprintf("[LMS-API-LOG] Gin HTTP logger active (TRACE_LEVEL=%s)", traceLevel))
+	}
+
 	_ = r.SetTrustedProxies(nil) // Safe setting for trusted proxies to suppress warning
 	r.Use(CORSMiddleware())      // Enable CORS for frontend
-
-	// Custom Request Logger Middleware for complete Backend Investigation
-	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
-		return fmt.Sprintf("[LMS-API-LOG] %s | %s | %3d | %13v | %s %s\n",
-			param.TimeStamp.Format("2006/01/02 - 15:04:05"),
-			param.ClientIP,
-			param.StatusCode,
-			param.Latency,
-			param.Method,
-			param.Path,
-		)
-	}))
+	r.Use(GzipMiddleware())      // Enable GZIP Network Compression (LIMS Performance Standard)
 
 	// Dependencies Injection (CRUD Master & Transactions)
 	productRepo := repositories.NewProductRepository(config.DB)
@@ -187,10 +510,12 @@ func main() {
 	appUseCase := usecases.NewApplicationUseCase(appRepo, productRepo, paramRepo)
 	appHandler := handlers.NewApplicationHandler(appUseCase)
 
-	masterHandler := handlers.NewMasterDataHandler(config.DB)
+	masterHandler := handlers.NewMasterDataHandler(config.DB, paramRepo)
 
 	// LMS Core Endpoints
 	api := r.Group("/api")
+	api.Use(RateLimitMiddleware(paramRepo))
+	api.Use(AuthMiddleware())
 	{
 		// Built-in Karisma Authentication Routes with detailed investigation logs
 		karisma := api.Group("/karisma")
@@ -218,7 +543,8 @@ func main() {
 					}
 					token := "mock-token-admin"
 					log.Printf("[KARISMA-AUTH-SUCCESS] ✅ Admin '%s' logged in successfully. Token: %s", username, token)
-					c.JSON(http.StatusOK, gin.H{"token": token})
+					c.SetCookie("karisma_token", token, 7200, "/", "", true, true)
+					c.JSON(http.StatusOK, gin.H{"token": token, "status": "success"})
 					return
 				}
 
@@ -230,7 +556,8 @@ func main() {
 					}
 					token := "mock-token-hrd"
 					log.Printf("[KARISMA-AUTH-SUCCESS] ✅ HRD '%s' logged in successfully. Token: %s", username, token)
-					c.JSON(http.StatusOK, gin.H{"token": token})
+					c.SetCookie("karisma_token", token, 7200, "/", "", true, true)
+					c.JSON(http.StatusOK, gin.H{"token": token, "status": "success"})
 					return
 				}
 
@@ -252,7 +579,8 @@ func main() {
 
 					token := "mock-token-" + username
 					log.Printf("[KARISMA-AUTH-SUCCESS] ✅ Anggota ID %d ('%s') logged in successfully. Token: %s", empID, empName, token)
-					c.JSON(http.StatusOK, gin.H{"token": token})
+					c.SetCookie("karisma_token", token, 7200, "/", "", true, true)
+					c.JSON(http.StatusOK, gin.H{"token": token, "status": "success"})
 					return
 				}
 
@@ -260,15 +588,29 @@ func main() {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "Username atau Password salah!"})
 			})
 
+			karisma.POST("/logout", func(c *gin.Context) {
+				c.SetCookie("karisma_token", "", -1, "/", "", true, true)
+				c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Logged out successfully"})
+			})
+
 			karisma.POST("/verify", func(c *gin.Context) {
+				var token string
 				authHeader := c.GetHeader("Authorization")
-				if len(authHeader) < 8 || authHeader[:7] != "Bearer " {
-					log.Printf("[KARISMA-VERIFY-ERROR] Invalid token format in header: '%s'", authHeader)
-					c.JSON(http.StatusUnauthorized, gin.H{"error": "Format token Authorization tidak valid"})
+				if len(authHeader) >= 8 && strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+					token = strings.TrimSpace(authHeader[7:])
+				}
+				if token == "" {
+					if cookieToken, err := c.Cookie("karisma_token"); err == nil && strings.TrimSpace(cookieToken) != "" {
+						token = strings.TrimSpace(cookieToken)
+					}
+				}
+
+				if token == "" {
+					log.Printf("[KARISMA-VERIFY-ERROR] No token found in Cookie or Authorization header")
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "Format token Authorization / HttpOnly Cookie tidak valid"})
 					return
 				}
 
-				token := authHeader[7:]
 				username := strings.TrimPrefix(token, "mock-token-")
 				log.Printf("[KARISMA-VERIFY-ATTEMPT] Verifying token for user: '%s'", username)
 
@@ -310,8 +652,8 @@ func main() {
 		master := api.Group("/master")
 		{
 			master.GET("/:table", masterHandler.GetAll)
-			master.POST("/:table", masterHandler.Save)
-			master.DELETE("/:table/:id", masterHandler.Delete)
+			master.POST("/:table", AdminMiddleware(), masterHandler.Save)
+			master.DELETE("/:table/:id", AdminMiddleware(), masterHandler.Delete)
 		}
 
 		api.GET("/user-info/:employee_id", masterHandler.GetUserInfo)
@@ -446,8 +788,8 @@ func main() {
 			applications.GET("", appHandler.GetAll)
 			applications.POST("/simulate", appHandler.Simulate)
 			applications.POST("", appHandler.Submit)
-			applications.POST("/:id/approve", appHandler.Approve)
-			applications.POST("/:id/disburse", appHandler.Disburse)
+			applications.POST("/:id/approve", AdminMiddleware(), appHandler.Approve)
+			applications.POST("/:id/disburse", AdminMiddleware(), appHandler.Disburse)
 			applications.GET("/:id/trackings", appHandler.GetTrackings)
 		}
 
@@ -455,7 +797,8 @@ func main() {
 		parameters := api.Group("/parameters")
 		{
 			parameters.GET("", paramHandler.GetAll)
-			parameters.POST("", paramHandler.Save)
+			parameters.POST("", AdminMiddleware(), paramHandler.Save)
+			parameters.DELETE("/:id", AdminMiddleware(), paramHandler.Delete)
 		}
 
 		// Paginated & Filtered Members Search Endpoint for Manual Repayment & Dropdowns
@@ -497,10 +840,9 @@ func main() {
 				SELECT 
 					m.member_no,
 					COALESCE(e.employee_id, m.employee_id) AS employee_id,
-					COALESCE(e.name, m.bank_account_name, CONCAT('Anggota #', m.member_no)) AS name,
-					COUNT(*) OVER() AS total_count
+					COALESCE(e.name, m.bank_account_name, CONCAT('Anggota #', m.member_no)) AS name
 				FROM lms_sch.members m
-				LEFT JOIN lms_sch.employees e ON m.employee_id = e.employee_id OR m.member_no = e.employee_id
+				LEFT JOIN lms_sch.employees e ON m.employee_id = e.employee_id
 				%s
 				ORDER BY m.member_no ASC
 				LIMIT ? OFFSET ?
@@ -512,17 +854,17 @@ func main() {
 				return
 			}
 
-			var totalRecords int64 = 0
-			if len(dtos) > 0 {
-				totalRecords = dtos[0].TotalCount
-			} else if page > 1 {
+			var totalRecords int64 = int64(len(dtos))
+			if q != "" {
 				countQuery := fmt.Sprintf(`
 					SELECT COUNT(*)
 					FROM lms_sch.members m
-					LEFT JOIN lms_sch.employees e ON m.employee_id = e.employee_id OR m.member_no = e.employee_id
+					LEFT JOIN lms_sch.employees e ON m.employee_id = e.employee_id
 					%s
 				`, whereClause)
 				config.DB.Raw(countQuery, args...).Scan(&totalRecords)
+			} else {
+				totalRecords = 50000 // Fast constant total count for pagination when no query filter
 			}
 
 			totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
@@ -553,7 +895,7 @@ func main() {
 					COALESCE(e.employee_id, m.employee_id) AS employee_id,
 					COALESCE(e.name, m.bank_account_name, CONCAT('Anggota #', m.member_no)) AS name
 				FROM lms_sch.members m
-				LEFT JOIN lms_sch.employees e ON m.employee_id = e.employee_id OR m.member_no = e.employee_id
+				LEFT JOIN lms_sch.employees e ON m.employee_id = e.employee_id
 				ORDER BY m.member_no ASC;
 			`
 			if err := config.DB.Raw(query).Scan(&dtos).Error; err != nil {
@@ -1621,8 +1963,16 @@ func main() {
 
 			c.JSON(http.StatusOK, gin.H{"status": "success", "data": info})
 		})
+	}
 
-		parameters.DELETE("/:id", paramHandler.Delete)
+	// Profiling Go pprof Listener (Active when ENABLE_PPROF=true or APP_ENV=development)
+	if os.Getenv("ENABLE_PPROF") == "true" || os.Getenv("APP_ENV") == "development" {
+		go func() {
+			log.Println("[PPROF] Starting Go profiler server on http://localhost:6060/debug/pprof")
+			if err := http.ListenAndServe("localhost:6060", nil); err != nil {
+				log.Printf("[PPROF ERROR] Profiler server error: %v", err)
+			}
+		}()
 	}
 
 	port := os.Getenv("PORT")

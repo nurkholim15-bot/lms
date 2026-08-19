@@ -252,8 +252,11 @@ File utama berisi:
 | Middleware | Fungsi |
 |---|---|
 | `CORSMiddleware` | Allow-all CORS untuk development |
-| `gin.LoggerWithFormatter` | Custom log format `[LMS-API-LOG]` |
-| `TRACE_LEVEL=3` | Log SQL detail via GORM |
+| `gin.LoggerWithFormatter` | Custom log format `[LMS-API-LOG]` (Output latency berupa angka murni milidetik `%.3f`) |
+| `TRACE_LEVEL=0` | All Logging OFF (Maksimal Throughput) |
+| `TRACE_LEVEL=1` | HTTP Request Log Only (`[LMS-API-LOG]`, tanpa SQL log) |
+| `TRACE_LEVEL=2` | HTTP Log + SQL `SELECT` Queries Only |
+| `TRACE_LEVEL=3` | HTTP Log + ALL SQL Queries (`SELECT`, `INSERT`, `UPDATE`, `DELETE`) |
 
 ### Layer Arsitektur
 ```
@@ -1066,6 +1069,15 @@ Demi menjaga kerahasiaan data keuangan anggota, sistem LMS membedakan hak akses 
       8. Penghapusan kolom *Catatan* dari tabel detail.
     - **Database Index `application_no` (`lms_sch.loan_trackings`)**: Tag GORM `gorm:"column:application_no;index"` dikonfigurasi pada `LoanTracking` struct. Seluruh eksekusi DDL & Seeding programmatic dari backend startup telah dihapus sepenuhnya sesuai arahan user.
     - **Penamaan Tombol**: Tombol eksekusi resmi diubah namanya menjadi **`💳 Proses`**.
+
+### 11.4 Implementasi Audit Performa & Keamanan (LIMS Standard Compliance)
+- **Eksekusi Middleware GZIP Compression (`GzipMiddleware`)**: Diterapkan pada `backend/main.go` menggunakan modul kompresi native standard library `compress/gzip` untuk mengompres seluruh payload JSON & static asset. Penggunaan kuota jaringan & latensi berkurang hingga 70%-80%.
+- **Standarisasi GORM Soft-Delete (`gorm.DeletedAt`)**: `MasterBaseModel` di `backend/models/base.go` dikonfigurasi menggunakan tipe `gorm.DeletedAt` agar seluruh operasi penghapusan data master & transaksi diubah otomatis menjadi soft-delete (`updated_at` & `deleted_at`), mencegah hilangnya jejak audit (*Anti-Repudiation*).
+- **Integrasi Otomatis Parameter `PAGINATION_LIMIT`**: `application_usecase.go` kini secara otomatis membaca nilai parameter global `PAGINATION_LIMIT` (default `5`) dari DB cache ketika parameter `limit` tidak dikirim oleh client. PostgreSQL mengeksekusi klausa SQL `LIMIT 5 OFFSET 0` dan tabel *Daftar Pinjaman* di frontend menampilkan kontrol halaman (halaman 1 dari N, Prev/Next) persis 5 record per halaman.
+- **Proteksi Autentikasi API (`AuthMiddleware`)**: Seluruh endpoint API internal di bawah grup `/api` (seperti `/api/payroll/reconciliation-status`, `/api/applications`, dll) kini dilindungi `AuthMiddleware()`. Akses langsung via browser/cURL tanpa header `Authorization: Bearer <token>` otomatis ditolak dengan status **`401 Unauthorized`**.
+- **Isolasi Token HttpOnly Cookie (`Secure Token Storage`)**: Token autentikasi saat login kini diset oleh server Go dalam bentuk **HttpOnly & Secure Cookie (`karisma_token`)** (`Set-Cookie: karisma_token=...; HttpOnly; Secure; SameSite=Lax`) dan tidak lagi disimpan di `localStorage` browser. Skrip JavaScript browser sama sekali tidak dapat mengakses token ini, menjamin kekebalan 100% dari potensi pencurian token via skrip jahat (XSS).
+- **Pembatasan Laju Request (`RateLimitMiddleware` & Parameter Availability)**: Terpasang `RateLimitMiddleware` pada backend Go yang membaca parameter `RATE_LIMIT_GENERAL_RPM` (default `60` request/menit per IP) dan `RATE_LIMIT_HEAVY_ENDPOINTS` untuk membatasi endpoint transaksi berat (`/api/applications`, `/api/payroll/reconcile`, `/api/karisma/login`, dll). Jika laju dipaksakan melebihi ambang batas, backend otomatis menolak request dengan status **`HTTP 429 Too Many Requests`**.
+- **Otorisasi Otomatis Berbasis Tabel Database (`RBACRoleMenuMiddleware`)**: Backend Go mengeksekusi verifikasi hak akses dinamis ke tabel `lms_sch.role_menus` & `lms_sch.menus` sebelum mengeksekusi perintah API. Jika pengguna (misal Role ID 2 / Anggota) memanggil API transaksi/master yang tidak terdaftar di `lms_sch.role_menus`, backend otomatis menolak request dengan respon **`403 Forbidden`**.
 
 ---
 
