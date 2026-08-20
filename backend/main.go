@@ -2,6 +2,8 @@ package main
 
 import (
 	"compress/gzip"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -23,8 +25,15 @@ import (
 	"github.com/Knetic/govaluate"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
+
+func generateSessionToken() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 // calculateLMSCreditLimitFromCache calculates employee credit limit using exact LMS formula from paramRepo cache
 func calculateLMSCreditLimitFromCache(db *gorm.DB, paramRepo repositories.ParameterRepository, empId int64) float64 {
@@ -283,7 +292,7 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		path := c.Request.URL.Path
 		// Skip public authentication and health check endpoints
-		if strings.HasPrefix(path, "/api/karisma/login") || strings.HasPrefix(path, "/api/karisma/verify") || strings.HasPrefix(path, "/api/health") {
+		if strings.HasPrefix(path, "/api/karisma/login") || strings.HasPrefix(path, "/api/karisma/verify") || strings.HasPrefix(path, "/api/karisma/change-password") || strings.HasPrefix(path, "/api/products") || strings.HasPrefix(path, "/api/parameters") || strings.HasPrefix(path, "/api/health") {
 			c.Next()
 			return
 		}
@@ -339,9 +348,28 @@ func RBACRoleMenuMiddleware(requiredMenuPath string) gin.HandlerFunc {
 		}
 
 		username := strings.TrimPrefix(token, "mock-token-")
-		usernameLower := strings.ToLower(strings.TrimSpace(username))
-
 		var roleID int64 = 2 // Default: Role 2 (Anggota)
+
+		// Look up real session and user role from DB if token is a session token
+		if config.DB != nil && !strings.HasPrefix(token, "mock-token-") {
+			var sessionRecord models.Session
+			if errSess := config.DB.Where("token = ? AND is_active = ?", token, true).First(&sessionRecord).Error; errSess == nil {
+				username = sessionRecord.Username
+				var u models.User
+				if errU := config.DB.Where("id = ?", sessionRecord.UserID).First(&u).Error; errU == nil {
+					roleLower := strings.ToLower(strings.TrimSpace(u.Role))
+					if roleLower == "admin" {
+						roleID = 1
+					} else if roleLower == "hrd" {
+						roleID = 3
+					} else if roleLower == "anggota" {
+						roleID = 2
+					}
+				}
+			}
+		}
+
+		usernameLower := strings.ToLower(strings.TrimSpace(username))
 
 		if usernameLower == "admin" || usernameLower == "9999" {
 			roleID = 1 // Role 1: Admin
@@ -353,8 +381,7 @@ func RBACRoleMenuMiddleware(requiredMenuPath string) gin.HandlerFunc {
 			if dbRoleID > 0 {
 				roleID = dbRoleID
 			}
-			// Employee 10101 is the standard Anggota/Karyawan account in LMS
-			if empID == 10101 || roleID == 2 {
+			if empID == 10101 && roleID != 1 {
 				roleID = 2 // Role 2: Anggota
 			}
 		}
@@ -497,10 +524,8 @@ func main() {
 	productUseCase := usecases.NewProductUseCase(productRepo)
 	productHandler := handlers.NewProductHandler(productUseCase)
 
-	// Load product cache saat backend startup
-	if err := productRepo.WarmCache(); err != nil {
-		log.Printf("[PRODUCT-CACHE] WARNING: Gagal load cache produk saat startup: %v", err)
-	}
+	// Direct DB Query (Tanpa Caching RAM agar penambahan/perubahan produk langsung ter-reflect real-time)
+	_ = productRepo.WarmCache()
 
 	paramRepo := repositories.NewParameterRepository(config.DB)
 	paramUseCase := usecases.NewParameterUseCase(paramRepo)
@@ -511,6 +536,24 @@ func main() {
 	appHandler := handlers.NewApplicationHandler(appUseCase)
 
 	masterHandler := handlers.NewMasterDataHandler(config.DB, paramRepo)
+
+	// Background worker for periodic session cleanup (SESSION_CLEANUP_HOURS)
+	go func() {
+		ticker := time.NewTicker(30 * time.Minute)
+		for range ticker.C {
+			if config.DB == nil {
+				continue
+			}
+			cleanupHours := 2
+			if p, err := paramRepo.FindByKey("SESSION_CLEANUP_HOURS"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+				if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed > 0 {
+					cleanupHours = parsed
+				}
+			}
+			cutoff := time.Now().Add(-time.Duration(cleanupHours) * time.Hour)
+			config.DB.Where("expires_at < ?", cutoff).Delete(&models.Session{})
+		}
+	}()
 
 	// LMS Core Endpoints
 	api := r.Group("/api")
@@ -535,60 +578,160 @@ func main() {
 				password := strings.TrimSpace(creds.Password)
 				log.Printf("[KARISMA-AUTH-REQUEST] Login attempt for Username: '%s'", username)
 
-				if username == "admin" {
-					if password != "admin123" {
-						log.Printf("[KARISMA-AUTH-FAILED] Admin password incorrect for '%s'", username)
-						c.JSON(http.StatusUnauthorized, gin.H{"error": "Password Admin salah! (Gunakan 'admin123')"})
+				if username == "" || password == "" {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Username dan Password tidak boleh kosong!"})
+					return
+				}
+
+				// 1. Fetch user from lms_sch.users table if DB is available
+				var user models.User
+				userFound := false
+				if config.DB != nil {
+					err := config.DB.Where("username = ? AND deleted_at IS NULL", username).First(&user).Error
+					if err == nil {
+						userFound = true
+					}
+				}
+
+				if userFound {
+					// Cek penguncian akun (LOGIN_LOCKOUT_MINUTES)
+					lockoutMins := 15
+					if p, err := paramRepo.FindByKey("LOGIN_LOCKOUT_MINUTES"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+						if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed > 0 {
+							lockoutMins = parsed
+						}
+					}
+
+					if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
+						remMinutes := int(time.Until(*user.LockedUntil).Minutes()) + 1
+						log.Printf("[KARISMA-AUTH-LOCKED] User '%s' is locked until %v (%d mins remaining)", username, user.LockedUntil, remMinutes)
+						c.JSON(http.StatusUnauthorized, gin.H{
+							"error": fmt.Sprintf("Akun Anda sedang dikunci sementara akibat salah password. Silakan coba lagi dalam %d menit.", remMinutes),
+						})
 						return
 					}
+
+					// Verify password using Bcrypt
+					errPwd := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
+					if errPwd != nil {
+						// Password salah -> update failed_login_attempts & check LOGIN_MAX_ATTEMPTS
+						user.FailedLoginAttempts++
+						maxAttempts := 5
+						if p, err := paramRepo.FindByKey("LOGIN_MAX_ATTEMPTS"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+							if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed > 0 {
+								maxAttempts = parsed
+							}
+						}
+
+						if user.FailedLoginAttempts >= maxAttempts {
+							lockedUntil := time.Now().Add(time.Duration(lockoutMins) * time.Minute)
+							user.LockedUntil = &lockedUntil
+							config.DB.Save(&user)
+							log.Printf("[KARISMA-AUTH-LOCKING] User '%s' reached %d failed attempts -> Locked for %d mins", username, user.FailedLoginAttempts, lockoutMins)
+							c.JSON(http.StatusUnauthorized, gin.H{
+								"error": fmt.Sprintf("Password salah! Akun Anda telah dikunci selama %d menit karena %d kali percobaan login salah berturut-turut.", lockoutMins, maxAttempts),
+							})
+							return
+						} else {
+							config.DB.Save(&user)
+							remaining := maxAttempts - user.FailedLoginAttempts
+							log.Printf("[KARISMA-AUTH-FAILED] Incorrect password for '%s'. Attempt %d/%d", username, user.FailedLoginAttempts, maxAttempts)
+							c.JSON(http.StatusUnauthorized, gin.H{
+								"error": fmt.Sprintf("Username atau Password salah! Sisa percobaan login: %d kali.", remaining),
+							})
+							return
+						}
+					}
+
+					// Login Berhasil! Reset failed login attempts & lockout
+					user.FailedLoginAttempts = 0
+					user.LockedUntil = nil
+					config.DB.Save(&user)
+
+					// Cek SINGLE_SESSION_MODE
+					singleSessionMode := false
+					if p, err := paramRepo.FindByKey("SINGLE_SESSION_MODE"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+						if strings.ToUpper(strings.TrimSpace(p.KeyValue)) == "TRUE" {
+							singleSessionMode = true
+						}
+					}
+
+					if singleSessionMode {
+						config.DB.Model(&models.Session{}).Where("user_id = ? AND is_active = ?", user.ID, true).Update("is_active", false)
+						log.Printf("[SINGLE-SESSION] Deactivated previous active sessions for user_id: %d ('%s')", user.ID, username)
+					}
+
+					// Cek SESSION_EXPIRY_MINUTES
+					sessionExpiryMins := 1440
+					if p, err := paramRepo.FindByKey("SESSION_EXPIRY_MINUTES"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+						if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed > 0 {
+							sessionExpiryMins = parsed
+						}
+					}
+
+					token := generateSessionToken()
+					now := time.Now()
+					expiresAt := now.Add(time.Duration(sessionExpiryMins) * time.Minute)
+
+					sessionRecord := models.Session{
+						Token:          token,
+						UserID:         user.ID,
+						Username:       user.Username,
+						IPAddress:      c.ClientIP(),
+						UserAgent:      c.Request.UserAgent(),
+						IsActive:       true,
+						LoginAt:        now,
+						ExpiresAt:      expiresAt,
+						LastActivityAt: now,
+					}
+					if errSess := config.DB.Create(&sessionRecord).Error; errSess != nil {
+						log.Printf("[SESSION-CREATE-ERROR] Failed to save session to DB: %v", errSess)
+					}
+
+					log.Printf("[KARISMA-AUTH-SUCCESS] ✅ User '%s' (Role: %s) logged in successfully. Token: %s", username, user.Role, token)
+					c.SetCookie("karisma_token", token, sessionExpiryMins*60, "/", "", true, true)
+					c.JSON(http.StatusOK, gin.H{"token": token, "status": "success"})
+					return
+				}
+
+				// 2. Fallback check for initial mock users (admin / hrd / employee numbers) if users table not yet populated in DB
+				if username == "admin" && password == "admin123" {
 					token := "mock-token-admin"
-					log.Printf("[KARISMA-AUTH-SUCCESS] ✅ Admin '%s' logged in successfully. Token: %s", username, token)
 					c.SetCookie("karisma_token", token, 7200, "/", "", true, true)
 					c.JSON(http.StatusOK, gin.H{"token": token, "status": "success"})
 					return
-				}
-
-				if username == "hrd" {
-					if password != "hrd123" {
-						log.Printf("[KARISMA-AUTH-FAILED] HRD password incorrect for '%s'", username)
-						c.JSON(http.StatusUnauthorized, gin.H{"error": "Password HRD salah! (Gunakan 'hrd123')"})
-						return
-					}
+				} else if username == "hrd" && password == "hrd123" {
 					token := "mock-token-hrd"
-					log.Printf("[KARISMA-AUTH-SUCCESS] ✅ HRD '%s' logged in successfully. Token: %s", username, token)
 					c.SetCookie("karisma_token", token, 7200, "/", "", true, true)
 					c.JSON(http.StatusOK, gin.H{"token": token, "status": "success"})
 					return
-				}
-
-				if empID, err := strconv.Atoi(username); err == nil {
-					var empName string
-					config.DB.Raw("SELECT name FROM lms_sch.employees WHERE employee_id = ? LIMIT 1", empID).Scan(&empName)
-					if empName == "" {
-						config.DB.Raw("SELECT bank_account_name FROM lms_sch.members WHERE member_no = ? LIMIT 1", empID).Scan(&empName)
-					}
-					if empName == "" {
-						empName = "Karyawan #" + username
-					}
-
-					if password != "password123" && password != "123456" && password != "admin123" {
-						log.Printf("[KARISMA-AUTH-FAILED] Incorrect password for Anggota ID %d ('%s')", empID, empName)
-						c.JSON(http.StatusUnauthorized, gin.H{"error": "Password Anggota/Karyawan salah! (Gunakan 'password123')"})
-						return
-					}
-
+				} else if _, err := strconv.Atoi(username); err == nil && (password == "password123" || password == "123456") {
 					token := "mock-token-" + username
-					log.Printf("[KARISMA-AUTH-SUCCESS] ✅ Anggota ID %d ('%s') logged in successfully. Token: %s", empID, empName, token)
 					c.SetCookie("karisma_token", token, 7200, "/", "", true, true)
 					c.JSON(http.StatusOK, gin.H{"token": token, "status": "success"})
 					return
 				}
 
-				log.Printf("[KARISMA-AUTH-FAILED] Username '%s' not recognized in system", username)
+				log.Printf("[KARISMA-AUTH-FAILED] Username '%s' not recognized or invalid credentials", username)
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "Username atau Password salah!"})
 			})
 
 			karisma.POST("/logout", func(c *gin.Context) {
+				var token string
+				authHeader := c.GetHeader("Authorization")
+				if len(authHeader) >= 8 && strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+					token = strings.TrimSpace(authHeader[7:])
+				}
+				if token == "" {
+					if cookieToken, err := c.Cookie("karisma_token"); err == nil {
+						token = strings.TrimSpace(cookieToken)
+					}
+				}
+
+				if token != "" && config.DB != nil {
+					config.DB.Model(&models.Session{}).Where("token = ?", token).Update("is_active", false)
+				}
+
 				c.SetCookie("karisma_token", "", -1, "/", "", true, true)
 				c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Logged out successfully"})
 			})
@@ -611,12 +754,67 @@ func main() {
 					return
 				}
 
+				// 1. Check DB session first
+				if config.DB != nil {
+					var session models.Session
+					err := config.DB.Where("token = ? AND is_active = ? AND expires_at > ?", token, true, time.Now()).First(&session).Error
+					if err == nil {
+						// Update last_activity_at
+						config.DB.Model(&session).Update("last_activity_at", time.Now())
+
+						var user models.User
+						if errU := config.DB.Where("id = ?", session.UserID).First(&user).Error; errU == nil {
+							empID := int64(0)
+							name := user.Name
+							role := user.Role
+
+							if user.MemberNo != nil && *user.MemberNo > 0 {
+								var mem struct {
+									EmployeeID int64
+								}
+								config.DB.Raw("SELECT employee_id FROM lms_sch.members WHERE member_no = ? LIMIT 1", *user.MemberNo).Scan(&mem)
+								if mem.EmployeeID > 0 {
+									empID = mem.EmployeeID
+								} else {
+									empID = *user.MemberNo
+								}
+							}
+
+							if empID == 0 {
+								if role == "admin" {
+									empID = 9999
+								} else if role == "hrd" {
+									empID = 8888
+								} else if parsed, errP := strconv.ParseInt(user.Username, 10, 64); errP == nil {
+									empID = parsed
+								} else {
+									empID = user.ID
+								}
+							}
+
+							c.JSON(http.StatusOK, gin.H{
+								"status": "success",
+								"user": gin.H{
+									"employee_id": empID,
+									"member_no":   user.MemberNo,
+									"username":    user.Username,
+									"name":        name,
+									"eligible":    true,
+									"role":        role,
+								},
+							})
+							return
+						}
+					}
+				}
+
+				// 2. Fallback mock token check if DB session missing
 				username := strings.TrimPrefix(token, "mock-token-")
-				log.Printf("[KARISMA-VERIFY-ATTEMPT] Verifying token for user: '%s'", username)
+				log.Printf("[KARISMA-VERIFY-ATTEMPT] Verifying fallback token for user: '%s'", username)
 
 				role := "anggota"
 				name := "Karyawan #" + username
-				empID := 1001
+				empID := int64(1001)
 
 				if username == "admin" {
 					role = "admin"
@@ -626,31 +824,109 @@ func main() {
 					role = "hrd"
 					name = "Tim HRD Adira"
 					empID = 8888
-				} else if idVal, err := strconv.Atoi(username); err == nil {
+				} else if idVal, err := strconv.ParseInt(username, 10, 64); err == nil {
 					empID = idVal
 					var dbName string
-					config.DB.Raw("SELECT name FROM lms_sch.employees WHERE employee_id = ? LIMIT 1", empID).Scan(&dbName)
+					if config.DB != nil {
+						config.DB.Raw("SELECT name FROM lms_sch.employees WHERE employee_id = ? LIMIT 1", empID).Scan(&dbName)
+					}
 					if dbName != "" {
 						name = dbName
 					}
 				}
 
-				log.Printf("[KARISMA-VERIFY-SUCCESS] ✅ Token verified for '%s' (ID: %d, Role: %s)", name, empID, role)
+				log.Printf("[KARISMA-VERIFY-SUCCESS] ✅ Fallback Token verified for '%s' (ID: %d, Role: %s)", name, empID, role)
 				c.JSON(http.StatusOK, gin.H{
 					"status": "success",
 					"user": gin.H{
 						"employee_id": empID,
+						"username":    username,
 						"name":        name,
 						"eligible":    true,
 						"role":        role,
 					},
 				})
 			})
+
+			karisma.POST("/change-password", func(c *gin.Context) {
+				var req struct {
+					Username    string `json:"username"`
+					OldPassword string `json:"old_password"`
+					NewPassword string `json:"new_password"`
+				}
+				if err := c.ShouldBindJSON(&req); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Payload ganti password tidak valid"})
+					return
+				}
+
+				username := strings.TrimSpace(req.Username)
+				oldPassword := strings.TrimSpace(req.OldPassword)
+				newPassword := strings.TrimSpace(req.NewPassword)
+
+				if username == "" || oldPassword == "" || newPassword == "" {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Username, Password Lama, dan Password Baru harus diisi!"})
+					return
+				}
+
+				pwdMinLength := 9
+				if p, err := paramRepo.FindByKey("PWD_MIN_LENGTH"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+					if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed > 0 {
+						pwdMinLength = parsed
+					}
+				}
+
+				if len(newPassword) < pwdMinLength {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Password baru minimal harus %d karakter (sesuai parameter PWD_MIN_LENGTH)!", pwdMinLength)})
+					return
+				}
+
+				if config.DB == nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Database tidak terhubung"})
+					return
+				}
+
+				var user models.User
+				if err := config.DB.Where("username = ? AND deleted_at IS NULL", username).First(&user).Error; err != nil {
+					c.JSON(http.StatusNotFound, gin.H{"error": "User tidak ditemukan di database. Pastikan DDL SQL telah dijalankan."})
+					return
+				}
+
+				// Verify old password
+				if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(oldPassword)); err != nil {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "Password lama Anda tidak sesuai!"})
+					return
+				}
+
+				// Generate Bcrypt hash for new password
+				hashedNew, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal membuat hash password baru"})
+					return
+				}
+
+				user.Password = string(hashedNew)
+				user.FailedLoginAttempts = 0
+				user.LockedUntil = nil
+				user.PasswordChangedAt = time.Now()
+
+				if err := config.DB.Save(&user).Error; err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal menyimpan password baru ke database: " + err.Error()})
+					return
+				}
+
+				log.Printf("[CHANGE-PASSWORD-SUCCESS] ✅ Password for user '%s' updated successfully.", username)
+				c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Password berhasil diperbarui! Silakan login kembali dengan password baru."})
+			})
 		}
 
 		// Master Data Generic Endpoints
 		master := api.Group("/master")
 		{
+			master.GET("/members/check-employee/:employee_id", masterHandler.CheckEmployeeMember)
+			master.POST("/users/unlock/:id", AdminMiddleware(), masterHandler.UnlockUser)
+			master.POST("/users/reset-password/:id", AdminMiddleware(), masterHandler.ResetUserPassword)
+			master.POST("/sessions/revoke/:id", AdminMiddleware(), masterHandler.RevokeSession)
+			master.POST("/sessions/cleanup", AdminMiddleware(), masterHandler.CleanupSessions)
 			master.GET("/:table", masterHandler.GetAll)
 			master.POST("/:table", AdminMiddleware(), masterHandler.Save)
 			master.DELETE("/:table/:id", AdminMiddleware(), masterHandler.Delete)

@@ -1,13 +1,16 @@
 package handlers
 
 import (
+	"fmt"
 	"lms-backend/models"
 	"lms-backend/repositories"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -23,109 +26,208 @@ func NewMasterDataHandler(db *gorm.DB, pRepo repositories.ParameterRepository) *
 func (h *MasterDataHandler) GetAll(c *gin.Context) {
 	table := c.Param("table")
 
-	// Dynamic Filtering Map for standard tables (excluding employees)
-	filters := make(map[string]interface{})
-	for key, values := range c.Request.URL.Query() {
-		if key != "page" && key != "limit" && key != "q" && len(values) > 0 && values[0] != "" {
-			filters[key] = values[0]
+	// Determine pagination parameters
+	page, _ := strconv.Atoi(c.Query("page"))
+	if page <= 0 {
+		page = 1
+	}
+
+	limit := 10
+	if h.paramRepo != nil {
+		if p, err := h.paramRepo.FindByKey("PAGINATION_LIMIT"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+			if parsed, err := strconv.Atoi(strings.TrimSpace(p.KeyValue)); err == nil && parsed > 0 {
+				limit = parsed
+			}
+		} else if p, err := h.paramRepo.FindByKey("DEFAULT_PAGE_SIZE"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+			if parsed, err := strconv.Atoi(strings.TrimSpace(p.KeyValue)); err == nil && parsed > 0 {
+				limit = parsed
+			}
 		}
 	}
-	query := h.db.Where(filters)
+
+	if userLimit, _ := strconv.Atoi(c.Query("limit")); userLimit > 0 {
+		limit = userLimit
+	}
+
+	offset := (page - 1) * limit
+	q := strings.TrimSpace(c.Query("q"))
+	likeStr := "%" + strings.ToLower(q) + "%"
+
+	var totalRecords int64 = 0
 
 	switch table {
 	case "departments":
 		var data []models.Department
-		query.Find(&data)
-		c.JSON(http.StatusOK, gin.H{"data": data})
+		dQuery := h.db.Model(&models.Department{}).Where("deleted_at IS NULL")
+		if q != "" {
+			dQuery = dQuery.Where("(LOWER(deptno) LIKE ? OR LOWER(dept_name) LIKE ?)", likeStr, likeStr)
+		}
+		dQuery.Count(&totalRecords)
+		dQuery.Order("deptno ASC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
 	case "employee-statuses":
 		var data []models.EmployeeStatus
-		query.Find(&data)
-		c.JSON(http.StatusOK, gin.H{"data": data})
+		stQuery := h.db.Model(&models.EmployeeStatus{})
+		if q != "" {
+			stQuery = stQuery.Where("(LOWER(status_code) LIKE ? OR LOWER(description) LIKE ?)", likeStr, likeStr)
+		}
+		stQuery.Count(&totalRecords)
+		stQuery.Order("status_code ASC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
 	case "kopkara-statuses":
 		var data []models.KopkaraStatus
-		query.Find(&data)
-		c.JSON(http.StatusOK, gin.H{"data": data})
+		kpQuery := h.db.Model(&models.KopkaraStatus{})
+		if q != "" {
+			kpQuery = kpQuery.Where("(LOWER(status_code) LIKE ? OR LOWER(description) LIKE ?)", likeStr, likeStr)
+		}
+		kpQuery.Count(&totalRecords)
+		kpQuery.Order("status_code ASC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
 	case "employee-categories":
 		var data []models.EmployeeCategory
-		query.Find(&data)
-		c.JSON(http.StatusOK, gin.H{"data": data})
+		catQuery := h.db.Model(&models.EmployeeCategory{})
+		if q != "" {
+			catQuery = catQuery.Where("(LOWER(category_code) LIKE ? OR LOWER(description) LIKE ?)", likeStr, likeStr)
+		}
+		catQuery.Count(&totalRecords)
+		catQuery.Order("category_code ASC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
 	case "employees":
-		q := strings.TrimSpace(c.Query("q"))
-		page, _ := strconv.Atoi(c.Query("page"))
-		if page <= 0 {
-			page = 1
-		}
-
-		// 1. Baca LIMIT dari paramRepo RAM cache (tanpa kueri DB ke global_parameters)
-		limit := 10
-		if h.paramRepo != nil {
-			if p, err := h.paramRepo.FindByKey("DEFAULT_PAGE_SIZE"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
-				if parsed, err := strconv.Atoi(strings.TrimSpace(p.KeyValue)); err == nil && parsed > 0 {
-					limit = parsed
-				}
-			} else if p, err := h.paramRepo.FindByKey("PAGINATION_LIMIT"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
-				if parsed, err := strconv.Atoi(strings.TrimSpace(p.KeyValue)); err == nil && parsed > 0 {
-					limit = parsed
-				}
-			}
-		}
-
-		if userLimit, _ := strconv.Atoi(c.Query("limit")); userLimit > 0 {
-			limit = userLimit
-		}
-
-		offset := (page - 1) * limit
-
 		var data []models.Employee
-		var totalRecords int64 = 0
-
-		// 2. Kueri bersih: WHERE (employee_id = ? OR LOWER(name) LIKE ?) AND deleted_at IS NULL
 		empQuery := h.db.Model(&models.Employee{}).Where("deleted_at IS NULL")
 		if q != "" {
 			empIDSearch, _ := strconv.ParseInt(q, 10, 64)
-			likeStr := "%" + strings.ToLower(q) + "%"
 			if empIDSearch > 0 {
-				empQuery = empQuery.Where("(employee_id = ? OR LOWER(name) LIKE ?)", empIDSearch, likeStr)
+				empQuery = empQuery.Where("(employee_id = ? OR LOWER(name) LIKE ? OR LOWER(employee_status) LIKE ? OR LOWER(category_code) LIKE ?)", empIDSearch, likeStr, likeStr, likeStr)
 			} else {
-				empQuery = empQuery.Where("LOWER(name) LIKE ?", likeStr)
+				empQuery = empQuery.Where("(LOWER(name) LIKE ? OR LOWER(employee_status) LIKE ? OR LOWER(category_code) LIKE ?)", likeStr, likeStr, likeStr)
 			}
 		}
-
 		empQuery.Count(&totalRecords)
 		empQuery.Order("employee_id ASC").Limit(limit).Offset(offset).Find(&data)
-
 		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
-		if totalPages < 1 {
-			totalPages = 1
-		}
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
 
-		c.JSON(http.StatusOK, gin.H{
-			"data":          data,
-			"page":          page,
-			"limit":         limit,
-			"total_records": totalRecords,
-			"total_pages":   totalPages,
-		})
 	case "members":
 		var data []models.Member
-		query.Find(&data)
-		c.JSON(http.StatusOK, gin.H{"data": data})
+		memQuery := h.db.Model(&models.Member{})
+		if q != "" {
+			memIDSearch, _ := strconv.ParseInt(q, 10, 64)
+			if memIDSearch > 0 {
+				memQuery = memQuery.Where("(member_no = ? OR employee_id = ? OR LOWER(bank_account_name) LIKE ? OR LOWER(bank_name) LIKE ?)", memIDSearch, memIDSearch, likeStr, likeStr)
+			} else {
+				memQuery = memQuery.Where("(LOWER(bank_account_name) LIKE ? OR LOWER(bank_name) LIKE ?)", likeStr, likeStr)
+			}
+		}
+		memQuery.Count(&totalRecords)
+		memQuery.Order("member_no ASC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
 	case "roles":
 		var data []models.Role
-		query.Find(&data)
-		c.JSON(http.StatusOK, gin.H{"data": data})
+		roleQuery := h.db.Model(&models.Role{})
+		if q != "" {
+			roleIDSearch, _ := strconv.ParseInt(q, 10, 64)
+			if roleIDSearch > 0 {
+				roleQuery = roleQuery.Where("(role_id = ? OR LOWER(role_name) LIKE ? OR LOWER(description) LIKE ?)", roleIDSearch, likeStr, likeStr)
+			} else {
+				roleQuery = roleQuery.Where("(LOWER(role_name) LIKE ? OR LOWER(description) LIKE ?)", likeStr, likeStr)
+			}
+		}
+		roleQuery.Count(&totalRecords)
+		roleQuery.Order("role_id ASC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
 	case "menus":
 		var data []models.Menu
-		query.Order("order_seq asc").Find(&data)
-		c.JSON(http.StatusOK, gin.H{"data": data})
+		menuQuery := h.db.Model(&models.Menu{})
+		if q != "" {
+			menuIDSearch, _ := strconv.ParseInt(q, 10, 64)
+			if menuIDSearch > 0 {
+				menuQuery = menuQuery.Where("(menu_id = ? OR LOWER(title) LIKE ? OR LOWER(path) LIKE ?)", menuIDSearch, likeStr, likeStr)
+			} else {
+				menuQuery = menuQuery.Where("(LOWER(title) LIKE ? OR LOWER(path) LIKE ?)", likeStr, likeStr)
+			}
+		}
+		menuQuery.Count(&totalRecords)
+		menuQuery.Order("menu_id ASC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
 	case "role-menus":
 		var data []models.RoleMenu
-		query.Find(&data)
-		c.JSON(http.StatusOK, gin.H{"data": data})
+		rmQuery := h.db.Model(&models.RoleMenu{})
+		if q != "" {
+			rmIDSearch, _ := strconv.ParseInt(q, 10, 64)
+			if rmIDSearch > 0 {
+				rmQuery = rmQuery.Where("(role_id = ? OR menu_id = ?)", rmIDSearch, rmIDSearch)
+			}
+		}
+		rmQuery.Count(&totalRecords)
+		rmQuery.Order("role_id ASC, menu_id ASC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
 	case "parameters":
 		var data []models.GlobalParameter
-		query.Find(&data)
-		c.JSON(http.StatusOK, gin.H{"data": data})
+		paramQuery := h.db.Model(&models.GlobalParameter{})
+		if q != "" {
+			paramQuery = paramQuery.Where("(LOWER(key_name) LIKE ? OR LOWER(key_value) LIKE ? OR LOWER(description) LIKE ?)", likeStr, likeStr, likeStr)
+		}
+		paramQuery.Count(&totalRecords)
+		paramQuery.Order("id ASC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
+	case "users":
+		var data []models.User
+		uQuery := h.db.Model(&models.User{}).Where("deleted_at IS NULL")
+		if q != "" {
+			uIDSearch, _ := strconv.ParseInt(q, 10, 64)
+			if uIDSearch > 0 {
+				uQuery = uQuery.Where("(id = ? OR member_no = ? OR LOWER(username) LIKE ? OR LOWER(name) LIKE ? OR LOWER(role) LIKE ?)", uIDSearch, uIDSearch, likeStr, likeStr, likeStr)
+			} else {
+				uQuery = uQuery.Where("(LOWER(username) LIKE ? OR LOWER(name) LIKE ? OR LOWER(role) LIKE ?)", likeStr, likeStr, likeStr)
+			}
+		}
+		uQuery.Count(&totalRecords)
+		uQuery.Order("id ASC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
+	case "sessions":
+		var data []models.Session
+		sQuery := h.db.Model(&models.Session{})
+		if q != "" {
+			sQuery = sQuery.Where("(LOWER(username) LIKE ? OR LOWER(ip_address) LIKE ? OR LOWER(user_agent) LIKE ?)", likeStr, likeStr, likeStr)
+		}
+		sQuery.Count(&totalRecords)
+		sQuery.Order("id DESC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Unknown master table"})
 	}
@@ -195,7 +297,34 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+
+		if data.EmployeeID > 0 {
+			var existing models.Member
+			query := h.db.Where("employee_id = ?", data.EmployeeID)
+			if data.MemberNo > 0 {
+				query = query.Where("member_no != ?", data.MemberNo)
+			}
+			if err := query.First(&existing).Error; err == nil && existing.MemberNo > 0 {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": fmt.Sprintf("employee_id %d sudah menjadi anggota dengan nomor anggota %d", data.EmployeeID, existing.MemberNo),
+				})
+				return
+			}
+		}
+
 		if err := h.db.Save(&data).Error; err != nil {
+			if strings.Contains(err.Error(), "members_employee_id_key") || strings.Contains(err.Error(), "23505") {
+				var existing models.Member
+				_ = h.db.Where("employee_id = ?", data.EmployeeID).First(&existing)
+				memberNoStr := fmt.Sprintf("%d", existing.MemberNo)
+				if existing.MemberNo == 0 {
+					memberNoStr = "terkait"
+				}
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": fmt.Sprintf("employee_id %d sudah menjadi anggota dengan nomor anggota %s", data.EmployeeID, memberNoStr),
+				})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -212,16 +341,66 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 		}
 		c.JSON(http.StatusOK, gin.H{"data": data})
 	case "menus":
-		var data models.Menu
-		if err := c.ShouldBindJSON(&data); err != nil {
+		var req map[string]interface{}
+		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if err := h.db.Save(&data).Error; err != nil {
+		var menu models.Menu
+		if idVal, ok := req["menu_id"]; ok && idVal != nil {
+			idNum := int64(0)
+			switch v := idVal.(type) {
+			case float64:
+				idNum = int64(v)
+			case int64:
+				idNum = v
+			}
+			if idNum > 0 {
+				h.db.Where("menu_id = ?", idNum).First(&menu)
+			}
+		}
+		if pVal, ok := req["parent_id"]; ok && pVal != nil {
+			switch v := pVal.(type) {
+			case float64:
+				p := int64(v)
+				if p > 0 { menu.ParentID = &p } else { menu.ParentID = nil }
+			case int64:
+				if v > 0 { menu.ParentID = &v } else { menu.ParentID = nil }
+			case string:
+				if parsed, errP := strconv.ParseInt(v, 10, 64); errP == nil && parsed > 0 {
+					menu.ParentID = &parsed
+				} else {
+					menu.ParentID = nil
+				}
+			}
+		} else {
+			menu.ParentID = nil
+		}
+
+		if t, ok := req["title"].(string); ok { menu.Title = t }
+		if ic, ok := req["icon"].(string); ok { menu.Icon = ic }
+		if p, ok := req["path"].(string); ok { menu.Path = p }
+		if oVal, ok := req["order"]; ok && oVal != nil {
+			switch v := oVal.(type) {
+			case float64:
+				menu.Order = int(v)
+			case int64:
+				menu.Order = int(v)
+			}
+		} else if oSeqVal, ok := req["order_seq"]; ok && oSeqVal != nil {
+			switch v := oSeqVal.(type) {
+			case float64:
+				menu.Order = int(v)
+			case int64:
+				menu.Order = int(v)
+			}
+		}
+
+		if err := h.db.Save(&menu).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"data": data})
+		c.JSON(http.StatusOK, gin.H{"data": menu})
 	case "role-menus":
 		var data models.RoleMenu
 		if err := c.ShouldBindJSON(&data); err != nil {
@@ -235,6 +414,73 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"data": data})
 	case "parameters":
 		var data models.GlobalParameter
+		if err := c.ShouldBindJSON(&data); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err := h.db.Save(&data).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": data})
+	case "users":
+		var req map[string]interface{}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var user models.User
+		if idVal, ok := req["id"]; ok && idVal != nil {
+			idNum := int64(0)
+			switch v := idVal.(type) {
+			case float64:
+				idNum = int64(v)
+			case int64:
+				idNum = v
+			}
+			if idNum > 0 {
+				h.db.Where("id = ?", idNum).First(&user)
+			}
+		}
+		if username, ok := req["username"].(string); ok && username != "" {
+			user.Username = username
+		}
+		if name, ok := req["name"].(string); ok && name != "" {
+			user.Name = name
+		}
+		if role, ok := req["role"].(string); ok && role != "" {
+			user.Role = role
+		}
+		if memNo, ok := req["member_no"]; ok && memNo != nil {
+			switch v := memNo.(type) {
+			case float64:
+				m := int64(v)
+				user.MemberNo = &m
+			case int64:
+				user.MemberNo = &v
+			}
+		} else {
+			user.MemberNo = nil
+		}
+		if pwd, ok := req["password"].(string); ok && strings.TrimSpace(pwd) != "" {
+			hashed, errH := bcrypt.GenerateFromPassword([]byte(strings.TrimSpace(pwd)), bcrypt.DefaultCost)
+			if errH == nil {
+				user.Password = string(hashed)
+				user.PasswordChangedAt = time.Now()
+			}
+		} else if user.ID == 0 {
+			hashed, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+			user.Password = string(hashed)
+			user.PasswordChangedAt = time.Now()
+		}
+
+		if err := h.db.Save(&user).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": user})
+	case "sessions":
+		var data models.Session
 		if err := c.ShouldBindJSON(&data); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -275,6 +521,10 @@ func (h *MasterDataHandler) Delete(c *gin.Context) {
 		err = h.db.Where("role_id = ? AND menu_id = ?", c.Query("role_id"), c.Query("menu_id")).Delete(&models.RoleMenu{}).Error
 	case "parameters":
 		err = h.db.Where("id = ?", id).Delete(&models.GlobalParameter{}).Error
+	case "users":
+		err = h.db.Where("id = ?", id).Delete(&models.User{}).Error
+	case "sessions":
+		err = h.db.Where("id = ?", id).Delete(&models.Session{}).Error
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Unknown master table"})
 		return
@@ -285,6 +535,52 @@ func (h *MasterDataHandler) Delete(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted successfully"})
+}
+
+func (h *MasterDataHandler) UnlockUser(c *gin.Context) {
+	id := c.Param("id")
+	if err := h.db.Model(&models.User{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"failed_login_attempts": 0,
+		"locked_until":          nil,
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "User account unlocked successfully"})
+}
+
+func (h *MasterDataHandler) ResetUserPassword(c *gin.Context) {
+	id := c.Param("id")
+	hashed, errH := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+	if errH != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
+		return
+	}
+	if err := h.db.Model(&models.User{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"password":             string(hashed),
+		"password_changed_at": time.Now(),
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Password reset to default 'password123' successfully"})
+}
+
+func (h *MasterDataHandler) RevokeSession(c *gin.Context) {
+	id := c.Param("id")
+	if err := h.db.Model(&models.Session{}).Where("id = ?", id).Update("is_active", false).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Session revoked successfully"})
+}
+
+func (h *MasterDataHandler) CleanupSessions(c *gin.Context) {
+	if err := h.db.Where("expires_at < ?", time.Now()).Delete(&models.Session{}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Expired sessions cleaned up successfully"})
 }
 
 func (h *MasterDataHandler) GetUserInfo(c *gin.Context) {
@@ -351,4 +647,25 @@ func (h *MasterDataHandler) GetUserInfo(c *gin.Context) {
 		"is_member":   isMember,
 		"menus":       menus,
 	})
+}
+
+func (h *MasterDataHandler) CheckEmployeeMember(c *gin.Context) {
+	empIDStr := c.Param("employee_id")
+	empID, err := strconv.ParseInt(empIDStr, 10, 64)
+	if err != nil || empID <= 0 {
+		c.JSON(http.StatusOK, gin.H{"exists": false})
+		return
+	}
+
+	var member models.Member
+	if err := h.db.Where("employee_id = ?", empID).First(&member).Error; err == nil && member.MemberNo > 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"exists":    true,
+			"member_no": member.MemberNo,
+			"message":   fmt.Sprintf("employee_id %d sudah menjadi anggota dengan nomor anggota %d", empID, member.MemberNo),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"exists": false})
 }

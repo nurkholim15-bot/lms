@@ -52,6 +52,7 @@ function App() {
     return (p && p.key_value !== undefined && p.key_value !== null) ? p.key_value : defaultVal;
   };
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [simulation, setSimulation] = useState(null);
   const [dateError, setDateError] = useState('');
   const [payrollReconciled, setPayrollReconciled] = useState(false);
@@ -133,6 +134,30 @@ function App() {
       setEmpSelectLoading(false);
     }
   };
+  
+  // State & Fetcher untuk Paginated Searchable Member Dropdown di Master Users
+  const [memberSelectSearchQuery, setMemberSelectSearchQuery] = useState('');
+  const [memberSelectPage, setMemberSelectPage] = useState(1);
+  const [memberSelectTotalPages, setMemberSelectTotalPages] = useState(1);
+  const [memberSelectTotalRecords, setMemberSelectTotalRecords] = useState(0);
+  const [memberSelectList, setMemberSelectList] = useState([]);
+  const [memberSelectLoading, setMemberSelectLoading] = useState(false);
+
+  const fetchPaginatedMembersForSelect = async (q, page) => {
+    setMemberSelectLoading(true);
+    try {
+      const pageSize = parseInt(getParamVal('DEFAULT_PAGE_SIZE', '10')) || parseInt(getParamVal('PAGINATION_LIMIT', '10')) || 10;
+      const res = await axios.get(`${API_BASE_URL}/api/master/members?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
+      setMemberSelectList(res.data.data || []);
+      setMemberSelectTotalRecords(res.data.total_records || (res.data.data ? res.data.data.length : 0));
+      setMemberSelectTotalPages(res.data.total_pages || 1);
+    } catch (err) {
+      console.error("Error fetching members for select:", err);
+    } finally {
+      setMemberSelectLoading(false);
+    }
+  };
+
   const [loanSearchQuery, setLoanSearchQuery] = useState('');
   const [loanPage, setLoanPage] = useState(1);
   const [exportModalOpen, setExportModalOpen] = useState(false);
@@ -533,6 +558,7 @@ function App() {
     }
 
     if (activeTab === 'pengajuan' || activeTab === 'master') {
+      fetchProducts();
       axios.get(`${API_BASE_URL}/api/members/all`)
         .then(res => setAllMembers(res.data.data || []))
         .catch(err => console.error("Error fetching all members:", err));
@@ -1646,6 +1672,20 @@ function App() {
     }
   }, [activeTab]);
 
+  // Dynamic CSS Variables Sync based on Global Parameters (HEADER_BG, BUTTON_BG, BUTTON_CANCEL_BG, BUTTON_CLOSED_BG)
+  useEffect(() => {
+    const headerBg = getParamVal('HEADER_BG', '#0B2545');
+    const buttonBg = getParamVal('BUTTON_BG', '#10b981');
+    const buttonCancelBg = getParamVal('BUTTON_CANCEL_BG', '#64748b');
+    const buttonClosedBg = getParamVal('BUTTON_CLOSED_BG', '#475569');
+
+    document.documentElement.style.setProperty('--header-bg', headerBg);
+    document.documentElement.style.setProperty('--button-bg', buttonBg);
+    document.documentElement.style.setProperty('--button-cancel-bg', buttonCancelBg);
+    document.documentElement.style.setProperty('--button-closed-bg', buttonClosedBg);
+  }, [parameters]);
+
+
   useEffect(() => {
     if (activeTab === 'master' || activeTab.startsWith('master-')) {
       fetchMasterData(masterTab, masterSearchQuery, currentPage);
@@ -1866,40 +1906,88 @@ function App() {
   };
 
   if (!currentUser || (!currentUser.employee_id && !currentUser.username && !currentUser.role)) {
+    const getParamVal = (key, fallback) => {
+      const p = (parameters || []).find(item => item.key_name === key || item.KeyName === key);
+      return (p?.key_value || p?.KeyValue) || fallback;
+    };
+    const loginHeaderBg = getParamVal('HEADER_BG', 'var(--header-bg, #0B2545)');
+    const loginAppName = getParamVal('APP_NAME', 'LIM System');
+
     return (
-      <div style={{ display: 'flex', height: '100vh', width: '100vw', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f1f5f9', position: 'fixed', top: 0, left: 0, zIndex: 99999 }}>
-        <div style={{ width: '400px', padding: '40px', background: '#ffffff', borderRadius: '12px', boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)' }}>
-          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-            <div style={{ width: '48px', height: '48px', background: 'var(--primary-blue)', borderRadius: '12px', margin: '0 auto 16px' }}></div>
-            <h2 style={{ color: '#0f172a', margin: 0 }}>LMS Karisma Login</h2>
-            <p style={{ color: '#64748B', margin: '8px 0 0 0' }}>Masuk dengan akun HRIS Adira Anda</p>
+      <div style={{ display: 'flex', height: '100vh', width: '100vw', alignItems: 'center', justifyContent: 'center', backgroundColor: loginHeaderBg, position: 'fixed', top: 0, left: 0, zIndex: 99999 }}>
+        <div style={{ width: '420px', padding: '36px', background: '#f8fafc', borderRadius: '24px', boxShadow: '0 8px 32px rgba(0, 0, 0, 0.25)' }}>
+          <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+            <img 
+              src="/kopkara.jfif" 
+              alt="Kopkara Logo" 
+              style={{ width: '64px', height: '64px', borderRadius: '16px', objectFit: 'cover', background: '#ffffff', padding: '4px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', margin: '0 auto 12px', display: 'block' }} 
+            />
+            <h2 style={{ color: '#1e293b', margin: 0, fontSize: '1.6rem', fontWeight: 800, letterSpacing: '-0.02em', fontFamily: 'serif, sans-serif' }}>
+              {loginAppName}
+            </h2>
           </div>
           
           <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {loginError && <div style={{ padding: '12px', background: '#fee2e2', color: '#991B1B', borderRadius: '8px', fontSize: '0.875rem' }}>{loginError}</div>}
             
-            <div>
-              <label style={{ display: 'block', marginBottom: '8px', color: '#334155', fontWeight: 500 }}>Username</label>
-              <input type="text" required value={loginForm.username} onChange={e => setLoginForm({...loginForm, username: e.target.value})} style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '1rem' }} placeholder="Contoh: 1001, admin, hrd" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <label style={{ width: '100px', fontSize: '0.75rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em' }}>USERNAME</label>
+              <input 
+                type="text" required 
+                value={loginForm.username} 
+                onChange={e => setLoginForm({...loginForm, username: e.target.value})} 
+                style={{ flex: 1, padding: '10px 14px', borderRadius: '10px', border: '1px solid #bfdbfe', background: '#f0f7ff', fontSize: '0.95rem', outline: 'none' }} 
+                placeholder="Username" 
+              />
             </div>
-            <div>
-              <label style={{ display: 'block', marginBottom: '8px', color: '#334155', fontWeight: 500 }}>Password</label>
-              <input type="password" required value={loginForm.password} onChange={e => setLoginForm({...loginForm, password: e.target.value})} style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '1rem' }} placeholder="Password" />
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <label style={{ width: '100px', fontSize: '0.75rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em' }}>PASSWORD</label>
+              <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <input 
+                  type={showPassword ? 'text' : 'password'} required 
+                  value={loginForm.password} 
+                  onChange={e => setLoginForm({...loginForm, password: e.target.value})} 
+                  style={{ width: '100%', padding: '10px 38px 10px 14px', borderRadius: '10px', border: '1px solid #bfdbfe', background: '#f0f7ff', fontSize: '0.95rem', outline: 'none' }} 
+                  placeholder="••••••••" 
+                />
+                <button 
+                  type="button" 
+                  onClick={() => setShowPassword(!showPassword)}
+                  title={showPassword ? 'Sembunyikan Password' : 'Tampilkan Password'}
+                  style={{ position: 'absolute', right: '10px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.15rem', color: '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2px', userSelect: 'none' }}
+                >
+                  {showPassword ? '👁️' : '👁️‍🗨️'}
+                </button>
+              </div>
             </div>
             
-            <button type="submit" style={{ width: '100%', padding: '12px', background: 'var(--primary-blue)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '1rem', fontWeight: 600, cursor: 'pointer', marginTop: '8px' }}>
-              Masuk ke LMS
-            </button>
+            <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
+              <button 
+                type="button" 
+                onClick={() => alert('Ganti Password: Masukkan Username & Password lama Anda, lalu hubungi admin atau ubah di menu profil setelah login.')}
+                style={{ flex: 1, padding: '12px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '12px', fontSize: '0.95rem', fontWeight: 700, cursor: 'pointer' }}
+              >
+                Ganti Password
+              </button>
+              <button 
+                type="submit" 
+                style={{ flex: 1, padding: '12px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '12px', fontSize: '0.95rem', fontWeight: 700, cursor: 'pointer' }}
+              >
+                Login
+              </button>
+            </div>
+
+            <div style={{ textAlign: 'center', marginTop: '4px' }}>
+              <button 
+                type="button" 
+                onClick={() => alert('Akun Tersedia (Simulator):\n- User Anggota: ID Angka Berapa Saja (Contoh: 10101) / password123\n- User Admin: admin / admin123\n- User HRD: hrd / hrd123')}
+                style={{ background: 'none', border: 'none', color: '#6366f1', fontSize: '0.85rem', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline' }}
+              >
+                Forgot?
+              </button>
+            </div>
           </form>
-          
-          <div style={{ marginTop: '24px', fontSize: '0.875rem', color: '#64748B', textAlign: 'center' }}>
-            <p><strong>Akun Tersedia (Simulator):</strong></p>
-            <ul style={{ listStyle: 'none', padding: 0, margin: '8px 0 0 0' }}>
-              <li>User Anggota: <code>[ID Angka Berapa Saja]</code> / <code>password123</code><br/><small>(Contoh: 10101, 1001, dsb)</small></li>
-              <li>User Admin: <code>admin</code> / <code>admin123</code></li>
-              <li>User HRD: <code>hrd</code> / <code>hrd123</code></li>
-            </ul>
-          </div>
         </div>
       </div>
     );
@@ -1918,7 +2006,7 @@ function App() {
           {!isSidebarCollapsed && (
             <span style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={{ fontWeight: 'bold', fontSize: '1rem', color: '#ffffff' }}>
-                {getParamVal('LMS_Title', 'Kopkara LMS')}
+                {getParamVal('APP_NAME', 'LIM System')}
               </span>
               <span style={{ fontSize: '0.75rem', fontWeight: 'normal', color: '#94a3b8', textTransform: 'capitalize' }}>
                 Mode: {realRoleName}
@@ -1926,7 +2014,7 @@ function App() {
             </span>
           )}
         </div>
-        <nav className="sidebar-nav">
+        <nav className="sidebar-nav" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100% - 70px)' }}>
           {(() => {
             const topMenus = visibleMenus.filter(m => !m.parent_id);
             const getSubMenus = (parentId) => visibleMenus.filter(m => String(m.parent_id) === String(parentId));
@@ -1985,6 +2073,23 @@ function App() {
               );
             });
           })()}
+
+          {/* Tombol Logout di bagian paling bawah Sidebar dengan Font Warna Merah (#f87171) */}
+          <div 
+            className="nav-item logout-nav-item" 
+            onClick={handleLogout}
+            style={{ marginTop: 'auto', display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 20px', cursor: 'pointer', fontWeight: 600, color: '#f87171' }}
+            title={isSidebarCollapsed ? 'Logout' : ''}
+          >
+            <span className="nav-icon" style={{ fontSize: '1.2rem', color: '#f87171', display: 'flex', alignItems: 'center' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <polyline points="16 17 21 12 16 7"></polyline>
+                <line x1="21" y1="12" x2="9" y2="12"></line>
+              </svg>
+            </span>
+            {!isSidebarCollapsed && <span className="nav-label" style={{ color: '#f87171', fontWeight: 600, fontSize: '0.95rem' }}>Logout</span>}
+          </div>
         </nav>
       </aside>
 
@@ -1998,8 +2103,13 @@ function App() {
             >
               ☰
             </button>
-            <div className="header-title">
-              {visibleMenus.find(m => m.path === activeTab)?.title || (activeTab.startsWith('master-') ? 'Data Master: ' + masterTab.replace('-', ' ') : 'Dashboard')}
+            <div className="header-title" style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ fontSize: '1.15rem', fontWeight: 800, color: '#ffffff', letterSpacing: '0.02em' }}>
+                {getParamVal('APP_LONG_NAME', 'Loan Management System (LMS)')}
+              </span>
+              <span style={{ fontSize: '0.8rem', fontWeight: 500, color: 'rgba(255, 255, 255, 0.85)' }}>
+                {visibleMenus.find(m => m.path === activeTab)?.title || (activeTab.startsWith('master-') ? 'Data Master: ' + masterTab.replace('-', ' ') : 'Dashboard')}
+              </span>
             </div>
           </div>
           
@@ -2008,7 +2118,7 @@ function App() {
               const displayName = realEmployee ? realEmployee.name : (currentUser ? currentUser.name : '');
               return (
                 <>
-                  <span style={{ fontWeight: 500, color: '#334155' }}>
+                  <span style={{ fontWeight: 500, color: '#ffffff' }}>
                     {displayName} ({currentUser?.employee_id}) - <span style={{ textTransform: 'capitalize' }}>{realRoleName}</span>
                   </span>
                   <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'var(--accent-blue)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' }}>
@@ -2017,12 +2127,6 @@ function App() {
                 </>
               );
             })()}
-            <button 
-              onClick={handleLogout}
-              style={{ padding: '8px 16px', background: '#fee2e2', color: '#b91c1c', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}
-            >
-              Logout
-            </button>
           </div>
         </header>
 
@@ -2142,231 +2246,266 @@ function App() {
           )}
 
           {activeTab === 'pengajuan' && (
-            <div className="card" style={{ maxWidth: '700px' }}>
-              <h2>Formulir Pengajuan Pinjaman</h2>
-              {dateError && (
-                <div style={{ padding: '12px', background: '#fee2e2', color: '#991B1B', borderRadius: '4px', marginTop: '16px', fontWeight: 500 }}>
-                  ⚠️ {dateError}
-                </div>
-              )}
-              <form onSubmit={submitApplication} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '24px' }}>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Produk Pinjaman</label>
-                  <select 
-                    required 
-                    value={form.product_id} 
-                    onChange={e => setForm({...form, product_id: e.target.value})}
-                    style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)' }}
-                  >
-                    <option value="">-- Pilih Produk --</option>
-                    {products.map(p => {
-                      const pId = p.id || p.ID;
-                      const pName = p.name || p.Name || `Produk #${pId}`;
-                      const pRate = p.interest_rate !== undefined ? p.interest_rate : (p.InterestRate !== undefined ? p.InterestRate : 0);
-                      const pType = p.loan_type || p.LoanType || 'FLAT';
-                      return (
-                        <option key={pId} value={pId}>
-                          {pName} - (Bunga {pRate}% / bln - {pType})
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Nominal Pinjaman (Rp)</label>
-                  <input 
-                    type="text" 
-                    required 
-                    placeholder="Contoh: 300.000"
-                    value={form.requested_amount ? Number(form.requested_amount).toLocaleString('id-ID') : ''}
-                    onChange={e => {
-                      const rawVal = e.target.value.replace(/\D/g, '');
-                      setForm({...form, requested_amount: rawVal});
-                    }}
-                    style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)', fontWeight: 600, fontSize: '0.95rem' }}
-                  />
-                  {form.requested_amount && (
-                    <span style={{ fontSize: '0.75rem', color: '#0284c7', display: 'block', marginTop: '4px' }}>
-                      Nominal Terbaca: <strong>Rp {Number(form.requested_amount).toLocaleString('id-ID')}</strong>
-                    </span>
-                  )}
-                </div>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Tenor (Bulan)</label>
-                  <select 
-                    required
-                    value={form.tenor}
-                    onChange={e => setForm({...form, tenor: e.target.value})}
-                    style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)' }}
-                  >
-                    <option value="">-- Pilih Tenor --</option>
-                    {(() => {
-                      const maxParam = parameters.find(p => String(p.KeyName || p.key_name || '').toUpperCase() === 'LOAN_MAX_TENOR');
-                      const maxGlobal = maxParam ? (parseInt(maxParam.KeyValue || maxParam.key_value) || 60) : 60;
-                      const selectedProduct = products.find(p => String(p.ID || p.id) === String(form.product_id));
-                      const maxProduct = selectedProduct ? (parseInt(selectedProduct.MaxTenorMonths || selectedProduct.max_tenor_months) || 60) : 60;
-                      const maxTenor = Math.min(maxGlobal, maxProduct);
-                      return Array.from({ length: Math.max(1, maxTenor) }, (_, i) => i + 1).map(m => (
-                        <option key={m} value={m}>{m} Bulan</option>
-                      ));
-                    })()}
-                  </select>
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', padding: '24px 0' }}>
+              <div style={{ maxWidth: '680px', width: '100%', margin: '0 auto', background: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', boxShadow: '0 4px 20px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
+                {/* Header Card dengan background HEADER_BG dan font putih */}
+                <div style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff', padding: '18px 24px' }}>
+                  <h2 style={{ color: '#ffffff', margin: 0, fontSize: '1.25rem', fontWeight: 700 }}>
+                    Formulir Pengajuan Pinjaman
+                  </h2>
                 </div>
 
-                {/* Simulasi Breakdown */}
-                {simulation && !simulation.error && (
-                  <div style={{ marginTop: '16px', padding: '16px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px' }}>
-                    <h3 style={{ fontSize: '1.1rem', marginBottom: '12px', color: 'var(--primary-blue)' }}>Rincian Simulasi Pinjaman</h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                      <div><span style={{ color: '#64748B' }}>Pokok per Bulan:</span> <br/><strong>Rp {Math.round(simulation.principal_per_month).toLocaleString('id-ID')}</strong></div>
-                      <div><span style={{ color: '#64748B' }}>Bunga per Bulan ({simulation.interest_rate}%):</span> <br/><strong>Rp {Math.round(simulation.interest_per_month).toLocaleString('id-ID')}</strong></div>
-                      <div><span style={{ color: '#64748B' }}>Biaya Administrasi:</span> <br/><strong>Rp {Math.round(simulation.admin_fee).toLocaleString('id-ID')}</strong></div>
-                      <div><span style={{ color: '#64748B' }}>Total Angsuran per Bulan:</span> <br/><strong>Rp {Math.round(simulation.total_installment).toLocaleString('id-ID')}</strong></div>
-                      <div style={{ gridColumn: 'span 2', marginTop: '8px', paddingTop: '8px', borderTop: '1px dashed #cbd5e1' }}>
-                        <span style={{ color: '#64748B' }}>Batas Plafon Maksimal (Berdasarkan Rumus):</span> <br/>
-                        <strong style={{ fontSize: '1.1rem', color: '#047857' }}>Rp {simulation.credit_limit ? Math.round(simulation.credit_limit).toLocaleString('id-ID') : 'Tidak Dibatasi'}</strong>
-                      </div>
-                      <div style={{ gridColumn: 'span 2', marginTop: '4px' }}>
-                        <span style={{ color: '#64748B' }}>Total Kewajiban (Pokok + Bunga + Admin):</span> <br/>
-                        <strong style={{ fontSize: '1.2rem', color: '#0f172a' }}>Rp {Math.round(simulation.total_loan_cost).toLocaleString('id-ID')}</strong>
+                <div style={{ padding: '24px' }}>
+                  {dateError && (
+                    <div style={{ padding: '12px', background: '#fee2e2', color: '#991B1B', borderRadius: '6px', marginBottom: '16px', fontWeight: 600 }}>
+                      ⚠️ {dateError}
+                    </div>
+                  )}
+
+                  <form onSubmit={submitApplication} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+                    {/* 1. Produk Pinjaman (Label & Dropdown Sebaris) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                      <label style={{ width: '180px', flexShrink: 0, fontWeight: 600, color: '#334155' }}>Produk Pinjaman</label>
+                      <div style={{ flex: 1 }}>
+                        <select 
+                          required 
+                          value={form.product_id} 
+                          onChange={e => setForm({...form, product_id: e.target.value})}
+                          style={{ width: '100%', padding: '10px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontSize: '0.95rem', outline: 'none' }}
+                        >
+                          <option value="">-- Pilih Produk --</option>
+                          {products.map(p => {
+                            const pId = p.id || p.ID;
+                            const pName = p.name || p.Name || `Produk #${pId}`;
+                            const pRate = p.interest_rate !== undefined ? p.interest_rate : (p.InterestRate !== undefined ? p.InterestRate : 0);
+                            const pType = p.loan_type || p.LoanType || 'FLAT';
+                            return (
+                              <option key={pId} value={pId}>
+                                {pName} - (Bunga {pRate}% / bln - {pType})
+                              </option>
+                            );
+                          })}
+                        </select>
                       </div>
                     </div>
-                  </div>
-                )}
-                {simulation && simulation.error && (
-                  <div style={{ padding: '12px', background: '#fee2e2', color: '#991B1B', borderRadius: '4px', marginTop: '16px' }}>
-                    ❌ {simulation.error}
-                  </div>
-                )}
 
-                <button 
-                  type="submit" 
-                  disabled={dateError !== '' || (simulation && simulation.error)}
-                  style={{ padding: '12px', background: dateError || (simulation && simulation.error) ? '#94a3b8' : 'var(--success-green)', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 600, cursor: dateError || (simulation && simulation.error) ? 'not-allowed' : 'pointer', marginTop: '16px' }}>
-                  Kirim Pengajuan
-                </button>
-              </form>
+                    {/* 2. Nominal Pinjaman (Label & Input Sebaris) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                      <label style={{ width: '180px', flexShrink: 0, fontWeight: 600, color: '#334155' }}>Nominal Pinjaman (Rp)</label>
+                      <div style={{ flex: 1 }}>
+                        <input 
+                          type="text" 
+                          required 
+                          placeholder="Contoh: 300.000"
+                          value={form.requested_amount ? Number(form.requested_amount).toLocaleString('id-ID') : ''}
+                          onChange={e => {
+                            const rawVal = e.target.value.replace(/\D/g, '');
+                            setForm({...form, requested_amount: rawVal});
+                          }}
+                          style={{ width: '100%', padding: '10px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontWeight: 600, fontSize: '0.95rem', outline: 'none' }}
+                        />
+                        {form.requested_amount && (
+                          <span style={{ fontSize: '0.8rem', color: '#0284c7', display: 'block', marginTop: '4px', fontWeight: 500 }}>
+                            Nominal Terbaca: <strong>Rp {Number(form.requested_amount).toLocaleString('id-ID')}</strong>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 3. Tenor (Label & Dropdown Sebaris) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                      <label style={{ width: '180px', flexShrink: 0, fontWeight: 600, color: '#334155' }}>Tenor (Bulan)</label>
+                      <div style={{ flex: 1 }}>
+                        <select 
+                          required
+                          value={form.tenor}
+                          onChange={e => setForm({...form, tenor: e.target.value})}
+                          style={{ width: '100%', padding: '10px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontSize: '0.95rem', outline: 'none' }}
+                        >
+                          <option value="">-- Pilih Tenor --</option>
+                          {(() => {
+                            const maxParam = parameters.find(p => String(p.KeyName || p.key_name || '').toUpperCase() === 'LOAN_MAX_TENOR');
+                            const maxGlobal = maxParam ? (parseInt(maxParam.KeyValue || maxParam.key_value) || 60) : 60;
+                            const selectedProduct = products.find(p => String(p.ID || p.id) === String(form.product_id));
+                            const maxProduct = selectedProduct ? (parseInt(selectedProduct.MaxTenorMonths || selectedProduct.max_tenor_months) || 60) : 60;
+                            const maxTenor = Math.min(maxGlobal, maxProduct);
+                            return Array.from({ length: Math.max(1, maxTenor) }, (_, i) => i + 1).map(m => (
+                              <option key={m} value={m}>{m} Bulan</option>
+                            ));
+                          })()}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Simulasi Breakdown */}
+                    {simulation && !simulation.error && (
+                      <div style={{ marginTop: '12px', padding: '16px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#1e293b' }}>
+                        <h3 style={{ fontSize: '1rem', marginBottom: '12px', color: 'var(--header-bg, #0B2545)', borderBottom: '1px solid #e2e8f0', paddingBottom: '6px' }}>Rincian Simulasi Pinjaman</h3>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '0.875rem' }}>
+                          <div><span style={{ color: '#64748b' }}>Pokok per Bulan:</span> <br/><strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.principal_per_month).toLocaleString('id-ID')}</strong></div>
+                          <div><span style={{ color: '#64748b' }}>Bunga per Bulan ({simulation.interest_rate}%):</span> <br/><strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.interest_per_month).toLocaleString('id-ID')}</strong></div>
+                          <div><span style={{ color: '#64748b' }}>Biaya Administrasi:</span> <br/><strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.admin_fee).toLocaleString('id-ID')}</strong></div>
+                          <div><span style={{ color: '#64748b' }}>Total Angsuran per Bulan:</span> <br/><strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.total_installment).toLocaleString('id-ID')}</strong></div>
+                          <div style={{ gridColumn: 'span 2', marginTop: '6px', paddingTop: '6px', borderTop: '1px dashed #cbd5e1' }}>
+                            <span style={{ color: '#64748b' }}>Batas Plafon Maksimal (Berdasarkan Rumus):</span> <br/>
+                            <strong style={{ fontSize: '1.05rem', color: '#047857' }}>Rp {simulation.credit_limit ? Math.round(simulation.credit_limit).toLocaleString('id-ID') : 'Tidak Dibatasi'}</strong>
+                          </div>
+                          <div style={{ gridColumn: 'span 2', marginTop: '4px' }}>
+                            <span style={{ color: '#64748b' }}>Total Kewajiban (Pokok + Bunga + Admin):</span> <br/>
+                            <strong style={{ fontSize: '1.15rem', color: '#0f172a' }}>Rp {Math.round(simulation.total_loan_cost).toLocaleString('id-ID')}</strong>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {simulation && simulation.error && (
+                      <div style={{ padding: '12px', background: '#fee2e2', color: '#991B1B', borderRadius: '6px', marginTop: '12px', fontWeight: 600 }}>
+                        ❌ {simulation.error}
+                      </div>
+                    )}
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', marginTop: '16px' }}>
+                      <button 
+                        type="submit" 
+                        disabled={dateError !== '' || (simulation && simulation.error)}
+                        style={{ 
+                          padding: '10px 24px', 
+                          background: dateError || (simulation && simulation.error) ? '#94a3b8' : 'var(--button-bg, #10b981)', 
+                          color: '#ffffff', 
+                          border: 'none', 
+                          borderRadius: '6px', 
+                          fontWeight: 700, 
+                          fontSize: '0.95rem',
+                          cursor: dateError || (simulation && simulation.error) ? 'not-allowed' : 'pointer' 
+                        }}
+                      >
+                        Kirim Pengajuan
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
             </div>
           )}
 
           {activeTab === 'pinjaman' && (
-            <div className="table-container">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', paddingBottom: '8px', borderBottom: '1px solid #e2e8f0', flexWrap: 'wrap', gap: '8px' }}>
-                <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#1e293b' }}>
+            <div className="table-container" style={{ padding: 0, overflow: 'hidden' }}>
+              {/* Header Container dengan background HEADER_BG & font putih */}
+              <div style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff', padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                <div style={{ fontSize: '1.15rem', fontWeight: 'bold', color: '#ffffff' }}>
                   Daftar Pengajuan & Pinjaman
                 </div>
 
                 {/* Badge Status Privilege Role */}
                 {(roleId === 1 || roleId === 3 || String(realRoleName).toLowerCase().includes('admin') || String(realRoleName).toLowerCase().includes('hrd')) ? (
-                  <span style={{ backgroundColor: '#e0e7ff', color: '#3730a3', border: '1px solid #c7d2fe', padding: '4px 12px', borderRadius: '16px', fontSize: '0.78rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ backgroundColor: 'rgba(255, 255, 255, 0.15)', color: '#ffffff', border: '1px solid rgba(255, 255, 255, 0.3)', padding: '4px 12px', borderRadius: '16px', fontSize: '0.78rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                     ⭐ Role High-Privilege ({realRoleName}): Akses Seluruh Data Pinjaman
                   </span>
                 ) : (
-                  <span style={{ backgroundColor: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', padding: '4px 12px', borderRadius: '16px', fontSize: '0.78rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ backgroundColor: 'rgba(255, 255, 255, 0.15)', color: '#ffffff', border: '1px solid rgba(255, 255, 255, 0.3)', padding: '4px 12px', borderRadius: '16px', fontSize: '0.78rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                     🔒 Mode Anggota: Data Pinjaman Pribadi ({currentUser?.employee_id || 'Anggota'})
                   </span>
                 )}
               </div>
 
-              {/* Form Filter Pencarian No. Anggota / Employee ID & Periode */}
+              {/* Form Filter Pencarian No. Anggota / Employee ID & Periode dengan Background Putih */}
               {(() => {
-                const isHighPriv = Boolean(
-                  roleId === 1 || roleId === 3 || 
-                  String(realRoleName).toLowerCase().includes('admin') || 
-                  String(realRoleName).toLowerCase().includes('hrd')
-                );
-                return (
-                  <div style={{ background: '#f8fafc', padding: '12px 14px', borderRadius: '8px', marginBottom: '16px', border: '1px solid #cbd5e1', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#334155' }}>
-                        🔍 Cari berdasarkan No. Anggota / Employee ID:
-                      </span>
-                      <input 
-                        type="text"
-                        placeholder={isHighPriv ? "Kosongkan untuk semua, atau ketik No. Anggota..." : "No. Anggota Anda"}
-                        value={isHighPriv ? loanSearchMemberNo : (currentUser?.employee_id || loanSearchMemberNo)}
-                        disabled={!isHighPriv}
-                        onChange={(e) => {
-                          if (isHighPriv) setLoanSearchMemberNo(e.target.value);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleSearchLoans();
-                          }
-                        }}
-                        style={{ 
-                          padding: '6px 12px', 
-                          fontSize: '0.85rem', 
-                          borderRadius: '6px', 
-                          border: '1px solid #94a3b8', 
-                          minWidth: '220px',
-                          backgroundColor: isHighPriv ? '#ffffff' : '#e2e8f0',
-                          color: isHighPriv ? '#0f172a' : '#475569',
-                          cursor: isHighPriv ? 'text' : 'not-allowed',
-                          fontWeight: isHighPriv ? 400 : 600
-                        }}
-                      />
-                    </div>
+                  const isHighPriv = Boolean(
+                    roleId === 1 || roleId === 3 || 
+                    String(realRoleName).toLowerCase().includes('admin') || 
+                    String(realRoleName).toLowerCase().includes('hrd')
+                  );
+                  return (
+                    <div style={{ background: '#f8fafc', padding: '14px 18px', borderRadius: '10px', marginBottom: '16px', border: '1px solid #cbd5e1', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#334155' }}>
+                          🔍 Cari berdasarkan No. Anggota / Employee ID:
+                        </span>
+                        <input 
+                          type="text"
+                          placeholder={isHighPriv ? "Kosongkan untuk semua, atau ketik No. Anggota..." : "No. Anggota Anda"}
+                          value={isHighPriv ? loanSearchMemberNo : (currentUser?.employee_id || loanSearchMemberNo)}
+                          disabled={!isHighPriv}
+                          onChange={(e) => {
+                            if (isHighPriv) setLoanSearchMemberNo(e.target.value);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleSearchLoans();
+                            }
+                          }}
+                          style={{ 
+                            padding: '6px 12px', 
+                            fontSize: '0.85rem', 
+                            borderRadius: '6px', 
+                            border: '1px solid #cbd5e1', 
+                            minWidth: '220px',
+                            backgroundColor: isHighPriv ? '#ffffff' : '#e2e8f0',
+                            color: isHighPriv ? '#0f172a' : '#475569',
+                            cursor: isHighPriv ? 'text' : 'not-allowed',
+                            fontWeight: isHighPriv ? 400 : 600
+                          }}
+                        />
+                      </div>
 
-                    {/* Filter Periode (Bulan & Tahun) */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#334155' }}>
-                        📅 Periode:
-                      </span>
-                      <select
-                        value={loanMonthFilter.month}
-                        onChange={(e) => setLoanMonthFilter(prev => ({ ...prev, month: e.target.value }))}
-                        style={{ padding: '6px 10px', fontSize: '0.85rem', borderRadius: '6px', border: '1px solid #94a3b8', background: '#fff' }}
-                      >
-                        <option value="01">01 - Januari</option>
-                        <option value="02">02 - Februari</option>
-                        <option value="03">03 - Maret</option>
-                        <option value="04">04 - April</option>
-                        <option value="05">05 - Mei</option>
-                        <option value="06">06 - Juni</option>
-                        <option value="07">07 - Juli</option>
-                        <option value="08">08 - Agustus</option>
-                        <option value="09">09 - September</option>
-                        <option value="10">10 - Oktober</option>
-                        <option value="11">11 - November</option>
-                        <option value="12">12 - Desember</option>
-                      </select>
-                      <select
-                        value={loanMonthFilter.year}
-                        onChange={(e) => setLoanMonthFilter(prev => ({ ...prev, year: e.target.value }))}
-                        style={{ padding: '6px 10px', fontSize: '0.85rem', borderRadius: '6px', border: '1px solid #94a3b8', background: '#fff' }}
-                      >
-                        <option value="2024">2024</option>
-                        <option value="2025">2025</option>
-                        <option value="2026">2026</option>
-                        <option value="2027">2027</option>
-                        <option value="2028">2028</option>
-                      </select>
-                    </div>
+                      {/* Filter Periode (Bulan & Tahun) */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#334155' }}>
+                          📅 Periode:
+                        </span>
+                        <select
+                          value={loanMonthFilter.month}
+                          onChange={(e) => setLoanMonthFilter(prev => ({ ...prev, month: e.target.value }))}
+                          style={{ padding: '6px 10px', fontSize: '0.85rem', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#fff', color: '#0f172a' }}
+                        >
+                          <option value="01">01 - Januari</option>
+                          <option value="02">02 - Februari</option>
+                          <option value="03">03 - Maret</option>
+                          <option value="04">04 - April</option>
+                          <option value="05">05 - Mei</option>
+                          <option value="06">06 - Juni</option>
+                          <option value="07">07 - Juli</option>
+                          <option value="08">08 - Agustus</option>
+                          <option value="09">09 - September</option>
+                          <option value="10">10 - Oktober</option>
+                          <option value="11">11 - November</option>
+                          <option value="12">12 - Desember</option>
+                        </select>
+                        <select
+                          value={loanMonthFilter.year}
+                          onChange={(e) => setLoanMonthFilter(prev => ({ ...prev, year: e.target.value }))}
+                          style={{ padding: '6px 10px', fontSize: '0.85rem', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#fff', color: '#0f172a' }}
+                        >
+                          <option value="2024">2024</option>
+                          <option value="2025">2025</option>
+                          <option value="2026">2026</option>
+                          <option value="2027">2027</option>
+                          <option value="2028">2028</option>
+                        </select>
+                      </div>
 
-                    <button 
-                      onClick={() => handleSearchLoans()}
-                      style={{ padding: '6px 16px', background: '#2563eb', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-                    >
-                      Cari Pinjaman
-                    </button>
-
-                    {isHighPriv && (loanSearchMemberNo || loanMonthFilter.month !== '08' || loanMonthFilter.year !== '2026') && (
                       <button 
-                        onClick={() => {
-                          setLoanSearchMemberNo('');
-                          setLoanMonthFilter({ month: '08', year: '2026' });
-                          handleSearchLoans('', '2026', '08');
-                        }}
-                        style={{ padding: '6px 12px', background: '#64748b', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem' }}
+                        onClick={() => handleSearchLoans()}
+                        style={{ padding: '6px 18px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                       >
-                        Reset
+                        Cari Pinjaman
                       </button>
-                    )}
-                  </div>
-                );
-              })()}
+
+                      {isHighPriv && (loanSearchMemberNo || loanMonthFilter.month !== '08' || loanMonthFilter.year !== '2026') && (
+                        <button 
+                          onClick={() => {
+                            setLoanSearchMemberNo('');
+                            setLoanMonthFilter({ month: '08', year: '2026' });
+                            handleSearchLoans('', '2026', '08');
+                          }}
+                          style={{ padding: '6px 12px', background: 'var(--button-cancel-bg, #64748b)', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
 
               <table>
                 <thead>
@@ -2550,12 +2689,12 @@ function App() {
                     />
                   </div>
                   <div style={{ display: 'flex', gap: '12px' }}>
-                    <button type="submit" style={{ flex: 1, padding: '12px', background: 'var(--primary-blue)', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 600, cursor: 'pointer' }}>
+                    <button type="submit" style={{ padding: '10px 20px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '4px', fontWeight: 600, cursor: 'pointer' }}>
                       Simpan Parameter
                     </button>
                     {paramForm.id > 0 && (
-                      <button type="button" onClick={() => setParamForm({ id: 0, key_name: '', key_value: '', description: '' })} style={{ padding: '12px', background: '#e2e8f0', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                        Batal Edit
+                      <button type="button" onClick={() => setParamForm({ id: 0, key_name: '', key_value: '', description: '' })} style={{ padding: '10px 20px', background: 'var(--button-cancel-bg, #64748b)', color: '#ffffff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>
+                        Cancel
                       </button>
                     )}
                   </div>
@@ -2597,22 +2736,26 @@ function App() {
 
           {activeTab === 'disbursement' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {/* Header Box Verifikasi Pencairan Dana & Filter Partisi (Matching Screenshot #2) */}
-              <div style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-                <h3 style={{ fontSize: '1.1rem', color: '#1e293b', margin: '0 0 4px 0', fontWeight: 'bold' }}>Verifikasi Pencairan Dana</h3>
-                <div style={{ fontSize: '0.8rem', color: '#2563eb', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span>🗄️ LMS System -</span>
-                  <span style={{ fontWeight: 600 }}>Querying on: loan_applications_{disbursementMonthFilter.year}{disbursementMonthFilter.month}</span>
+              {/* Card Container Verifikasi Pencairan Dana */}
+              <div style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', boxShadow: '0 4px 16px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+                {/* Header Card khusus dengan background HEADER_BG & font putih */}
+                <div style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff', padding: '16px 20px' }}>
+                  <h3 style={{ fontSize: '1.15rem', color: '#ffffff', margin: 0, fontWeight: 'bold' }}>Verifikasi Pencairan Dana</h3>
+                  <div style={{ fontSize: '0.8rem', color: '#38bdf8', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span>🗄️ LMS System -</span>
+                    <span style={{ fontWeight: 600 }}>Querying on: loan_applications_{disbursementMonthFilter.year}{disbursementMonthFilter.month}</span>
+                  </div>
                 </div>
 
-                <div style={{ background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '10px', padding: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+                {/* Filter Box Body dengan Background Putih */}
+                <div style={{ padding: '16px 20px', background: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
                     <div>
                       <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#475569', marginBottom: '4px', textTransform: 'uppercase' }}>BULAN</label>
                       <select 
                         value={disbursementMonthFilter.month} 
                         onChange={e => setDisbursementMonthFilter({...disbursementMonthFilter, month: e.target.value})}
-                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', fontSize: '0.9rem', minWidth: '120px' }}
+                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontSize: '0.9rem', minWidth: '120px' }}
                       >
                         <option value="01">Januari</option>
                         <option value="02">Februari</option>
@@ -2634,7 +2777,7 @@ function App() {
                       <select 
                         value={disbursementMonthFilter.year} 
                         onChange={e => setDisbursementMonthFilter({...disbursementMonthFilter, year: e.target.value})}
-                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', fontSize: '0.9rem', minWidth: '100px' }}
+                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontSize: '0.9rem', minWidth: '100px' }}
                       >
                         <option value="2024">2024</option>
                         <option value="2025">2025</option>
@@ -2655,7 +2798,7 @@ function App() {
                   <button 
                     type="button"
                     onClick={() => fetchApplications(disbursementMonthFilter.year, disbursementMonthFilter.month)}
-                    style={{ background: '#10b981', color: '#ffffff', border: 'none', borderRadius: '8px', padding: '8px 24px', fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 2px 4px rgba(16,185,129,0.2)' }}
+                    style={{ background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '8px', padding: '8px 24px', fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
                   >
                     <span>🔍</span> Filter
                   </button>
@@ -2865,9 +3008,9 @@ function App() {
                         />
                       </div>
 
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
-                        <button type="button" onClick={() => setExportModalOpen(false)} style={{ padding: '8px 16px', background: '#64748b', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>Batal</button>
-                        <button type="submit" style={{ padding: '8px 18px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>📥 Proses Export File CSV</button>
+                      <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', gap: '12px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
+                        <button type="submit" style={{ padding: '8px 18px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>📥 Proses Export File CSV</button>
+                        <button type="button" onClick={() => setExportModalOpen(false)} style={{ padding: '8px 16px', background: 'var(--button-cancel-bg, #64748b)', color: '#ffffff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>Cancel</button>
                       </div>
                     </form>
                   </div>
@@ -2877,22 +3020,26 @@ function App() {
 
           {activeTab === 'approval' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {/* Filter Bar Verifikasi Administratif Matching Screenshot #2 */}
-              <div style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-                <h3 style={{ fontSize: '1.1rem', color: '#1e293b', margin: '0 0 4px 0', fontWeight: 'bold' }}>Verifikasi Administratif</h3>
-                <div style={{ fontSize: '0.8rem', color: '#2563eb', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span>🗄️ LMS System -</span>
-                  <span style={{ fontWeight: 600 }}>Querying on: loan_applications_{approvalMonthFilter.year}{approvalMonthFilter.month}</span>
+              {/* Card Container Verifikasi Administratif */}
+              <div style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', boxShadow: '0 4px 16px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+                {/* Header Card khusus dengan background HEADER_BG & font putih */}
+                <div style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff', padding: '16px 20px' }}>
+                  <h3 style={{ fontSize: '1.15rem', color: '#ffffff', margin: 0, fontWeight: 'bold' }}>Verifikasi Administratif</h3>
+                  <div style={{ fontSize: '0.8rem', color: '#38bdf8', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span>🗄️ LMS System -</span>
+                    <span style={{ fontWeight: 600 }}>Querying on: loan_applications_{approvalMonthFilter.year}{approvalMonthFilter.month}</span>
+                  </div>
                 </div>
 
-                <div style={{ background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '10px', padding: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+                {/* Filter Box Body dengan Background Putih */}
+                <div style={{ padding: '16px 20px', background: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
                     <div>
                       <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#475569', marginBottom: '4px', textTransform: 'uppercase' }}>BULAN</label>
                       <select 
                         value={approvalMonthFilter.month} 
                         onChange={e => setApprovalMonthFilter({...approvalMonthFilter, month: e.target.value})}
-                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', fontSize: '0.9rem', minWidth: '120px' }}
+                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontSize: '0.9rem', minWidth: '120px' }}
                       >
                         <option value="01">Januari</option>
                         <option value="02">Februari</option>
@@ -2914,7 +3061,7 @@ function App() {
                       <select 
                         value={approvalMonthFilter.year} 
                         onChange={e => setApprovalMonthFilter({...approvalMonthFilter, year: e.target.value})}
-                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', fontSize: '0.9rem', minWidth: '100px' }}
+                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontSize: '0.9rem', minWidth: '100px' }}
                       >
                         <option value="2024">2024</option>
                         <option value="2025">2025</option>
@@ -2935,7 +3082,7 @@ function App() {
                   <button 
                     type="button"
                     onClick={() => fetchApplications(approvalMonthFilter.year, approvalMonthFilter.month)}
-                    style={{ background: '#10b981', color: '#ffffff', border: 'none', borderRadius: '8px', padding: '8px 24px', fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 2px 4px rgba(16,185,129,0.2)' }}
+                    style={{ background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '8px', padding: '8px 24px', fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
                   >
                     <span>🔍</span> Filter
                   </button>
@@ -3330,7 +3477,7 @@ function App() {
                           setCurrentPage(1);
                           fetchMasterData(masterTab, masterSearchQuery, 1);
                         }}
-                        style={{ padding: '8px 14px', background: '#2563eb', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                        style={{ padding: '8px 14px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
                       >
                         Cari
                       </button>
@@ -3342,37 +3489,136 @@ function App() {
 
                   <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '600px' }}>
                     <thead>
-                      <tr style={{ background: 'var(--primary-blue)', color: 'white' }}>
+                      <tr style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff' }}>
                         {(() => {
                           let keys = [];
                           if (masterDataList.length > 0) {
-                            keys = Object.keys(masterDataList[0]).filter(k => k !== 'CreatedAt' && k !== 'UpdatedAt' && k !== 'DeletedAt' && k !== 'CreatedUser');
+                            keys = Object.keys(masterDataList[0]).filter(k => 
+                              k !== 'CreatedAt' && k !== 'UpdatedAt' && k !== 'DeletedAt' && k !== 'CreatedUser' &&
+                              k.toLowerCase() !== 'updated_at' && k.toLowerCase() !== 'deleted_at'
+                            );
                           }
-                          return keys.map(k => <th key={k} style={{ padding: '8px 12px', textAlign: 'left', textTransform: 'capitalize', fontSize: '0.875rem' }}>{k.replace('_', ' ')}</th>);
+                          return keys.map(k => {
+                            if (k.toLowerCase() === 'failed_login_attempts') {
+                              return (
+                                <th key={k} style={{ padding: '8px 6px', textAlign: 'center', width: '90px', minWidth: '90px', fontSize: '0.8rem', whiteSpace: 'normal', lineHeight: '1.2', color: '#ffffff' }}>
+                                  Failed Login<br/>Attempts
+                                </th>
+                              );
+                            }
+                            return (
+                              <th key={k} style={{ padding: '8px 12px', textAlign: 'left', textTransform: 'capitalize', fontSize: '0.875rem', whiteSpace: 'nowrap', color: '#ffffff' }}>
+                                {k.replace(/_/g, ' ')}
+                              </th>
+                            );
+                          });
                         })()}
-                        <th style={{ padding: '8px 12px', textAlign: 'center', width: '120px', fontSize: '0.875rem' }}>Aksi</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'center', width: '140px', fontSize: '0.875rem', whiteSpace: 'nowrap', color: '#ffffff' }}>Aksi</th>
                       </tr>
                     </thead>
                     <tbody>
                       {masterDataList.map((row, idx) => {
                         const pkField = Object.keys(row).find(k => k.includes('id') || k.includes('no') || k.includes('code'));
                         const pkValue = row[pkField];
-                        const keys = Object.keys(row).filter(k => k !== 'CreatedAt' && k !== 'UpdatedAt' && k !== 'DeletedAt' && k !== 'CreatedUser');
+                        const keys = Object.keys(row).filter(k => 
+                          k !== 'CreatedAt' && k !== 'UpdatedAt' && k !== 'DeletedAt' && k !== 'CreatedUser' &&
+                          k.toLowerCase() !== 'updated_at' && k.toLowerCase() !== 'deleted_at'
+                        );
                         
                         return (
-                          <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                            {keys.map(k => (
-                              <td key={k} style={{ padding: '6px 12px', color: '#334155', fontSize: '0.875rem' }}>
-                                {typeof row[k] === 'boolean' 
-                                  ? (row[k] ? 'Ya' : 'Tidak') 
-                                  : (typeof row[k] === 'object' && row[k] !== null 
-                                      ? JSON.stringify(row[k]) 
-                                      : String(row[k] ?? ''))}
-                              </td>
-                            ))}
-                            <td style={{ padding: '6px 12px', textAlign: 'center' }}>
-                              <button onClick={() => setMasterForm(row)} style={{ padding: '3px 8px', background: '#e0f2fe', color: '#0369a1', border: 'none', borderRadius: '4px', cursor: 'pointer', marginRight: '4px', fontSize: '0.8rem' }}>Edit</button>
-                              <button onClick={() => deleteMasterData(pkField, pkValue)} style={{ padding: '3px 8px', background: '#fee2e2', color: '#b91c1c', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>Hapus</button>
+                          <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0', height: '40px' }}>
+                            {keys.map(k => {
+                              const isSalaryField = k.toLowerCase() === 'salary' || k.toLowerCase() === 'max_limit' || k.toLowerCase().includes('nominal') || k.toLowerCase().includes('amount');
+                              const rawVal = row[k];
+                              let formattedVal = String(rawVal ?? '');
+
+                              if (k.toLowerCase() === 'failed_login_attempts') {
+                                return (
+                                  <td key={k} style={{ padding: '6px 8px', textAlign: 'center', fontSize: '0.875rem', width: '90px' }}>
+                                    {rawVal ?? 0}
+                                  </td>
+                                );
+                              }
+
+                              if (masterTab === 'menus' && k.toLowerCase() === 'parent_id') {
+                                const parentMenu = (referenceData.menus || []).find(m => String(m.menu_id) === String(rawVal));
+                                const parentText = parentMenu ? `${parentMenu.title} (${parentMenu.menu_id})` : (rawVal ? String(rawVal) : '-');
+                                return (
+                                  <td key={k} style={{ padding: '6px 12px', color: '#334155', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
+                                    {parentText}
+                                  </td>
+                                );
+                              }
+
+                              if (masterTab === 'users' && k.toLowerCase() === 'role') {
+                                const rVal = String(rawVal || '').toLowerCase();
+                                const bg = rVal === 'admin' ? '#dbeafe' : rVal === 'hrd' ? '#f3e8ff' : '#d1fae5';
+                                const fg = rVal === 'admin' ? '#1e40af' : rVal === 'hrd' ? '#6b21a8' : '#065f46';
+                                return (
+                                  <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
+                                    <span style={{ background: bg, color: fg, padding: '3px 10px', borderRadius: '12px', fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase' }}>
+                                      {rawVal}
+                                    </span>
+                                  </td>
+                                );
+                              }
+
+                              if (masterTab === 'users' && (k.toLowerCase() === 'locked_until' || k.toLowerCase() === 'failed_login_attempts')) {
+                                const isLocked = (row.locked_until && new Date(row.locked_until) > new Date()) || row.failed_login_attempts >= 5;
+                                if (k.toLowerCase() === 'locked_until') {
+                                  return (
+                                    <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
+                                      {isLocked ? (
+                                        <span style={{ background: '#fee2e2', color: '#991b1b', padding: '3px 8px', borderRadius: '12px', fontWeight: 600, fontSize: '0.75rem' }}>
+                                          🔒 Locked
+                                        </span>
+                                      ) : (
+                                        <span style={{ background: '#d1fae5', color: '#065f46', padding: '3px 8px', borderRadius: '12px', fontWeight: 600, fontSize: '0.75rem' }}>
+                                          ● Normal
+                                        </span>
+                                      )}
+                                    </td>
+                                  );
+                                }
+                              }
+
+                              if (masterTab === 'sessions' && k.toLowerCase() === 'is_active') {
+                                const isActive = rawVal && (!row.expires_at || new Date(row.expires_at) > new Date());
+                                return (
+                                  <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
+                                    {isActive ? (
+                                      <span style={{ background: '#d1fae5', color: '#065f46', padding: '3px 10px', borderRadius: '12px', fontWeight: 700, fontSize: '0.75rem' }}>
+                                        ● Active
+                                      </span>
+                                    ) : (
+                                      <span style={{ background: '#f1f5f9', color: '#64748b', padding: '3px 10px', borderRadius: '12px', fontWeight: 600, fontSize: '0.75rem' }}>
+                                        ○ Revoked / Expired
+                                      </span>
+                                    )}
+                                  </td>
+                                );
+                              }
+
+                              if (typeof rawVal === 'boolean') {
+                                formattedVal = rawVal ? 'Ya' : 'Tidak';
+                              } else if (isSalaryField && rawVal !== null && rawVal !== undefined && rawVal !== '') {
+                                const num = Number(rawVal);
+                                formattedVal = !isNaN(num) ? `Rp ${Math.round(num).toLocaleString('id-ID')}` : String(rawVal);
+                              } else if (typeof rawVal === 'object' && rawVal !== null) {
+                                formattedVal = JSON.stringify(rawVal);
+                              }
+
+                              return (
+                                <td key={k} style={{ padding: '6px 12px', color: '#334155', fontSize: '0.875rem', whiteSpace: 'nowrap', fontWeight: isSalaryField ? 600 : 400 }}>
+                                  {formattedVal}
+                                </td>
+                              );
+                            })}
+                            <td style={{ padding: '6px 12px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', flexWrap: 'nowrap' }}>
+                                <button onClick={() => setMasterForm(row)} style={{ padding: '3px 8px', background: '#e0f2fe', color: '#0369a1', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>Edit</button>
+                                <button onClick={() => deleteMasterData(pkField, pkValue)} style={{ padding: '3px 8px', background: '#fee2e2', color: '#b91c1c', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>Hapus</button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -3420,50 +3666,45 @@ function App() {
         )}
 
         {activeTab === 'manual-repayment' && (() => {
-          const paymentSourcesParam = getParamVal('PAYMENT_SOURCES', 'TRANSFER_BANK:Transfer Bank BCA/Mandiri Kopkara,POTONG_PESANGON:Potong Langsung Uang Pesangon (HRD Adira),KOMPENSASI_SIMPANAN:Kompensasi Offset Simpanan Koperasi');
-          const paymentSourceOptions = paymentSourcesParam.split(',').map(item => {
-            const parts = item.split(':');
-            return { code: (parts[0] || '').trim(), label: (parts[1] || parts[0] || '').trim() };
-          }).filter(o => o.code.length > 0);
-
-          const memberOptionsList = allMembers.length > 0 ? allMembers : (() => {
-            const map = {};
-            (payrollSchedules || []).forEach(s => {
-              if (s.member_no && !map[s.member_no]) {
-                map[s.member_no] = { member_no: s.member_no, employee_id: s.member_no, name: s.employee_name || `Anggota #${s.member_no}` };
+          // 1. Dynamic Payment Sources from Parameters
+          const paymentSourcesParam = parameters.find(p => String(p.KeyName || p.key_name || '').toUpperCase() === 'PAYMENT_SOURCES');
+          let paymentSourceOptions = [
+            { code: 'TRANSFER_BANK', label: 'Transfer Bank BCA/Mandiri Kopkara' },
+            { code: 'POTONG_PESANGON', label: 'Potong Pesangon / Hak Akhir Karyawan' },
+            { code: 'CASH_KASIR', label: 'Pembayaran Cash / Tunai Kasir Kopkara' }
+          ];
+          if (paymentSourcesParam && (paymentSourcesParam.KeyValue || paymentSourcesParam.key_value)) {
+            try {
+              const parsed = JSON.parse(paymentSourcesParam.KeyValue || paymentSourcesParam.key_value);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                paymentSourceOptions = parsed;
               }
-            });
-            return Object.values(map);
-          })();
+            } catch {
+              // fallback
+            }
+          }
 
-          const pageSize = parseInt(getParamVal('DEFAULT_PAGE_SIZE', '10')) || 10;
+          // 2. Pagination & Filter Anggota
+          const memberTotalRecordsDisplay = memberTotalRecords || paginatedMemberList.length || 0;
+          const memberTotalPagesCalc = Math.ceil(memberTotalRecordsDisplay / 10) || 1;
 
-          // Filter Anggota (LIKE Search on member_no, employee_id, or name) & Pagination
-          const filteredMembers = memberOptionsList.filter(m => 
-            String(m.member_no).toLowerCase().includes(memberSearchQuery.toLowerCase()) ||
-            String(m.employee_id || '').toLowerCase().includes(memberSearchQuery.toLowerCase()) ||
-            String(m.name || '').toLowerCase().includes(memberSearchQuery.toLowerCase())
-          );
-          const totalMemberPages = Math.ceil(filteredMembers.length / pageSize) || 1;
-          const paginatedMembers = filteredMembers.slice((memberPage - 1) * pageSize, memberPage * pageSize);
+          // 3. Filter Pinjaman Aktif
+          const activeLoans = (payrollSchedules || []).filter(s => s.status !== 'PAID' && s.status !== 'CLOSED');
+          const filteredLoans = activeLoans.filter(s => {
+            const q = loanSearchQuery.toLowerCase().trim();
+            if (!q) return true;
+            return String(s.loan_no).toLowerCase().includes(q) ||
+                   String(s.employee_name || '').toLowerCase().includes(q) ||
+                   String(s.member_no).toLowerCase().includes(q) ||
+                   String(s.period || '').toLowerCase().includes(q);
+          });
 
-          // Filter Pinjaman (Active/Outstanding loans matching selected member, excluding PAID/CLOSED) & Pagination
-          const activeSchedules = (payrollSchedules || []).filter(s => s.status !== 'PAID' && s.status !== 'CLOSED');
-          const baseLoans = selectedMemberFilter 
-            ? activeSchedules.filter(s => String(s.member_no) === String(selectedMemberFilter))
-            : activeSchedules;
+          const loanLimitPerPage = 10;
+          const totalLoanPages = Math.ceil(filteredLoans.length / loanLimitPerPage) || 1;
+          const loanStartIdx = (loanPage - 1) * loanLimitPerPage;
+          const paginatedLoans = filteredLoans.slice(loanStartIdx, loanStartIdx + loanLimitPerPage);
 
-          const filteredLoans = baseLoans.filter(s =>
-            String(s.loan_no).toLowerCase().includes(loanSearchQuery.toLowerCase()) ||
-            String(s.employee_name).toLowerCase().includes(loanSearchQuery.toLowerCase()) ||
-            String(s.member_no).toLowerCase().includes(loanSearchQuery.toLowerCase()) ||
-            String(s.period).toLowerCase().includes(loanSearchQuery.toLowerCase())
-          );
-          const totalLoanPages = Math.ceil(filteredLoans.length / pageSize) || 1;
-          const paginatedLoans = filteredLoans.slice((loanPage - 1) * pageSize, loanPage * pageSize);
-
-          const currentYearNum = new Date().getFullYear();
-          const yearOptions = [currentYearNum - 3, currentYearNum - 2, currentYearNum - 1, currentYearNum, currentYearNum + 1, currentYearNum + 2, currentYearNum + 3];
+          const yearOptions = ['2024', '2025', '2026', '2027', '2028'];
           const monthOptions = [
             { code: '01', name: '01 - Januari' },
             { code: '02', name: '02 - Februari' },
@@ -3480,446 +3721,458 @@ function App() {
           ];
 
           return (
-          <div>
-            <h2 style={{ marginBottom: '20px', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              💳 Pelunasan Manual & Pelunasan Dipercepat Karyawan Resign
-            </h2>
+            <>
+              {/* Centered Large Form Pelunasan Manual */}
+              <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+                <div style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', boxShadow: '0 4px 16px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+                  {/* Header Card khusus dengan background HEADER_BG & font putih */}
+                  <div style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff', padding: '18px 24px' }}>
+                    <h3 style={{ margin: 0, fontSize: '1.25rem', color: '#ffffff', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      📝 Form Pelunasan Manual
+                    </h3>
+                  </div>
 
-            {/* Centered Large Form Pelunasan Manual */}
-            <div style={{ maxWidth: '900px', margin: '0 auto' }}>
-              <div className="card" style={{ background: '#ffffff', padding: '28px', borderRadius: '12px', border: '1px solid #cbd5e1', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
-                <h3 style={{ margin: 0, marginBottom: '20px', fontSize: '1.2rem', color: '#1e293b', paddingBottom: '12px', borderBottom: '2px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  📝 Form Pelunasan Manual
-                </h3>
+                  <div style={{ padding: '28px' }}>
+                    <form onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (!manualForm.loan_no || !manualForm.nominal) {
+                        alert("Silakan masukan Nomor Pinjaman dan Nominal Pembayaran.");
+                        return;
+                      }
+                      try {
+                        const activeUserName = currentUser ? String(currentUser.employee_id || '10101') : '10101';
+                        const res = await axios.post(`${API_BASE_URL}/api/payroll/manual-repayment`, {
+                          ...manualForm,
+                          period: `${manualYear}-${manualMonth}`,
+                          loan_no: parseInt(manualForm.loan_no) || 0,
+                          member_no: parseInt(manualForm.member_no) || 0,
+                          nominal: parseFloat(manualForm.nominal) || 0,
+                          updated_user: activeUserName
+                        });
+                        
+                        // Build Kuitansi Data
+                        const selectedMemberObj = paginatedMemberList.find(m => String(m.member_no) === String(manualForm.member_no)) ||
+                                                allMembers.find(m => String(m.member_no) === String(manualForm.member_no));
+                        const selectedLoanObj = (payrollSchedules || []).find(s => String(s.loan_no) === String(manualForm.loan_no));
+                        const paymentLabel = paymentSourceOptions.find(p => p.code === manualForm.payment_type)?.label || manualForm.payment_type;
+                        const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+                        const kwtNo = `KWT/LMS/${todayStr}/${manualForm.loan_no || Math.floor(1000 + Math.random()*9000)}`;
 
-                <form onSubmit={async (e) => {
-                  e.preventDefault();
-                  if (!manualForm.loan_no || !manualForm.nominal) {
-                    alert("Silakan masukan Nomor Pinjaman dan Nominal Pembayaran.");
-                    return;
-                  }
-                  try {
-                    const activeUserName = currentUser ? String(currentUser.employee_id || '10101') : '10101';
-                    const res = await axios.post(`${API_BASE_URL}/api/payroll/manual-repayment`, {
-                      ...manualForm,
-                      period: `${manualYear}-${manualMonth}`,
-                      loan_no: parseInt(manualForm.loan_no) || 0,
-                      member_no: parseInt(manualForm.member_no) || 0,
-                      nominal: parseFloat(manualForm.nominal) || 0,
-                      updated_user: activeUserName
-                    });
-                    
-                    // Build Kuitansi Data
-                    const selectedMemberObj = paginatedMemberList.find(m => String(m.member_no) === String(manualForm.member_no)) ||
-                                            allMembers.find(m => String(m.member_no) === String(manualForm.member_no));
-                    const selectedLoanObj = (payrollSchedules || []).find(s => String(s.loan_no) === String(manualForm.loan_no));
-                    const paymentLabel = paymentSourceOptions.find(p => p.code === manualForm.payment_type)?.label || manualForm.payment_type;
-                    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-                    const kwtNo = `KWT/LMS/${todayStr}/${manualForm.loan_no || Math.floor(1000 + Math.random()*9000)}`;
+                        setReceiptData({
+                          kwtNo: kwtNo,
+                          date: new Date().toLocaleString('id-ID'),
+                          loanNo: manualForm.loan_no,
+                          memberNo: manualForm.member_no,
+                          memberName: selectedMemberObj?.name || selectedLoanObj?.employee_name || `Anggota #${manualForm.member_no}`,
+                          paymentType: manualForm.payment_type,
+                          paymentTypeLabel: paymentLabel,
+                          nominal: parseFloat(manualForm.nominal) || 0,
+                          referenceNo: manualForm.reference_no || '-',
+                          notes: manualForm.notes || '-',
+                          isFullSettlement: manualForm.is_full_settlement,
+                          createdUser: activeUserName
+                        });
+                        setReceiptModalOpen(true);
 
-                    setReceiptData({
-                      kwtNo: kwtNo,
-                      date: new Date().toLocaleString('id-ID'),
-                      loanNo: manualForm.loan_no,
-                      memberNo: manualForm.member_no,
-                      memberName: selectedMemberObj?.name || selectedLoanObj?.employee_name || `Anggota #${manualForm.member_no}`,
-                      paymentType: manualForm.payment_type,
-                      paymentTypeLabel: paymentLabel,
-                      nominal: parseFloat(manualForm.nominal) || 0,
-                      referenceNo: manualForm.reference_no || '-',
-                      notes: manualForm.notes || '-',
-                      isFullSettlement: manualForm.is_full_settlement,
-                      createdUser: activeUserName
-                    });
-                    setReceiptModalOpen(true);
+                        setManualForm({ loan_no: '', member_no: '', period: `${manualYear}-${manualMonth}`, payment_type: paymentSourceOptions[0]?.code || 'TRANSFER_BANK', nominal: '', reference_no: '', notes: '', is_full_settlement: false });
+                        if (selectedMemberFilter) {
+                          fetchPayrollSchedules(selectedMemberFilter);
+                        }
+                      } catch (err) {
+                        alert("❌ Gagal memproses pelunasan manual: " + (err.response?.data?.error || err.message));
+                      }
+                    }} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                      
+                      {/* Field 1: Pilih Anggota / Karyawan (Sebaris) */}
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
+                        <label style={{ width: '220px', flexShrink: 0, fontSize: '0.9rem', fontWeight: 600, color: '#334155', paddingTop: '8px' }}>
+                          1. Pilih Anggota / Karyawan *
+                        </label>
+                        <div style={{ flex: 1, background: '#f8fafc', padding: '14px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '2fr auto 3fr', gap: '8px', alignItems: 'center' }}>
+                            <input 
+                              type="text"
+                              value={memberSearchQuery}
+                              onChange={(e) => handleMemberSearchChange(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  fetchPaginatedMembers(memberSearchQuery, 1);
+                                }
+                              }}
+                              placeholder="Ketik NIK / Member No / Nama..."
+                              style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem', background: '#ffffff' }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => fetchPaginatedMembers(memberSearchQuery, 1)}
+                              style={{ padding: '8px 18px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.9rem' }}
+                            >
+                              🔍 Cari
+                            </button>
+                            <select 
+                              value={selectedMemberFilter}
+                              onChange={(e) => {
+                                const mNo = e.target.value;
+                                setSelectedMemberFilter(mNo);
+                                if (mNo) {
+                                  fetchPayrollSchedules(mNo);
+                                }
+                                const firstLoan = (payrollSchedules || []).find(s => String(s.member_no) === String(mNo) && s.status === 'PARTIAL') ||
+                                                  (payrollSchedules || []).find(s => String(s.member_no) === String(mNo) && s.status !== 'PAID' && s.status !== 'CLOSED');
+                                if (firstLoan) {
+                                  const tot = parseFloat(firstLoan.total_installment) || 0;
+                                  const paid = parseFloat(firstLoan.amount_paid) || 0;
+                                  const rem = (tot - paid) > 0 ? (tot - paid) : tot;
+                                  setManualForm({
+                                    ...manualForm,
+                                    loan_no: firstLoan.loan_no,
+                                    member_no: firstLoan.member_no,
+                                    nominal: rem,
+                                    period: `${manualYear}-${manualMonth}`
+                                  });
+                                } else {
+                                  setManualForm({ ...manualForm, loan_no: '', member_no: mNo, period: `${manualYear}-${manualMonth}` });
+                                }
+                              }}
+                              style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', fontSize: '0.9rem' }}
+                            >
+                              <option value="">-- Semua Anggota ({memberTotalRecordsDisplay} Ditemukan) --</option>
+                              {paginatedMemberList.map(m => (
+                                <option key={m.member_no} value={m.member_no}>
+                                  {m.name} (ID: {m.employee_id || m.member_no})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          
+                          {/* Pagination Controls Anggota */}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', fontSize: '0.8rem', color: '#475569' }}>
+                            <span>Hal {memberPage} dari {memberTotalPagesCalc} ({memberTotalRecordsDisplay} Members Ditemukan)</span>
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                              <button 
+                                type="button"
+                                disabled={memberPage <= 1}
+                                onClick={() => {
+                                  const newP = Math.max(memberPage - 1, 1);
+                                  setMemberPage(newP);
+                                  fetchPaginatedMembers(memberSearchQuery, newP);
+                                }}
+                                style={{ padding: '4px 10px', fontSize: '0.8rem', background: memberPage <= 1 ? '#e2e8f0' : '#0369a1', color: memberPage <= 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: memberPage <= 1 ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+                              >
+                                ◀ Prev
+                              </button>
+                              <button 
+                                type="button"
+                                disabled={memberPage >= memberTotalPages}
+                                onClick={() => {
+                                  const newP = memberPage + 1;
+                                  setMemberPage(newP);
+                                  fetchPaginatedMembers(memberSearchQuery, newP);
+                                }}
+                                style={{ padding: '4px 10px', fontSize: '0.8rem', background: memberPage >= memberTotalPages ? '#e2e8f0' : '#0369a1', color: memberPage >= memberTotalPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: memberPage >= memberTotalPages ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+                              >
+                                Next ▶
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
 
-                    setManualForm({ loan_no: '', member_no: '', period: `${manualYear}-${manualMonth}`, payment_type: paymentSourceOptions[0]?.code || 'TRANSFER_BANK', nominal: '', reference_no: '', notes: '', is_full_settlement: false });
-                    if (selectedMemberFilter) {
-                      fetchPayrollSchedules(selectedMemberFilter);
-                    }
-                  } catch (err) {
-                    alert("❌ Gagal memproses pelunasan manual: " + (err.response?.data?.error || err.message));
-                  }
-                }} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-                  
-                  {/* Dropdown 1: Input Search & Filter Button + Select Anggota */}
-                  <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
-                    <label style={{ fontSize: '0.9rem', fontWeight: 700, display: 'block', marginBottom: '8px', color: '#0f172a' }}>
-                      1. Pilih Anggota / Karyawan *
-                    </label>
-                    <div style={{ display: 'grid', gridTemplateColumns: '2fr auto 3fr', gap: '8px', alignItems: 'center' }}>
-                      <input 
-                        type="text"
-                        value={memberSearchQuery}
-                        onChange={(e) => handleMemberSearchChange(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            fetchPaginatedMembers(memberSearchQuery, 1);
-                          }
-                        }}
-                        placeholder="Ketik NIK / Member No / Nama..."
-                        style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #94a3b8', fontSize: '0.9rem' }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => fetchPaginatedMembers(memberSearchQuery, 1)}
-                        style={{ padding: '10px 16px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.9rem' }}
-                      >
-                        🔍 Cari
-                      </button>
-                      <select 
-                        value={selectedMemberFilter}
-                        onChange={(e) => {
-                          const mNo = e.target.value;
-                          setSelectedMemberFilter(mNo);
-                          if (mNo) {
-                            fetchPayrollSchedules(mNo);
-                          }
-                          const firstLoan = (payrollSchedules || []).find(s => String(s.member_no) === String(mNo) && s.status === 'PARTIAL') ||
-                                            (payrollSchedules || []).find(s => String(s.member_no) === String(mNo) && s.status !== 'PAID' && s.status !== 'CLOSED');
-                          if (firstLoan) {
-                            const tot = parseFloat(firstLoan.total_installment) || 0;
-                            const paid = parseFloat(firstLoan.amount_paid) || 0;
-                            const rem = (tot - paid) > 0 ? (tot - paid) : tot;
-                            setManualForm({
-                              ...manualForm,
-                              loan_no: firstLoan.loan_no,
-                              member_no: firstLoan.member_no,
-                              nominal: rem,
-                              period: `${manualYear}-${manualMonth}`
-                            });
-                          } else {
-                            setManualForm({ ...manualForm, loan_no: '', member_no: mNo, period: `${manualYear}-${manualMonth}` });
-                          }
-                        }}
-                        style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem' }}
-                      >
-                        <option value="">-- Semua Anggota ({memberTotalRecords} Ditemukan) --</option>
-                        {paginatedMemberList.map(m => (
-                          <option key={m.member_no} value={m.member_no}>
-                            {m.name} (ID: {m.employee_id || m.member_no})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    
-                    {/* Pagination Controls Anggota */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', fontSize: '0.8rem', color: '#475569' }}>
-                      <span>Hal {memberPage} dari {memberTotalPages} ({memberTotalRecords} Members Ditemukan)</span>
-                      <div style={{ display: 'flex', gap: '6px' }}>
+                      {/* Field 2: Pilih Pinjaman Aktif (Sebaris) */}
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
+                        <label style={{ width: '220px', flexShrink: 0, fontSize: '0.9rem', fontWeight: 600, color: '#334155', paddingTop: '8px' }}>
+                          2. Pilih Pinjaman Aktif *
+                        </label>
+                        <div style={{ flex: 1, background: '#f8fafc', padding: '14px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '8px', alignItems: 'center' }}>
+                            <input 
+                              type="text"
+                              value={loanSearchQuery}
+                              onChange={(e) => {
+                                setLoanSearchQuery(e.target.value);
+                                setLoanPage(1);
+                              }}
+                              placeholder="🔍 Filter No. Pinjaman / Periode..."
+                              style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem', background: '#ffffff' }}
+                            />
+                            <select 
+                              value={manualForm.loan_no} 
+                              onChange={(e) => {
+                                const lNo = e.target.value;
+                                const sel = payrollSchedules.find(s => String(s.loan_no) === String(lNo));
+                                let remNominal = '';
+                                if (sel) {
+                                  const tot = parseFloat(sel.total_installment) || 0;
+                                  const paid = parseFloat(sel.amount_paid) || 0;
+                                  remNominal = (tot - paid) > 0 ? (tot - paid) : tot;
+                                }
+                                setManualForm({
+                                  ...manualForm,
+                                  loan_no: lNo,
+                                  member_no: sel ? sel.member_no : selectedMemberFilter,
+                                  nominal: remNominal,
+                                  period: `${manualYear}-${manualMonth}`
+                                });
+                                if (sel && sel.member_no) {
+                                  setSelectedMemberFilter(String(sel.member_no));
+                                }
+                              }}
+                              required
+                              style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', fontSize: '0.9rem' }}
+                            >
+                              <option value="">-- Pilih Pinjaman Aktif ({filteredLoans.length} Ditemukan) --</option>
+                              {paginatedLoans.map(s => {
+                                const tot = parseFloat(s.total_installment) || 0;
+                                const paid = parseFloat(s.amount_paid) || 0;
+                                const rem = (tot - paid) > 0 ? (tot - paid) : tot;
+                                const hasPartial = paid > 0 && paid < tot;
+                                return (
+                                  <option key={s.id} value={s.loan_no}>
+                                    Pinjaman #{s.loan_no} - {s.employee_name} ({s.member_no}) - Rp {Math.round(rem).toLocaleString('id-ID')}{hasPartial ? ' (Sisa Hutang)' : ''} ({s.period})
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+
+                          {/* Pagination Controls Pinjaman */}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', fontSize: '0.8rem', color: '#475569' }}>
+                            <span>Hal {loanPage} dari {totalLoanPages} ({filteredLoans.length} Pinjaman)</span>
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                              <button 
+                                type="button"
+                                disabled={loanPage === 1}
+                                onClick={() => setLoanPage(prev => Math.max(prev - 1, 1))}
+                                style={{ padding: '4px 10px', fontSize: '0.8rem', background: loanPage === 1 ? '#e2e8f0' : '#0369a1', color: loanPage === 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: loanPage === 1 ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+                              >
+                                ◀ Prev
+                              </button>
+                              <button 
+                                type="button"
+                                disabled={loanPage >= totalLoanPages}
+                                onClick={() => setLoanPage(prev => Math.min(prev + 1, totalLoanPages))}
+                                style={{ padding: '4px 10px', fontSize: '0.8rem', background: loanPage >= totalLoanPages ? '#e2e8f0' : '#0369a1', color: loanPage >= totalLoanPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: loanPage >= totalLoanPages ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+                              >
+                                Next ▶
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Field 3: Metode / Sumber Pelunasan (Sebaris) */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <label style={{ width: '220px', flexShrink: 0, fontSize: '0.9rem', fontWeight: 600, color: '#334155' }}>
+                          3. Metode / Sumber Pelunasan *
+                        </label>
+                        <div style={{ flex: 1 }}>
+                          <select 
+                            value={manualForm.payment_type}
+                            onChange={(e) => setManualForm({ ...manualForm, payment_type: e.target.value })}
+                            style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem', background: '#ffffff' }}
+                          >
+                            {paymentSourceOptions.map(opt => (
+                              <option key={opt.code} value={opt.code}>
+                                {opt.label} ({opt.code})
+                              </option>
+                            ))}
+                          </select>
+                          <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '4px' }}>
+                            💡 <em>Dapat ditambah/diubah di menu Pengaturan Parameter (key: <code>PAYMENT_SOURCES</code>)</em>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Field 4: Periode Tagihan (Sebaris) */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <label style={{ width: '220px', flexShrink: 0, fontSize: '0.9rem', fontWeight: 600, color: '#334155' }}>
+                          4. Periode Tagihan (Bulan & Tahun) *
+                        </label>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                            <select 
+                              value={manualMonth}
+                              onChange={(e) => {
+                                const m = e.target.value;
+                                setManualMonth(m);
+                                setManualForm(prev => ({ ...prev, period: `${manualYear}-${m}` }));
+                              }}
+                              style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem', background: '#ffffff' }}
+                            >
+                              {monthOptions.map(mo => (
+                                <option key={mo.code} value={mo.code}>{mo.name}</option>
+                              ))}
+                            </select>
+
+                            <select 
+                              value={manualYear}
+                              onChange={(e) => {
+                                const y = e.target.value;
+                                setManualYear(y);
+                                setManualForm(prev => ({ ...prev, period: `${y}-${manualMonth}` }));
+                              }}
+                              style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem', background: '#ffffff' }}
+                            >
+                              {yearOptions.map(yr => (
+                                <option key={yr} value={yr}>Tahun {yr}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div style={{ fontSize: '0.8rem', color: '#0369a1', marginTop: '4px', fontWeight: 500 }}>
+                            📅 Periode Terpilih: <strong>{manualYear}-{manualMonth}</strong>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Field 5: Nominal Pembayaran (Sebaris) */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <label style={{ width: '220px', flexShrink: 0, fontSize: '0.9rem', fontWeight: 600, color: '#334155' }}>
+                          Nominal Pembayaran (Rp) *
+                        </label>
+                        <div style={{ flex: 1 }}>
+                          <input 
+                            type="text" 
+                            value={manualForm.nominal !== '' && manualForm.nominal !== null && manualForm.nominal !== undefined ? (Math.round(parseFloat(String(manualForm.nominal).replace(/[^0-9]/g, '')) || 0) > 0 ? Math.round(parseFloat(String(manualForm.nominal).replace(/[^0-9]/g, '')) || 0).toLocaleString('id-ID') : '') : ''} 
+                            onChange={(e) => {
+                              const rawDigits = e.target.value.replace(/[^0-9]/g, '');
+                              setManualForm({ ...manualForm, nominal: rawDigits });
+                            }}
+                            placeholder="0" 
+                            required 
+                            style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontWeight: 700, fontSize: '1.05rem', color: '#0f172a', background: '#ffffff' }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Field 6: No. Bukti Transfer (Sebaris) */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <label style={{ width: '220px', flexShrink: 0, fontSize: '0.9rem', fontWeight: 600, color: '#334155' }}>
+                          No. Bukti Transfer / Ref Bank
+                        </label>
+                        <div style={{ flex: 1 }}>
+                          <input 
+                            type="text" 
+                            value={manualForm.reference_no} 
+                            onChange={(e) => setManualForm({ ...manualForm, reference_no: e.target.value })}
+                            placeholder="Contoh: TRF-BCA-987123" 
+                            style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem', background: '#ffffff' }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Field 7: Catatan Pelunasan (Sebaris) */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <label style={{ width: '220px', flexShrink: 0, fontSize: '0.9rem', fontWeight: 600, color: '#334155' }}>
+                          Catatan Pelunasan / Karyawan Resign
+                        </label>
+                        <div style={{ flex: 1 }}>
+                          <input 
+                            type="text" 
+                            value={manualForm.notes} 
+                            onChange={(e) => setManualForm({ ...manualForm, notes: e.target.value })}
+                            placeholder="Catatan pelunasan mandiri / pesangon" 
+                            style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem', background: '#ffffff' }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Tombol Proses Diperkecil & Di Sebelah Kiri */}
+                      <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: '12px' }}>
                         <button 
-                          type="button"
-                          disabled={memberPage <= 1}
-                          onClick={() => {
-                            const newP = Math.max(memberPage - 1, 1);
-                            setMemberPage(newP);
-                            fetchPaginatedMembers(memberSearchQuery, newP);
-                          }}
-                          style={{ padding: '4px 10px', fontSize: '0.8rem', background: memberPage <= 1 ? '#e2e8f0' : '#0369a1', color: memberPage <= 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: memberPage <= 1 ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+                          type="submit" 
+                          style={{ padding: '10px 24px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '6px', fontWeight: 700, cursor: 'pointer', fontSize: '0.95rem', display: 'inline-flex', alignItems: 'center', gap: '8px' }}
                         >
-                          ◀ Prev
-                        </button>
-                        <button 
-                          type="button"
-                          disabled={memberPage >= memberTotalPages}
-                          onClick={() => {
-                            const newP = memberPage + 1;
-                            setMemberPage(newP);
-                            fetchPaginatedMembers(memberSearchQuery, newP);
-                          }}
-                          style={{ padding: '4px 10px', fontSize: '0.8rem', background: memberPage >= memberTotalPages ? '#e2e8f0' : '#0369a1', color: memberPage >= memberTotalPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: memberPage >= memberTotalPages ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
-                        >
-                          Next ▶
+                          💳 Proses
                         </button>
                       </div>
-                    </div>
-                  </div>
-
-                  {/* Dropdown 2: Input Search & Select Pinjaman Aktif */}
-                  <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
-                    <label style={{ fontSize: '0.9rem', fontWeight: 700, display: 'block', marginBottom: '8px', color: '#0f172a' }}>
-                      2. Pilih Pinjaman Aktif *
-                    </label>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '8px', alignItems: 'center' }}>
-                      <input 
-                        type="text"
-                        value={loanSearchQuery}
-                        onChange={(e) => {
-                          setLoanSearchQuery(e.target.value);
-                          setLoanPage(1);
-                        }}
-                        placeholder="🔍 Filter No. Pinjaman / Periode..."
-                        style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #94a3b8', fontSize: '0.9rem' }}
-                      />
-                      <select 
-                        value={manualForm.loan_no} 
-                        onChange={(e) => {
-                          const lNo = e.target.value;
-                          const sel = payrollSchedules.find(s => String(s.loan_no) === String(lNo));
-                          let remNominal = '';
-                          if (sel) {
-                            const tot = parseFloat(sel.total_installment) || 0;
-                            const paid = parseFloat(sel.amount_paid) || 0;
-                            remNominal = (tot - paid) > 0 ? (tot - paid) : tot;
-                          }
-                          setManualForm({
-                            ...manualForm,
-                            loan_no: lNo,
-                            member_no: sel ? sel.member_no : selectedMemberFilter,
-                            nominal: remNominal,
-                            period: `${manualYear}-${manualMonth}`
-                          });
-                          if (sel && sel.member_no) {
-                            setSelectedMemberFilter(String(sel.member_no));
-                          }
-                        }}
-                        required
-                        style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem' }}
-                      >
-                        <option value="">-- Pilih Pinjaman Aktif ({filteredLoans.length} Ditemukan) --</option>
-                        {paginatedLoans.map(s => {
-                          const tot = parseFloat(s.total_installment) || 0;
-                          const paid = parseFloat(s.amount_paid) || 0;
-                          const rem = (tot - paid) > 0 ? (tot - paid) : tot;
-                          const hasPartial = paid > 0 && paid < tot;
-                          return (
-                            <option key={s.id} value={s.loan_no}>
-                              Pinjaman #{s.loan_no} - {s.employee_name} ({s.member_no}) - Rp {Math.round(rem).toLocaleString('id-ID')}{hasPartial ? ' (Sisa Hutang)' : ''} ({s.period})
-                            </option>
-                          );
-                        })}
-                      </select>
-                    </div>
-
-                    {/* Pagination Controls Pinjaman */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', fontSize: '0.8rem', color: '#475569' }}>
-                      <span>Hal {loanPage} dari {totalLoanPages} ({filteredLoans.length} Pinjaman)</span>
-                      <div style={{ display: 'flex', gap: '6px' }}>
-                        <button 
-                          type="button"
-                          disabled={loanPage === 1}
-                          onClick={() => setLoanPage(prev => Math.max(prev - 1, 1))}
-                          style={{ padding: '4px 10px', fontSize: '0.8rem', background: loanPage === 1 ? '#e2e8f0' : '#0369a1', color: loanPage === 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: loanPage === 1 ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
-                        >
-                          ◀ Prev
-                        </button>
-                        <button 
-                          type="button"
-                          disabled={loanPage >= totalLoanPages}
-                          onClick={() => setLoanPage(prev => Math.min(prev + 1, totalLoanPages))}
-                          style={{ padding: '4px 10px', fontSize: '0.8rem', background: loanPage >= totalLoanPages ? '#e2e8f0' : '#0369a1', color: loanPage >= totalLoanPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: loanPage >= totalLoanPages ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
-                        >
-                          Next ▶
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Dropdown 3: Metode / Sumber Pelunasan */}
-                  <div>
-                    <label style={{ fontSize: '0.9rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>3. Metode / Sumber Pelunasan (Dinamis Master Parameter) *</label>
-                    <select 
-                      value={manualForm.payment_type}
-                      onChange={(e) => setManualForm({ ...manualForm, payment_type: e.target.value })}
-                      style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem' }}
-                    >
-                      {paymentSourceOptions.map(opt => (
-                        <option key={opt.code} value={opt.code}>
-                          {opt.label} ({opt.code})
-                        </option>
-                      ))}
-                    </select>
-                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '4px' }}>
-                      💡 <em>Dapat ditambah/diubah di menu Pengaturan Parameter (key: <code>PAYMENT_SOURCES</code>)</em>
-                    </div>
-                  </div>
-
-                  {/* Dropdown 4: Periode Tagihan */}
-                  <div>
-                    <label style={{ fontSize: '0.9rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>4. Periode Tagihan (Bulan & Tahun) *</label>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                      <select 
-                        value={manualMonth}
-                        onChange={(e) => {
-                          const m = e.target.value;
-                          setManualMonth(m);
-                          setManualForm(prev => ({ ...prev, period: `${manualYear}-${m}` }));
-                        }}
-                        style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem' }}
-                      >
-                        {monthOptions.map(mo => (
-                          <option key={mo.code} value={mo.code}>{mo.name}</option>
-                        ))}
-                      </select>
-
-                      <select 
-                        value={manualYear}
-                        onChange={(e) => {
-                          const y = e.target.value;
-                          setManualYear(y);
-                          setManualForm(prev => ({ ...prev, period: `${y}-${manualMonth}` }));
-                        }}
-                        style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem' }}
-                      >
-                        {yearOptions.map(yr => (
-                          <option key={yr} value={yr}>Tahun {yr}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div style={{ fontSize: '0.8rem', color: '#0369a1', marginTop: '6px', fontWeight: 500 }}>
-                      📅 Periode Terpilih: <strong>{manualYear}-{manualMonth}</strong>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label style={{ fontSize: '0.9rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>Nominal Pembayaran (Rp) *</label>
-                    <input 
-                      type="text" 
-                      value={manualForm.nominal !== '' && manualForm.nominal !== null && manualForm.nominal !== undefined ? (Math.round(parseFloat(String(manualForm.nominal).replace(/[^0-9]/g, '')) || 0) > 0 ? Math.round(parseFloat(String(manualForm.nominal).replace(/[^0-9]/g, '')) || 0).toLocaleString('id-ID') : '') : ''} 
-                      onChange={(e) => {
-                        const rawDigits = e.target.value.replace(/[^0-9]/g, '');
-                        setManualForm({ ...manualForm, nominal: rawDigits });
-                      }}
-                      placeholder="0" 
-                      required 
-                      style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontWeight: 700, fontSize: '1.05rem', color: '#0f172a' }}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ fontSize: '0.9rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>No. Bukti Transfer / Ref Bank</label>
-                    <input 
-                      type="text" 
-                      value={manualForm.reference_no} 
-                      onChange={(e) => setManualForm({ ...manualForm, reference_no: e.target.value })}
-                      placeholder="Contoh: TRF-BCA-987123" 
-                      style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem' }}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ fontSize: '0.9rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>Catatan Pelunasan / Karyawan Resign</label>
-                    <input 
-                      type="text" 
-                      value={manualForm.notes} 
-                      onChange={(e) => setManualForm({ ...manualForm, notes: e.target.value })}
-                      placeholder="Catatan pelunasan mandiri / pesangon" 
-                      style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.9rem' }}
-                    />
-                  </div>
-
-                  {/* Clarified Box Pink: Early Full Settlement */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '12px 16px', background: '#fef2f2', borderRadius: '8px', border: '1px solid #fca5a5' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <input 
-                        type="checkbox" 
-                        id="isFull" 
-                        checked={manualForm.is_full_settlement}
-                        onChange={(e) => setManualForm({ ...manualForm, is_full_settlement: e.target.checked })}
-                        style={{ width: '20px', height: '20px', cursor: 'pointer' }}
-                      />
-                      <label htmlFor="isFull" style={{ fontSize: '0.95rem', fontWeight: 700, color: '#991b1b', cursor: 'pointer' }}>
-                        🔥 Pelunasan Lunas Sekaligus (Lunas Total / Early Full Settlement)
-                      </label>
-                    </div>
-                    <div style={{ fontSize: '0.78rem', color: '#7f1d1d', marginLeft: '30px', lineHeight: '1.4' }}>
-                      💡 <em>Beri tanda centang jika pembayaran ini melunasi seluruh sisa hutang pinjaman secara permanen (misal: Karyawan Resign / Pelunasan Dipercepat). Status pinjaman akan otomatis diubah menjadi <strong>CLOSED</strong>.</em>
-                    </div>
-                  </div>
-
-                  <button 
-                    type="submit" 
-                    style={{ marginTop: '12px', padding: '14px 24px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', fontSize: '1.05rem', boxShadow: '0 4px 6px -1px rgba(2, 132, 199, 0.3)' }}
-                  >
-                    💳 Proses
-                  </button>
-                </form>
-              </div>
-            </div>
-
-            {/* Modal Kuitansi Bukti Pelunasan Manual */}
-            {receiptModalOpen && receiptData && (
-              <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1050, backdropFilter: 'blur(4px)' }}>
-                <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '32px', width: '90%', maxWidth: '650px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', border: '2px solid #0284c7' }}>
-                  
-                  <div style={{ textAlign: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '16px', marginBottom: '20px' }}>
-                    <h3 style={{ margin: 0, color: '#0369a1', fontSize: '1.1rem', textTransform: 'uppercase', letterSpacing: '1px' }}>KOPERASI KARYAWAN (KOPKARA) - LMS SYSTEM</h3>
-                    <h2 style={{ margin: '6px 0 0 0', color: '#0f172a', fontSize: '1.4rem', fontWeight: 800 }}>🧾 KUITANSI BUKTI PELUNASAN PINJAMAN</h2>
-                    <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '4px', fontFamily: 'monospace' }}>No: {receiptData.kwtNo} | Tanggal: {receiptData.date}</div>
-                  </div>
-
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem', marginBottom: '24px' }}>
-                    <tbody>
-                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '8px 0', color: '#64748b', width: '38%' }}>No. Pinjaman</td>
-                        <td style={{ padding: '8px 0', fontWeight: 'bold', color: '#0f172a' }}>#{receiptData.loanNo}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '8px 0', color: '#64748b' }}>NIK / No. Anggota</td>
-                        <td style={{ padding: '8px 0', fontWeight: 'bold', color: '#0f172a' }}>{receiptData.memberNo}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '8px 0', color: '#64748b' }}>Nama Anggota / Pemohon</td>
-                        <td style={{ padding: '8px 0', fontWeight: 'bold', color: '#0f172a' }}>{receiptData.memberName}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '8px 0', color: '#64748b' }}>Metode / Sumber Dana</td>
-                        <td style={{ padding: '8px 0', fontWeight: 600, color: '#2563eb' }}>{receiptData.paymentTypeLabel}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '8px 0', color: '#64748b' }}>No. Referensi / Bukti</td>
-                        <td style={{ padding: '8px 0', fontFamily: 'monospace', color: '#475569' }}>{receiptData.referenceNo}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '8px 0', color: '#64748b' }}>Jenis Pelunasan</td>
-                        <td style={{ padding: '8px 0', fontWeight: 'bold', color: receiptData.isFullSettlement ? '#047857' : '#0284c7' }}>
-                          {receiptData.isFullSettlement ? '🔥 Pelunasan Lunas Sekaligus (CLOSED)' : 'Angsuran / Pelunasan Partial'}
-                        </td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '8px 0', color: '#64748b' }}>Catatan Petugas</td>
-                        <td style={{ padding: '8px 0', color: '#475569' }}>{receiptData.notes}</td>
-                      </tr>
-                      <tr style={{ background: '#f0fdf4', borderTop: '2px solid #16a34a' }}>
-                        <td style={{ padding: '12px 10px', fontSize: '1rem', fontWeight: 800, color: '#166534' }}>JUMLAH DIBAYAR</td>
-                        <td style={{ padding: '12px 10px', fontSize: '1.25rem', fontWeight: 800, color: '#15803d', textAlign: 'left' }}>
-                          Rp {receiptData.nominal.toLocaleString('id-ID')}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '16px', borderTop: '1px solid #cbd5e1' }}>
-                    <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
-                      Petugas Operasional: <strong>{receiptData.createdUser}</strong>
-                    </div>
-                    <div style={{ display: 'flex', gap: '12px' }}>
-                      <button
-                        onClick={() => {
-                          const originalTitle = document.title;
-                          document.title = "Kopkara LMS - Pelunasan Manual";
-                          window.print();
-                          setTimeout(() => {
-                            document.title = originalTitle;
-                          }, 1000);
-                        }}
-                        style={{ padding: '8px 18px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}
-                      >
-                        🖨️ Cetak Kuitansi
-                      </button>
-                      <button
-                        onClick={() => setReceiptModalOpen(false)}
-                        style={{ padding: '8px 18px', background: '#64748b', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.85rem' }}
-                      >
-                        Tutup
-                      </button>
-                    </div>
+                    </form>
                   </div>
                 </div>
               </div>
-            )}
-          </div>
+
+              {/* Modal Kuitansi Bukti Pelunasan Manual */}
+              {receiptModalOpen && receiptData && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1050, backdropFilter: 'blur(4px)' }}>
+                  <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '32px', width: '90%', maxWidth: '650px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', border: '2px solid #0284c7' }}>
+                    
+                    <div style={{ textAlign: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '16px', marginBottom: '20px' }}>
+                      <h3 style={{ margin: 0, color: '#0369a1', fontSize: '1.1rem', textTransform: 'uppercase', letterSpacing: '1px' }}>KOPERASI KARYAWAN (KOPKARA) - LMS SYSTEM</h3>
+                      <h2 style={{ margin: '6px 0 0 0', color: '#0f172a', fontSize: '1.4rem', fontWeight: 800 }}>🧾 KUITANSI BUKTI PELUNASAN PINJAMAN</h2>
+                      <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '4px', fontFamily: 'monospace' }}>No: {receiptData.kwtNo} | Tanggal: {receiptData.date}</div>
+                    </div>
+
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem', marginBottom: '24px' }}>
+                      <tbody>
+                        <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '8px 0', color: '#64748b', width: '38%' }}>No. Pinjaman</td>
+                          <td style={{ padding: '8px 0', fontWeight: 'bold', color: '#0f172a' }}>#{receiptData.loanNo}</td>
+                        </tr>
+                        <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '8px 0', color: '#64748b' }}>NIK / No. Anggota</td>
+                          <td style={{ padding: '8px 0', fontWeight: 'bold', color: '#0f172a' }}>{receiptData.memberNo}</td>
+                        </tr>
+                        <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '8px 0', color: '#64748b' }}>Nama Anggota / Pemohon</td>
+                          <td style={{ padding: '8px 0', fontWeight: 'bold', color: '#0f172a' }}>{receiptData.memberName}</td>
+                        </tr>
+                        <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '8px 0', color: '#64748b' }}>Metode / Sumber Dana</td>
+                          <td style={{ padding: '8px 0', fontWeight: 600, color: '#2563eb' }}>{receiptData.paymentTypeLabel}</td>
+                        </tr>
+                        <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '8px 0', color: '#64748b' }}>No. Referensi / Bukti</td>
+                          <td style={{ padding: '8px 0', fontFamily: 'monospace', color: '#475569' }}>{receiptData.referenceNo}</td>
+                        </tr>
+                        <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '8px 0', color: '#64748b' }}>Jenis Pelunasan</td>
+                          <td style={{ padding: '8px 0', fontWeight: 'bold', color: receiptData.isFullSettlement ? '#047857' : '#0284c7' }}>
+                            {receiptData.isFullSettlement ? '🔥 Pelunasan Lunas Sekaligus (CLOSED)' : 'Angsuran / Pelunasan Partial'}
+                          </td>
+                        </tr>
+                        <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '8px 0', color: '#64748b' }}>Catatan Petugas</td>
+                          <td style={{ padding: '8px 0', color: '#475569' }}>{receiptData.notes}</td>
+                        </tr>
+                        <tr style={{ background: '#f0fdf4', borderTop: '2px solid #16a34a' }}>
+                          <td style={{ padding: '12px 10px', fontSize: '1rem', fontWeight: 800, color: '#166534' }}>JUMLAH DIBAYAR</td>
+                          <td style={{ padding: '12px 10px', fontSize: '1.25rem', fontWeight: 800, color: '#15803d', textAlign: 'left' }}>
+                            Rp {receiptData.nominal.toLocaleString('id-ID')}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '16px', borderTop: '1px solid #cbd5e1' }}>
+                      <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                        Petugas Operasional: <strong>{receiptData.createdUser}</strong>
+                      </div>
+                      <div style={{ display: 'flex', gap: '12px' }}>
+                        <button
+                          onClick={() => {
+                            const originalTitle = document.title;
+                            document.title = "Kopkara LMS - Pelunasan Manual";
+                            window.print();
+                            setTimeout(() => {
+                              document.title = originalTitle;
+                            }, 1000);
+                          }}
+                          style={{ padding: '8px 18px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                        >
+                          🖨️ Cetak Kuitansi
+                        </button>
+                        <button
+                          onClick={() => setReceiptModalOpen(false)}
+                          style={{ padding: '8px 18px', background: '#64748b', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.85rem' }}
+                        >
+                          Tutup
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
           );
         })()}
 
@@ -4224,9 +4477,9 @@ function App() {
                       </select>
                     </div>
 
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
-                      <button type="button" onClick={() => setProductModalOpen(false)} style={{ padding: '8px 16px', background: '#64748b', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>Batal</button>
-                      <button type="submit" style={{ padding: '8px 18px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>💾 Simpan Produk Pinjaman</button>
+                    <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', gap: '12px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
+                      <button type="submit" style={{ padding: '8px 18px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>💾 Simpan Produk Pinjaman</button>
+                      <button type="button" onClick={() => setProductModalOpen(false)} style={{ padding: '8px 16px', background: 'var(--button-cancel-bg, #64748b)', color: '#ffffff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>Cancel</button>
                     </div>
                   </form>
                 </div>
@@ -4808,8 +5061,8 @@ function App() {
               </tbody>
             </table>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
-              <button onClick={() => setTrackingModalOpen(false)} style={{ padding: '8px 20px', background: '#64748b', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>Tutup</button>
+            <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: '20px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
+              <button onClick={() => setTrackingModalOpen(false)} style={{ padding: '8px 20px', background: 'var(--button-closed-bg, #475569)', color: '#ffffff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>Tutup</button>
             </div>
           </div>
         </div>

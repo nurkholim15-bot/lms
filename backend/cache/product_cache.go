@@ -8,45 +8,46 @@ import (
 )
 
 // ProductCache adalah in-memory cache untuk tabel loan_products.
-// Cache diload sekali saat backend startup dan di-invalidate setiap kali
-// ada operasi write (Create/Save/Delete), sehingga query berikutnya
-// akan reload dari database.
 var ProductCache = &productCache{}
 
 type productCache struct {
-	mu       sync.RWMutex
-	data     []models.LoanProduct
-	loaded   bool
+	mu     sync.RWMutex
+	data   []models.LoanProduct
+	loaded bool
 }
 
-// Set menyimpan seluruh data produk ke cache.
+// Set menyimpan data produk ke cache.
 func (c *productCache) Set(products []models.LoanProduct) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if len(products) == 0 {
+		c.data = nil
+		c.loaded = false
+		log.Println("[PRODUCT-CACHE] Database produk kosong, cache ditandai un-loaded.")
+		return
+	}
 	c.data = products
 	c.loaded = true
-	log.Printf("[PRODUCT-CACHE] Cache diperbarui: %d produk dimuat.", len(products))
+	log.Printf("[PRODUCT-CACHE] Cache diperbarui: %d produk dimuat ke RAM.", len(products))
 }
 
-// Get mengembalikan data cache dan apakah cache sudah terisi.
+// Get mengembalikan data cache dan statusnya.
 func (c *productCache) Get() ([]models.LoanProduct, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if !c.loaded {
+	if !c.loaded || len(c.data) == 0 {
 		return nil, false
 	}
-	// Kembalikan salinan slice agar aman dari modifikasi luar
 	result := make([]models.LoanProduct, len(c.data))
 	copy(result, c.data)
 	return result, true
 }
 
-// GetByID mencari produk berdasarkan ID dari cache.
-// Mengembalikan produk dan true jika ditemukan.
+// GetByID mencari produk dari cache.
 func (c *productCache) GetByID(id int64) (models.LoanProduct, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if !c.loaded {
+	if !c.loaded || len(c.data) == 0 {
 		return models.LoanProduct{}, false
 	}
 	for _, p := range c.data {
@@ -57,19 +58,17 @@ func (c *productCache) GetByID(id int64) (models.LoanProduct, bool) {
 	return models.LoanProduct{}, false
 }
 
-// Invalidate mengosongkan cache sehingga request berikutnya
-// akan reload dari database.
+// Invalidate mengosongkan cache.
 func (c *productCache) Invalidate() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.data = nil
 	c.loaded = false
-	log.Println("[PRODUCT-CACHE] Cache di-invalidate.")
+	log.Println("[PRODUCT-CACHE] Cache produk di-invalidate.")
 }
 
-// IsLoaded mengembalikan status apakah cache sudah terisi.
 func (c *productCache) IsLoaded() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.loaded
+	return c.loaded && len(c.data) > 0
 }
