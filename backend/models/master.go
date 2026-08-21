@@ -33,7 +33,6 @@ type Employee struct {
 	EmployeeStatus string  `gorm:"column:employee_status" json:"employee_status"` // renamed from work_status
 	DeptNo         string `gorm:"column:deptno" json:"deptno"`
 	CategoryCode   string  `gorm:"column:category_code" json:"category_code"`
-	RoleID         int64  `gorm:"column:role_id" json:"role_id"`
 	Salary         float64 `gorm:"column:salary" json:"salary"`
 	MasterBaseModel
 }

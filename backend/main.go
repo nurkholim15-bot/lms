@@ -29,6 +29,33 @@ import (
 	"gorm.io/gorm"
 )
 
+func getAppTokenName() string {
+	var tokenName string
+	if config.DB != nil {
+		config.DB.Raw("SELECT key_value FROM lms_sch.global_parameters WHERE key_name = 'APP_TOKEN' AND deleted_at IS NULL LIMIT 1").Scan(&tokenName)
+	}
+	tokenName = strings.TrimSpace(tokenName)
+	if tokenName == "" {
+		tokenName = "ewa_token"
+	}
+	return tokenName
+}
+
+func getTokenFromRequest(c *gin.Context) string {
+	tokenName := getAppTokenName()
+	if token, err := c.Cookie(tokenName); err == nil && strings.TrimSpace(token) != "" {
+		return strings.TrimSpace(token)
+	}
+	if token, err := c.Cookie("karisma_token"); err == nil && strings.TrimSpace(token) != "" {
+		return strings.TrimSpace(token)
+	}
+	authHeader := c.GetHeader("Authorization")
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		return strings.TrimPrefix(authHeader, "Bearer ")
+	}
+	return strings.TrimSpace(authHeader)
+}
+
 func generateSessionToken() string {
 	b := make([]byte, 32)
 	rand.Read(b)
@@ -348,7 +375,7 @@ func RBACRoleMenuMiddleware(requiredMenuPath string) gin.HandlerFunc {
 		}
 
 		username := strings.TrimPrefix(token, "mock-token-")
-		var roleID int64 = 2 // Default: Role 2 (Anggota)
+		var roleID int64 = 0
 
 		// Look up real session and user role from DB if token is a session token
 		if config.DB != nil && !strings.HasPrefix(token, "mock-token-") {
@@ -357,13 +384,8 @@ func RBACRoleMenuMiddleware(requiredMenuPath string) gin.HandlerFunc {
 				username = sessionRecord.Username
 				var u models.User
 				if errU := config.DB.Where("id = ?", sessionRecord.UserID).First(&u).Error; errU == nil {
-					roleLower := strings.ToLower(strings.TrimSpace(u.Role))
-					if roleLower == "admin" {
-						roleID = 1
-					} else if roleLower == "hrd" {
-						roleID = 3
-					} else if roleLower == "anggota" {
-						roleID = 2
+					if u.RoleID > 0 {
+						roleID = u.RoleID
 					}
 				}
 			}
@@ -375,14 +397,11 @@ func RBACRoleMenuMiddleware(requiredMenuPath string) gin.HandlerFunc {
 			roleID = 1 // Role 1: Admin
 		} else if usernameLower == "hrd" {
 			roleID = 3 // Role 3: HRD
-		} else if empID, err := strconv.ParseInt(usernameLower, 10, 64); err == nil {
-			var dbRoleID int64 = 0
-			config.DB.Raw("SELECT role_id FROM lms_sch.employees WHERE employee_id = ? LIMIT 1", empID).Scan(&dbRoleID)
-			if dbRoleID > 0 {
-				roleID = dbRoleID
-			}
-			if empID == 10101 && roleID != 1 {
-				roleID = 2 // Role 2: Anggota
+		} else {
+			var userRoleID int64 = 0
+			config.DB.Raw("SELECT role_id FROM lms_sch.users WHERE LOWER(username) = ? AND deleted_at IS NULL LIMIT 1", usernameLower).Scan(&userRoleID)
+			if userRoleID > 0 {
+				roleID = userRoleID
 			}
 		}
 
@@ -440,6 +459,22 @@ func main() {
 
 	// Clean up temporary test entries
 	config.DB.Exec("DELETE FROM lms_sch.global_parameters WHERE key_name = 'ATTACK_TEST'")
+	config.DB.Exec("INSERT INTO lms_sch.global_parameters (key_name, key_value, description) VALUES ('APP_TOKEN', 'ewa_token', 'Nama Cookie Token Parameter') ON CONFLICT DO NOTHING")
+	config.DB.Exec("INSERT INTO lms_sch.global_parameters (key_name, key_value, description) VALUES ('APP_USER', 'ewa_user', 'Nama LocalStorage User Parameter') ON CONFLICT DO NOTHING")
+	config.DB.Exec(`INSERT INTO lms_sch.menus (menu_id, title, icon, path, order_seq) VALUES
+		(1, 'Dashboard', '📊', 'dashboard', 1),
+		(2, 'Pengajuan Pinjaman', '📝', 'pengajuan', 2),
+		(3, 'Daftar Pinjaman', '💰', 'pinjaman', 3),
+		(4, 'Approval Pinjaman', '✅', 'approval', 4),
+		(5, 'Potong Gaji (HRD)', '✂️', 'payroll', 5),
+		(6, 'Pelunasan Manual', '💳', 'manual-repayment', 6),
+		(7, 'Produk Pinjaman', '📦', 'products', 7),
+		(8, 'Pengaturan Parameter', '⚙️', 'parameters', 8),
+		(9, 'Data Master', '🗃️', 'master', 9)
+		ON CONFLICT (menu_id) DO UPDATE SET title = EXCLUDED.title, icon = EXCLUDED.icon, path = EXCLUDED.path`)
+	config.DB.Exec(`INSERT INTO lms_sch.role_menus (role_id, menu_id) VALUES
+		(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8), (1, 9)
+		ON CONFLICT DO NOTHING`)
 
 	// Ensure DB table lms_sch.employees maps 10101 to Role 2 (Anggota) and clean up role_menus for Anggota
 	config.DB.Exec("UPDATE lms_sch.employees SET role_id = 2 WHERE employee_id = 10101")
@@ -611,9 +646,19 @@ func main() {
 						return
 					}
 
-					// Verify password using Bcrypt
-					errPwd := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
-					if errPwd != nil {
+					// Verify password using Bcrypt with fallback to plain text comparison
+					pwdMatch := false
+					if errPwd := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); errPwd == nil {
+						pwdMatch = true
+					} else if user.Password == password {
+						pwdMatch = true
+						// Auto upgrade plain text to bcrypt hash in DB
+						if hashed, errH := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost); errH == nil {
+							user.Password = string(hashed)
+						}
+					}
+
+					if !pwdMatch {
 						// Password salah -> update failed_login_attempts & check LOGIN_MAX_ATTEMPTS
 						user.FailedLoginAttempts++
 						maxAttempts := 5
@@ -641,6 +686,13 @@ func main() {
 							})
 							return
 						}
+					}
+
+					// Cek apakah user memiliki RoleID valid
+					if user.RoleID <= 0 {
+						log.Printf("[LOGIN-REJECTED] User '%s' has no assigned role_id (role_id: %d)", username, user.RoleID)
+						c.JSON(http.StatusForbidden, gin.H{"error": "Login gagal: Akun Anda belum memiliki Role. Silakan hubungi Administrator."})
+						return
 					}
 
 					// Login Berhasil! Reset failed login attempts & lockout
@@ -688,9 +740,12 @@ func main() {
 						log.Printf("[SESSION-CREATE-ERROR] Failed to save session to DB: %v", errSess)
 					}
 
-					log.Printf("[KARISMA-AUTH-SUCCESS] ✅ User '%s' (Role: %s) logged in successfully. Token: %s", username, user.Role, token)
-					c.SetCookie("karisma_token", token, sessionExpiryMins*60, "/", "", true, true)
-					c.JSON(http.StatusOK, gin.H{"token": token, "status": "success"})
+					log.Printf("[KARISMA-AUTH-SUCCESS] ✅ User '%s' (RoleID: %d) logged in successfully. Token: %s", username, user.RoleID, token)
+					isSecure := c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
+					tokenCookieName := getAppTokenName()
+					c.SetCookie(tokenCookieName, token, sessionExpiryMins*60, "/", "", isSecure, true)
+					c.SetCookie("karisma_token", token, sessionExpiryMins*60, "/", "", isSecure, true)
+					c.JSON(http.StatusOK, gin.H{"status": "success", "token": token, "token_name": tokenCookieName})
 					return
 				}
 
@@ -764,9 +819,23 @@ func main() {
 
 						var user models.User
 						if errU := config.DB.Where("id = ?", session.UserID).First(&user).Error; errU == nil {
+							if user.RoleID <= 0 {
+								c.JSON(http.StatusForbidden, gin.H{"error": "Akses Ditolak: Akun Anda tidak memiliki Role pada tabel users."})
+								return
+							}
 							empID := int64(0)
 							name := user.Name
-							role := user.Role
+							role := "Anggota"
+							if user.RoleID == 1 {
+								role = "Admin"
+							} else if user.RoleID == 3 {
+								role = "HRD"
+							} else {
+								var r models.Role
+								if errR := config.DB.Where("role_id = ?", user.RoleID).First(&r).Error; errR == nil && strings.TrimSpace(r.RoleName) != "" {
+									role = r.RoleName
+								}
+							}
 
 							if user.MemberNo != nil && *user.MemberNo > 0 {
 								var mem struct {
@@ -801,6 +870,7 @@ func main() {
 									"name":        name,
 									"eligible":    true,
 									"role":        role,
+									"role_id":     user.RoleID,
 								},
 							})
 							return
@@ -892,7 +962,14 @@ func main() {
 				}
 
 				// Verify old password
-				if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(oldPassword)); err != nil {
+				oldPwdMatch := false
+				if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(oldPassword)); err == nil {
+					oldPwdMatch = true
+				} else if user.Password == oldPassword {
+					oldPwdMatch = true
+				}
+
+				if !oldPwdMatch {
 					c.JSON(http.StatusUnauthorized, gin.H{"error": "Password lama Anda tidak sesuai!"})
 					return
 				}

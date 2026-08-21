@@ -3,7 +3,6 @@ import axios from 'axios'
 
 const API_PROTOCOL = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'https:' : 'http:';
 const API_BASE_URL = import.meta.env.VITE_API_URL || `${API_PROTOCOL}//localhost:8086`;
-const KARISMA_SIMULATOR_URL = import.meta.env.VITE_KARISMA_URL || `${API_PROTOCOL}//localhost:8087`;
 
 // Enable credentials (HttpOnly Cookie Transmission) across all Axios requests
 axios.defaults.withCredentials = true;
@@ -30,18 +29,17 @@ function App() {
   const [masterSearchQuery, setMasterSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
 
-  // Autentikasi & Sesi
-  const [authToken, setAuthToken] = useState(localStorage.getItem('karisma_token') || '');
+  // Autentikasi & Sesi (APP_TOKEN disimpan di HttpOnly Cookie, APP_USER di LocalStorage)
   const [currentUser, setCurrentUser] = useState(() => {
     try {
-      const savedUser = localStorage.getItem('karisma_user');
+      const savedUser = localStorage.getItem('ewa_user') || localStorage.getItem('karisma_user');
       if (!savedUser) return null;
       const parsed = JSON.parse(savedUser);
       return (parsed && (parsed.employee_id || parsed.username || parsed.role)) ? parsed : null;
     } catch {
       return null;
     }
-  }); // { employee_id, name, eligible, role }
+  });
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [loginError, setLoginError] = useState('');
   const [products, setProducts] = useState([]);
@@ -344,15 +342,16 @@ function App() {
 
   // Fetch User Info & APM Menus directly from Backend API with SQL filters
   useEffect(() => {
-    if (currentUser?.employee_id) {
-      axios.get(`${API_BASE_URL}/api/user-info/${currentUser.employee_id}`)
+    const userKey = currentUser?.username || currentUser?.employee_id;
+    if (userKey) {
+      axios.get(`${API_BASE_URL}/api/user-info/${encodeURIComponent(userKey)}`)
         .then(res => {
           const info = res.data;
           setUserInfo(info);
 
-          // Pengecekan Keanggotaan: Jika bukan anggota (is_member === false) dan bukan akun superadmin
-          const isSuperAdmin = String(currentUser.username || '').toLowerCase() === 'admin';
-          if (!info.is_member && !isSuperAdmin) {
+          // Pengecekan Keanggotaan: Jika bukan anggota (is_member === false) dan bukan akun high privilege (Admin / HRD)
+          const isHighPriv = info.role_id === 1 || info.role_id === 3 || String(currentUser.username || '').toLowerCase() === 'admin';
+          if (!info.is_member && !isHighPriv) {
             alert("Anda bukan anggota sehingga tidak boleh login");
             handleLogout("Anda bukan anggota sehingga tidak boleh login");
           }
@@ -363,24 +362,46 @@ function App() {
     }
   }, [currentUser]);
 
-  // Cek role asli Karyawan dari Database LMS
-  const realEmployee = (currentUser && referenceData.employees.length > 0)
-    ? referenceData.employees.find(e => String(e.employee_id) === String(currentUser.employee_id))
-    : null;
-    
-  let roleId = userInfo ? userInfo.role_id : (realEmployee && realEmployee.role_id ? realEmployee.role_id : null);
-  let realRoleName = userInfo ? userInfo.role_name : (realEmployee && realEmployee.role ? realEmployee.role : 'Anggota');
+  // Cek role asli dari Session User / Database LMS
+  let roleId = userInfo?.role_id || currentUser?.role_id || (String(currentUser?.role || '').toLowerCase() === 'admin' ? 1 : null);
+  let realRoleName = userInfo?.role_name || currentUser?.role || 'Anggota';
 
-  // Menyusun Dynamic Menus dari APM (High performance backend API fallback to frontend state)
-  const allowedMenuIds = referenceData.role_menus
-    .filter(rm => String(rm.role_id) === String(roleId))
-    .map(rm => String(rm.menu_id));
+  // Default Fallback System Menus apabila database belum termuat
+  const defaultFallbackMenus = [
+    { menu_id: 1, title: 'Dashboard', icon: '📊', path: 'dashboard', roles: ['admin', 'anggota', 'hrd'] },
+    { menu_id: 2, title: 'Pengajuan Pinjaman', icon: '📝', path: 'pengajuan', roles: ['admin', 'anggota'] },
+    { menu_id: 3, title: 'Daftar Pinjaman', icon: '💰', path: 'pinjaman', roles: ['admin', 'anggota', 'hrd'] },
+    { menu_id: 4, title: 'Approval Pinjaman', icon: '✅', path: 'approval', roles: ['admin'] },
+    { menu_id: 5, title: 'Potong Gaji (HRD)', icon: '✂️', path: 'payroll', roles: ['admin', 'hrd'] },
+    { menu_id: 6, title: 'Pelunasan Manual', icon: '💳', path: 'manual-repayment', roles: ['admin'] },
+    { menu_id: 7, title: 'Produk Pinjaman', icon: '📦', path: 'products', roles: ['admin', 'anggota', 'hrd'] },
+    { menu_id: 8, title: 'Pengaturan Parameter', icon: '⚙️', path: 'parameters', roles: ['admin'] },
+    { menu_id: 9, title: 'Data Master', icon: '🗃️', path: 'master', roles: ['admin'] }
+  ].filter(m => {
+    if (roleId === 1 || String(realRoleName).toLowerCase() === 'admin') return true;
+    if (roleId === 3 || String(realRoleName).toLowerCase() === 'hrd') return m.roles.includes('hrd');
+    return m.roles.includes('anggota');
+  });
 
-  const visibleMenus = (userInfo && userInfo.menus && userInfo.menus.length > 0) 
+  const allowedMenuIds = (roleId === 1 || String(realRoleName).toLowerCase() === 'admin') 
+    ? (referenceData.menus || []).map(m => String(m.menu_id)) 
+    : (referenceData.role_menus || []).filter(rm => String(rm.role_id) === String(roleId)).map(rm => String(rm.menu_id));
+
+  let computedVisible = (userInfo && userInfo.menus && userInfo.menus.length > 0) 
     ? userInfo.menus 
-    : referenceData.menus
-        .filter(m => allowedMenuIds.includes(String(m.menu_id)))
-        .sort((a, b) => (a.order || 0) - (b.order || 0));
+    : ((referenceData.menus && referenceData.menus.length > 0)
+        ? referenceData.menus.filter(m => (roleId === 1 || String(realRoleName).toLowerCase() === 'admin' || allowedMenuIds.includes(String(m.menu_id)))).sort((a, b) => (a.order || 0) - (b.order || 0))
+        : defaultFallbackMenus);
+
+  let visibleMenus = (computedVisible && computedVisible.length > 0) ? computedVisible : defaultFallbackMenus;
+
+  // Garansi Akses Menu Data Master untuk Setiap Pengguna Ber-Role Admin (roleId === 1)
+  if (roleId === 1 || String(realRoleName).toLowerCase() === 'admin') {
+    const hasMaster = visibleMenus.some(m => m.path === 'master' || String(m.title).toLowerCase().includes('master'));
+    if (!hasMaster) {
+      visibleMenus = [...visibleMenus, { menu_id: 9, title: 'Data Master', icon: '🗃️', path: 'master', order_seq: 9 }];
+    }
+  }
 
   // Update HTML Document Title
   useEffect(() => {
@@ -1764,60 +1785,49 @@ function App() {
   }, []);
 
   // Login Authentication Verification
-  useEffect(() => {
-    if (authToken) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${authToken}`;
-      const verifyAuthToken = async () => {
-        try {
-          // Try Karisma Simulator port 8087 first
-          const res = await axios.post(`${KARISMA_SIMULATOR_URL}/api/karisma/verify`, {}, {
-            headers: { Authorization: `Bearer ${authToken}` }
-          });
-          const user = res.data.user;
-          setCurrentUser(user);
-          localStorage.setItem('karisma_user', JSON.stringify(user));
-          setForm(prev => ({...prev, member_no: user.employee_id}));
-        } catch (err8087) {
-          try {
-            // Fallback to LMS Core Backend port 8086
-            const res = await axios.post(`${API_BASE_URL}/api/karisma/verify`, {}, {
-              headers: { Authorization: `Bearer ${authToken}` }
-            });
-            const user = res.data.user;
-            setCurrentUser(user);
-            localStorage.setItem('karisma_user', JSON.stringify(user));
-            setForm(prev => ({...prev, member_no: user.employee_id}));
-          } catch (err8086) {
-            setAuthToken('');
-            localStorage.removeItem('karisma_token');
-            localStorage.removeItem('karisma_user');
-            setCurrentUser(null);
-            delete axios.defaults.headers.common['Authorization'];
-          }
-        }
-      };
-      verifyAuthToken();
-    } else {
-      delete axios.defaults.headers.common['Authorization'];
+  const verifySession = async (overrideToken = '') => {
+    try {
+      const headers = {};
+      if (overrideToken) {
+        headers['Authorization'] = `Bearer ${overrideToken}`;
+      }
+      const res = await axios.post(`${API_BASE_URL}/api/karisma/verify`, {}, { 
+        withCredentials: true,
+        headers
+      });
+      const user = res.data.user;
+      setCurrentUser(user);
+      const appUserKey = getParamVal('APP_USER', 'ewa_user');
+      localStorage.setItem(appUserKey, JSON.stringify(user));
+      // Cleanup legacy token from localStorage for security
+      localStorage.removeItem('karisma_token');
+      localStorage.removeItem('ewa_token');
+      setForm(prev => ({...prev, member_no: user.employee_id}));
+    } catch (err) {
+      const appUserKey = getParamVal('APP_USER', 'ewa_user');
+      localStorage.removeItem(appUserKey);
+      localStorage.removeItem('karisma_user');
+      localStorage.removeItem('karisma_token');
+      localStorage.removeItem('ewa_token');
+      setCurrentUser(null);
     }
-  }, [authToken]);
+  };
+
+  useEffect(() => {
+    // Cleanup any token left in LocalStorage for security (APP_TOKEN is HttpOnly Cookie)
+    localStorage.removeItem('karisma_token');
+    localStorage.removeItem('ewa_token');
+    verifySession();
+    fetchReferenceData();
+  }, []);
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoginError('');
     try {
-      let res;
-      try {
-        // Try Karisma Simulator port 8087 first
-        res = await axios.post(`${KARISMA_SIMULATOR_URL}/api/karisma/login`, loginForm, { withCredentials: true });
-      } catch (err8087) {
-        console.warn("Port 8087 unreachable, falling back to LMS Core Backend port 8086...", err8087);
-        // Fallback to LMS Core Backend port 8086
-        res = await axios.post(`${API_BASE_URL}/api/karisma/login`, loginForm, { withCredentials: true });
-      }
-      const token = res.data.token;
-      localStorage.setItem('karisma_token', token);
-      setAuthToken(token);
+      const res = await axios.post(`${API_BASE_URL}/api/karisma/login`, loginForm, { withCredentials: true });
+      const receivedToken = res.data?.token || '';
+      await verifySession(receivedToken);
     } catch (err) {
       setLoginError(err.response?.data?.error || 'Username atau Password salah!');
     }
@@ -1829,9 +1839,11 @@ function App() {
     } catch (err) {
       console.warn("Error calling logout endpoint:", err);
     }
-    localStorage.removeItem('karisma_token');
+    const appUserKey = getParamVal('APP_USER', 'ewa_user');
+    localStorage.removeItem(appUserKey);
     localStorage.removeItem('karisma_user');
-    setAuthToken('');
+    localStorage.removeItem('karisma_token');
+    localStorage.removeItem('ewa_token');
     setCurrentUser(null);
     setUserInfo(null);
     setActiveTab('dashboard');
@@ -2189,11 +2201,11 @@ function App() {
           
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
             {(() => {
-              const displayName = realEmployee ? realEmployee.name : (currentUser ? currentUser.name : '');
+              const displayName = userInfo?.name || currentUser?.name || 'User';
               return (
                 <>
                   <span style={{ fontWeight: 500, color: '#ffffff' }}>
-                    {displayName} ({currentUser?.employee_id}) - <span style={{ textTransform: 'capitalize' }}>{realRoleName}</span>
+                    {displayName} ({currentUser?.employee_id || currentUser?.username}) - <span style={{ textTransform: 'capitalize' }}>{realRoleName}</span>
                   </span>
                   <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'var(--accent-blue)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' }}>
                     {displayName ? displayName.substring(0, 2).toUpperCase() : ''}
@@ -3849,7 +3861,6 @@ function App() {
                             {k:'employee_status', l:'Employee Status', type:'select', options: referenceData.employeeStatuses.map(d => ({val: d.status_code, label: d.description}))}, 
                             {k:'deptno', l:'Department', type:'select', options: referenceData.departments.map(d => ({val: d.deptno, label: d.dept_name}))}, 
                             {k:'category_code', l:'Category', type:'select', options: referenceData.employeeCategories.map(d => ({val: d.category_code, label: d.description}))},
-                            {k:'role_id', l:'Role', type:'select', options: referenceData.roles.map(d => ({val: d.role_id, label: d.role_name}))},
                             {k:'salary', l:'Salary (IDR)', type:'idr'}
                           ];
                           else if (masterTab === 'members') fields = [
@@ -3884,12 +3895,12 @@ function App() {
                           else if (masterTab === 'users') fields = [
                             {k:'username', l:'Username'},
                             {k:'name', l:'Full Name (Nama Lengkap)'},
-                            {k:'role', l:'Role', type:'select', options: [
-                              ...((referenceData.roles || []).map(r => ({val: r.role_name, label: r.role_name}))),
+                            {k:'role_id', l:'Role', type:'select', options: [
+                              ...((referenceData.roles || []).map(r => ({val: r.role_id, label: r.role_name}))),
                               ...((!referenceData.roles || referenceData.roles.length === 0) ? [
-                                {val: 'admin', label: 'admin'},
-                                {val: 'hrd', label: 'hrd'},
-                                {val: 'anggota', label: 'anggota'}
+                                {val: 1, label: 'admin'},
+                                {val: 3, label: 'hrd'},
+                                {val: 2, label: 'anggota'}
                               ] : [])
                             ]},
                             {k:'member_no', l:'Member No (Anggota)', type:'select', options: [

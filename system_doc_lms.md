@@ -362,34 +362,95 @@ Bagian ini menjelaskan setiap proses bisnis dalam LMS secara naratif, dari sudut
 
 ---
 
-### 8.1 Siklus Pengajuan Pinjaman (Origination)
+### 8.1 Flow Otentikasi Login & Inisialisasi UI LMS
 
-Status pengajuan mengikuti alur berikut secara berurutan:
-
-| Status | Keterangan |
-|---|---|
-| `SUBMITTED` | Pengajuan baru masuk, menunggu validasi |
-| `PENDING` | Menunggu review admin |
-| `REVIEWED` | Sedang diproses oleh admin/komite |
-| `APPROVED` | Disetujui, menunggu pencairan |
-| `REJECTED` | Ditolak, proses selesai |
-| `REVISION_REQUIRED` | Perlu revisi dari pemohon |
-| `DISBURSED` | Dana sudah dicairkan, pinjaman aktif |
-| `CLOSED` | Semua angsuran lunas |
+Sistem LMS mengadopsi arsitektur otentikasi **Zero-Trust Security & Stateful Session Management** yang dikendalikan oleh **Parameter Global Sistem**. 
 
 ```
-SUBMITTED → PENDING → REVIEWED → APPROVED → DISBURSED → CLOSED
-                              ↘ REJECTED
-                              ↘ REVISION_REQUIRED
+┌──────────┐               ┌──────────────────┐               ┌─────────────────────┐
+│ Browser  │               │ Backend API      │               │ PostgreSQL DB       │
+│ (React)  │               │ (Go / Gin)       │               │ (lms_sch)           │
+└────┬─────┘               └────────┬─────────┘               └──────────┬──────────┘
+     │                              │                                    │
+     │ 1. POST /api/karisma/login   │                                    │
+     ├─────────────────────────────►│                                    │
+     │ (username, password)         │ 2. Cek Password Dual-Verify        │
+     │                              ├───────────────────────────────────►│
+     │                              │ (Bcrypt / Plain-text fallback)     │
+     │                              │                                    │
+     │                              │ 3. Simpan Sesi (lms_sch.sessions)  │
+     │                              ├───────────────────────────────────►│
+     │                              │                                    │
+     │                              │ 4. Baca Parameter APP_TOKEN        │
+     │                              ├───────────────────────────────────►│ (default: 'ewa_token')
+     │                              │                                    │
+     │ 5. Response HTTP 200 OK      │                                    │
+     │◄─────────────────────────────┤                                    │
+     │ Set-Cookie: ewa_token=HASH   │                                    │
+     │ (HttpOnly, Secure/Dinamis)   │                                    │
+     │                              │                                    │
+     │ 6. POST /api/karisma/verify  │                                    │
+     ├─────────────────────────────►│                                    │
+     │ withCredentials: true        │ 7. Verifikasi Token Sesi           │
+     │                              ├───────────────────────────────────►│ (Cek User & RoleID > 0)
+     │                              │                                    │
+     │ 8. Response User Session     │                                    │
+     │◄─────────────────────────────┤                                    │
+     │ Simpan LocalStorage: ewa_user│                                    │
+     │                              │                                    │
+     │ 9. GET /api/user-info/:user  │                                    │
+     ├─────────────────────────────►│                                    │
+     │ (misal: /api/user-info/nur)  │ 10. Query Role & Menus Navigasi    │
+     │                              ├───────────────────────────────────►│ (Admin / RoleID 1 -> ALL)
+     │ 11. Response Menu & Role     │                                    │
+     │◄─────────────────────────────┤                                    │
+     │ Render Sidebar & Admin UI    │                                    │
 ```
-
-**Narasi Proses:**
-
-Siklus dimulai ketika seorang **anggota koperasi mengajukan pinjaman** melalui UI LMS. Petugas atau anggota mengisi form dengan memilih produk pinjaman, memasukkan jumlah yang diminta, dan tenor (bulan). Sebelum pengajuan disimpan, sistem otomatis **menjalankan simulasi** untuk menghitung besaran cicilan bulanan, biaya admin, dan batas kredit.
 
 ---
 
-### 8.2 Syarat Pengajuan Pinjaman
+#### Detail Tahapan Otentikasi & Inisialisasi UI:
+
+##### Tahap 1: Login Request (`POST /api/karisma/login`) & Keamanan Token (`APP_TOKEN`)
+1. Pengguna memasukkan `username` dan `password` pada form login di frontend.
+2. Backend menerima request dan melakukan dual-verification password (Bcrypt + plain-text fallback). Jika password plain-text cocok, sistem otomatis meng-upgrade hash password ke Bcrypt di database `lms_sch.users`.
+3. Setelah otentikasi sukses, backend membuat string token 64-karakter acak (`generateSessionToken()`) dan mencatatnya ke dalam tabel `lms_sch.sessions`.
+4. **Pengaturan Parameter `APP_TOKEN` (Nama Cookie Token)**:
+   - Backend membaca parameter `APP_TOKEN` dari tabel `lms_sch.global_parameters` (default: **`ewa_token`**).
+   - Backend menetapkan token ke dalam **HttpOnly Cookie** (`Set-Cookie: ewa_token=<HASH>; HttpOnly; SameSite=Lax`).
+   - Flag `secure` disesuaikan secara dinamis (`c.Request.TLS != nil` atau header `X-Forwarded-Proto == https`) agar cookie dapat diterima dengan mulus di lingkungan HTTP maupun HTTPS.
+5. **Keamanan Ekstra (XSS Protection)**:
+   - Token otentikasi **SAMA SEKALI TIDAK DITAMPILKAN / DISIMPAN DI LOCAL STORAGE ATAU CACHE BROWSER**.
+   - Hal ini melindungi token dari bahaya pencurian lewat skrip berbahaya (*Cross-Site Scripting / XSS*).
+
+##### Tahap 2: Verifikasi Sesi (`POST /api/karisma/verify`) & Storage User (`APP_USER`)
+1. Saat aplikasi React pertama kali dimuat (*mount*) atau setelah login berhasil, frontend memanggil endpoint `/api/karisma/verify` dengan `withCredentials: true`.
+2. Backend mengambil token via fungsi `getTokenFromRequest(c)`:
+   - Membaca HttpOnly Cookie dengan nama parameter `APP_TOKEN` (`ewa_token`), fallback ke `karisma_token`, atau header `Authorization: Bearer <token>`.
+3. Backend memverifikasi bahwa sesi di `lms_sch.sessions` masih aktif (`is_active = true`) dan terhubung ke `lms_sch.users`.
+4. **Pencegahan Security Hole (Strict Zero-Fallback Role)**:
+   - Jika `user.RoleID <= 0` atau tidak terdaftar, backend membatalkan sesi dan menolak dengan **`HTTP 403 Forbidden`**. Tidak ada role default yang diberikan.
+5. **Pengaturan Parameter `APP_USER` (Nama LocalStorage User)**:
+   - Setelah verifikasi berhasil, frontend membaca parameter `APP_USER` dari `global_parameters` (default: **`ewa_user`**).
+   - Data objek profil pengguna (nama, username, member_no, role_id) disimpan di `localStorage.setItem('ewa_user', JSON.stringify(user))` hanya untuk keperluan render nama dan avatar UI.
+
+##### Tahap 3: Resolusi Menus Navigasi & Rendering UI (`GET /api/user-info/:userKey`)
+1. Frontend memanggil `/api/user-info/${currentUser.username}` menggunakan `username` unik (misal: `/api/user-info/nur`) untuk menghindari benturan record ID data load test.
+2. Backend handler `GetUserInfo` memprioritaskan kueri `LOWER(username) = LOWER('nur')`.
+3. **Hak Akses Superuser Admin (`RoleID == 1`)**:
+   - Jika pengguna memiliki `role_id == 1` (Admin), backend secara otomatis mengambil **SELURUH MENU SYSTEM** dari tabel `lms_sch.menus` tanpa bergantung pada relasi `lms_sch.role_menus`.
+4. **Struktur Pertahanan Menu Frontend (3-Tier Fail-Safe)**:
+   - Frontend me-render daftar menu sidebar (`visibleMenus`) dengan logika 3 lapis:
+     - **Tier 1**: `userInfo.menus` hasil query backend API.
+     - **Tier 2**: `referenceData.menus` dari database LMS.
+     - **Tier 3**: System default fallback menus (*Dashboard, Pengajuan Pinjaman, Daftar Pinjaman, Approval Pinjaman, Potong Gaji (HRD), Pelunasan Manual, Produk Pinjaman, Pengaturan Parameter, Data Master*).
+5. **Garansi Menu Data Master**:
+   - Setiap pengguna ber-role Admin (`role_id: 1` atau `role_name: 'admin'`) — *termasuk user `nur`* — dijamin **100% di-grant menu Data Master (`path: 'master'`)** pada sidebar navigasi.
+6. UI LMS terbuka seketika dengan menampilkan **Mode: Admin**, nama pengguna di top header, serta seluruh daftar menu navigasi secara lengkap.
+
+---
+
+### 8.2 Siklus Pengajuan Pinjaman (Origination)
 
 Setelah form disubmit (`POST /api/applications`), sistem memvalidasi beberapa syarat secara otomatis sebelum pengajuan diterima:
 
@@ -414,7 +475,7 @@ Credit limit dihitung berdasarkan formula yang dikonfigurasi di `LOAN_LIMIT_FORM
 
 ---
 
-### 8.3 Kalkulasi Cicilan, Biaya Admin & Credit Limit
+### 8.4 Kalkulasi Cicilan, Biaya Admin & Credit Limit
 
 Semua formula kalkulasi **dapat dikonfigurasi** melalui tabel `lms_sch.global_parameters` — tidak perlu mengubah kode program.
 
@@ -477,7 +538,7 @@ Jika requested_amount > credit_limit → TOLAK
 
 ---
 
-### 8.4 Contoh Simulasi Nyata
+### 8.5 Contoh Simulasi Nyata
 
 #### Pengaruh Tanggal Pengajuan terhadap Credit Limit
 
@@ -572,21 +633,60 @@ requested_amount (600.000) ≤ credit_limit (2.500.000) → ✓ Lolos
 
 ---
 
-### 8.5 Proses Approval
+### 8.6 Validasi Submit & Approval Pinjaman
 
-**Narasi Proses:**
+Seluruh proses pengajuan hingga persetujuan pinjaman dikontrol secara ketat oleh sistem validasi multi-layer pada backend API:
 
-Admin membuka menu **Persetujuan** dan melihat daftar pengajuan berstatus `PENDING` atau `REVIEWED`. Untuk setiap pengajuan, admin dapat:
+#### 1. Validasi Submit Pinjaman (`POST /api/applications`)
+Sebelum record pengajuan disimpan ke database dengan status `SUBMITTED`, backend mengeksekusi urutan validasi berikut:
 
-- **Menyetujui** (`APPROVED`): Memasukkan jumlah yang disetujui (bisa berbeda dari yang diminta) dan catatan wajib. Sistem mengupdate status `loan_applications` dan mencatat ke `loan_trackings`.
-- **Menolak** (`REJECTED`): Memasukkan alasan penolakan. Status berubah menjadi `REJECTED` dan tidak bisa diproses lebih lanjut.
-- **Minta Revisi** (`REVISION_REQUIRED`): Mengembalikan ke pemohon untuk perbaikan data.
-
-Setiap aksi approval menyimpan informasi ke `loan_trackings`: siapa yang melakukan (`updated_user`), kapan (`action_date`), durasi SLA dari status sebelumnya (`sla_duration`), IP address, dan user agent browser.
+1. **Validasi Keaktifan Anggota & Karyawan**:
+   - Pemohon harus terdaftar di `lms_sch.members` dan `lms_sch.employees`.
+   - `is_member` harus bernilai `true` (kecuali akun manajemen Admin/HRD yang selalu diizinkan).
+2. **Validasi Periode Tanggal Pengajuan (`LOAN_START_PERIOD` & `LOAN_END_PERIOD`)**:
+   - Sistem mengambil tanggal hari submit (`DAY` = 1..31).
+   - `DAY` harus memenuhi: `LOAN_START_PERIOD <= DAY <= LOAN_END_PERIOD` (contoh: tanggal 1 s/d 15).
+   - Jika diluar periode, pengajuan ditolak dengan pesan: *"Pengajuan hanya diizinkan antara tanggal X sampai Y"*.
+3. **Validasi Tenor Maksimum (`LOAN_MAX_TENOR`)**:
+   - Tenor yang diajukan tidak boleh melebihi `min(loan_products.max_tenor_months, LOAN_MAX_TENOR)`.
+4. **Validasi Credit Limit Dinamis (`LOAN_LIMIT_FORMULA`)**:
+   - Credit limit dihitung secara *real-time* menggunakan expression engine `govaluate` dengan formula dari `LOAN_LIMIT_FORMULA` (variabel: `DAY`, `SALARY`, `REQUESTED_AMOUNT`, `TENOR`).
+   - Apabila `requested_amount > credit_limit`, backend menolak pengajuan dan menampilkan batas maksimum kredit yang diizinkan.
+5. **Kalkulasi Biaya Admin (`LOAN_ADMIN_FORMULA` & `LOAN_MIN_ADMIN_FEE`)**:
+   - Biaya admin dihitung otomatis melalui formula `LOAN_ADMIN_FORMULA`.
+   - Jika hasil kalkulasi di bawah `LOAN_MIN_ADMIN_FEE` (floor value), maka biaya admin ditetapkan sebesar `LOAN_MIN_ADMIN_FEE`.
 
 ---
 
-### 8.6 Pencairan Pinjaman (Disbursement)
+#### 2. Validasi & Audit Trail Approval Pinjaman (`POST /api/applications/:id/approve` / `reject` / `revision`)
+Admin atau Komite Kredit memproses pengajuan berstatus `PENDING`/`REVIEWED` dengan aturan validasi:
+
+1. **Otorisasi Role RBAC (`RBACRoleMenuMiddleware`)**:
+   - Hanya pengguna dengan `role_id = 1` (Admin) atau `role_id = 3` (HRD/Approval) yang diizinkan mengakses endpoint persetujuan.
+2. **Validasi Nominal Approval (`approved_amount`)**:
+   - `approved_amount` yang disetujui tidak boleh bernilai `0` atau negatif.
+   - `approved_amount` tidak boleh melebihi `requested_amount` pemohon maupun `credit_limit` anggota.
+3. **Perekaman Audit Trail & Durasi SLA (`lms_sch.loan_trackings`)**:
+   - Setiap perubahan status pengajuan mencatat log histori ke `lms_sch.loan_trackings`:
+     - `application_no`: Nomor pengajuan.
+     - `from_status` & `to_status`: Perubahan status (misal: `PENDING` → `APPROVED`).
+     - `action_by` / `updated_user`: ID & Username petugas yang menyetujui.
+     - `sla_duration`: Selisih waktu (dalam detik/menit) sejak status sebelumnya dibuat hingga aksi approval dilakukan.
+     - `ip_address` & `user_agent`: Data geolokasi jaringan & browser petugas.
+
+---
+
+#### 3. Validasi Pencairan & Pembentukan Kontrak (`POST /api/applications/:id/disburse`)
+Setelah pengajuan berstatus `APPROVED`, pencairan dana dikonfirmasi oleh petugas. Backend secara atomis (*atomic transaction*) membentuk 3 entitas data:
+
+1. **`loan_contracts`**: Kontrak legal pinjaman berisi `contract_no`, `approved_amount`, `interest_rate`, `monthly_installment`, `admin_fee`, dan tanggal efektif.
+2. **`loans`**: Record pinjaman aktif dengan `outstanding_amount = approved_amount` dan status `ACTIVE`.
+3. **`loan_schedules`**: Matriks jadwal angsuran bulanan sebanyak tenor yang disetujui.
+   - Tanggal jatuh tempo (`due_date`) setiap angsuran dihitung otomatis berdasarkan parameter `LOAN_DUEDATE` (default: tanggal 25 setiap bulannya).
+
+---
+
+### 8.7 Pencairan Pinjaman (Disbursement)### 8.7 Pencairan Pinjaman (Disbursement)
 
 **Narasi Proses:**
 

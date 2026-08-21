@@ -205,13 +205,16 @@ func (h *MasterDataHandler) GetAll(c *gin.Context) {
 		if q != "" {
 			uIDSearch, _ := strconv.ParseInt(q, 10, 64)
 			if uIDSearch > 0 {
-				uQuery = uQuery.Where("(id = ? OR member_no = ? OR LOWER(username) LIKE ? OR LOWER(name) LIKE ? OR LOWER(role) LIKE ?)", uIDSearch, uIDSearch, likeStr, likeStr, likeStr)
+				uQuery = uQuery.Where("(id = ? OR member_no = ? OR role_id = ? OR LOWER(username) LIKE ? OR LOWER(name) LIKE ?)", uIDSearch, uIDSearch, uIDSearch, likeStr, likeStr)
 			} else {
-				uQuery = uQuery.Where("(LOWER(username) LIKE ? OR LOWER(name) LIKE ? OR LOWER(role) LIKE ?)", likeStr, likeStr, likeStr)
+				uQuery = uQuery.Where("(LOWER(username) LIKE ? OR LOWER(name) LIKE ?)", likeStr, likeStr)
 			}
 		}
 		uQuery.Count(&totalRecords)
 		uQuery.Order("id ASC").Limit(limit).Offset(offset).Find(&data)
+		for i := range data {
+			data[i].Password = ""
+		}
 		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
 		if totalPages < 1 { totalPages = 1 }
 		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
@@ -578,16 +581,32 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 		if name, ok := req["name"].(string); ok && name != "" {
 			user.Name = name
 		}
-		if role, ok := req["role"].(string); ok && role != "" {
-			user.Role = role
+		if roleIDVal, ok := req["role_id"]; ok && roleIDVal != nil {
+			switch v := roleIDVal.(type) {
+			case float64:
+				user.RoleID = int64(v)
+			case int64:
+				user.RoleID = v
+			}
+		} else if roleStr, ok := req["role"].(string); ok && roleStr != "" {
+			var r models.Role
+			if errR := h.db.Where("LOWER(role_name) = ?", strings.ToLower(roleStr)).First(&r).Error; errR == nil {
+				user.RoleID = r.RoleID
+			} else if strings.ToLower(roleStr) == "admin" {
+				user.RoleID = 1
+			} else if strings.ToLower(roleStr) == "hrd" {
+				user.RoleID = 3
+			}
 		}
 		if password, ok := req["password"].(string); ok && password != "" {
-			hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
-				return
+			if !strings.HasPrefix(password, "$2a$") && !strings.HasPrefix(password, "$2b$") {
+				hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
+					return
+				}
+				user.Password = string(hashed)
 			}
-			user.Password = string(hashed)
 		}
 		currentUser := c.GetString("username")
 		if currentUser == "" {
@@ -727,26 +746,47 @@ func (h *MasterDataHandler) GetUserInfo(c *gin.Context) {
 		return
 	}
 
-	var emp models.Employee
-	// 1. Query employee table with filter
-	errEmp := h.db.Where("employee_id = ?", employeeIDStr).First(&emp).Error
-	
-	// 2. Query member table with filter to check membership
-	var mem models.Member
-	isMember := false
-	if errMem := h.db.Where("employee_id = ?", employeeIDStr).First(&mem).Error; errMem == nil {
-		isMember = true
+	var userRecord models.User
+	var errU error = gorm.ErrRecordNotFound
+
+	// Prioritaskan pencarian berdasarkan username unik terlebih dahulu
+	errU = h.db.Where("LOWER(username) = LOWER(?) AND deleted_at IS NULL", employeeIDStr).First(&userRecord).Error
+	if errU != nil {
+		empIDNum, _ := strconv.ParseInt(employeeIDStr, 10, 64)
+		if empIDNum > 0 {
+			errU = h.db.Where("(id = ? OR member_no = ?) AND deleted_at IS NULL", empIDNum, empIDNum).First(&userRecord).Error
+		}
 	}
 
-	var roleID int64
+	if errU != nil || userRecord.RoleID <= 0 {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Akses Ditolak: Pengguna tidak terdaftar di tabel users atau belum memiliki Role."})
+		return
+	}
+
+	var roleID int64 = userRecord.RoleID
 	var roleName string = "Bukan Anggota"
 
-	if errEmp == nil && emp.RoleID > 0 {
-		roleID = emp.RoleID
-	} else if isMember {
-		roleID = 2 // Default Anggota for registered members
-	} else if employeeIDStr == "admin" || employeeIDStr == "9999" {
-		roleID = 1 // Admin
+	// Pengecekan Keanggotaan yang Akurat (Melalui userRecord.MemberNo atau tabel members)
+	isMember := false
+	if roleID == 1 || roleID == 3 {
+		// Admin (1) & HRD (3) selalu diizinkan login tanpa harus terikat keanggotaan
+		isMember = true
+	} else if userRecord.MemberNo != nil && *userRecord.MemberNo > 0 {
+		isMember = true
+	} else {
+		empIDNum, _ := strconv.ParseInt(employeeIDStr, 10, 64)
+		if empIDNum > 0 {
+			var count int64
+			h.db.Model(&models.Member{}).Where("employee_id = ? OR member_no = ?", empIDNum, empIDNum).Count(&count)
+			if count > 0 {
+				isMember = true
+			}
+		}
+	}
+
+	var emp models.Employee
+	if userRecord.MemberNo != nil && *userRecord.MemberNo > 0 {
+		_ = h.db.Where("employee_id = ? OR employee_id = (SELECT employee_id FROM lms_sch.members WHERE member_no = ? LIMIT 1)", *userRecord.MemberNo, *userRecord.MemberNo).First(&emp).Error
 	}
 
 	if roleID > 0 {
@@ -760,18 +800,27 @@ func (h *MasterDataHandler) GetUserInfo(c *gin.Context) {
 		}
 	}
 
-	// 3. Query menus for this role using SQL JOIN filter
+	// 3. Query menus for this role using SQL JOIN filter (Admin role_id == 1 gets ALL menus)
 	var menus []models.Menu
-	if roleID > 0 {
+	if roleID == 1 {
+		h.db.Table("lms_sch.menus").
+			Select("menu_id, parent_id, title, icon, path, order_seq").
+			Where("deleted_at IS NULL").
+			Order("order_seq asc").
+			Scan(&menus)
+	} else if roleID > 0 {
 		h.db.Table("lms_sch.menus").
 			Select("lms_sch.menus.menu_id, lms_sch.menus.parent_id, lms_sch.menus.title, lms_sch.menus.icon, lms_sch.menus.path, lms_sch.menus.order_seq").
 			Joins("JOIN lms_sch.role_menus ON lms_sch.menus.menu_id = lms_sch.role_menus.menu_id").
-			Where("lms_sch.role_menus.role_id = ?", roleID).
+			Where("lms_sch.role_menus.role_id = ? AND lms_sch.menus.deleted_at IS NULL", roleID).
 			Order("lms_sch.menus.order_seq asc").
 			Scan(&menus)
 	}
 
-	name := emp.Name
+	name := userRecord.Name
+	if name == "" {
+		name = emp.Name
+	}
 	if name == "" {
 		name = "Karyawan " + employeeIDStr
 	}
