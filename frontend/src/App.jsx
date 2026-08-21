@@ -74,6 +74,8 @@ function App() {
   const [auditLogPage, setAuditLogPage] = useState(1);
   const [receiptData, setReceiptData] = useState(null);
   const [receiptModalOpen, setReceiptModalOpen] = useState(false);
+  const [isMasterModalOpen, setIsMasterModalOpen] = useState(false);
+  const [isEditMasterMode, setIsEditMasterMode] = useState(false);
   const [allMembers, setAllMembers] = useState([]);
   const [selectedMemberFilter, setSelectedMemberFilter] = useState('');
   const [manualMonth, setManualMonth] = useState('08');
@@ -123,7 +125,7 @@ function App() {
   const fetchPaginatedEmployeesForSelect = async (q, page) => {
     setEmpSelectLoading(true);
     try {
-      const pageSize = parseInt(getParamVal('DEFAULT_PAGE_SIZE', '10')) || parseInt(getParamVal('PAGINATION_LIMIT', '10')) || 10;
+      const pageSize = parseInt(getParamVal('PAGINATION_LIMIT', getParamVal('DEFAULT_PAGE_SIZE', '5'))) || 5;
       const res = await axios.get(`${API_BASE_URL}/api/master/employees?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
       setEmpSelectList(res.data.data || []);
       setEmpSelectTotalRecords(res.data.total_records || (res.data.data ? res.data.data.length : 0));
@@ -146,7 +148,7 @@ function App() {
   const fetchPaginatedMembersForSelect = async (q, page) => {
     setMemberSelectLoading(true);
     try {
-      const pageSize = parseInt(getParamVal('DEFAULT_PAGE_SIZE', '10')) || parseInt(getParamVal('PAGINATION_LIMIT', '10')) || 10;
+      const pageSize = parseInt(getParamVal('PAGINATION_LIMIT', getParamVal('DEFAULT_PAGE_SIZE', '5'))) || 5;
       const res = await axios.get(`${API_BASE_URL}/api/master/members?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
       setMemberSelectList(res.data.data || []);
       setMemberSelectTotalRecords(res.data.total_records || (res.data.data ? res.data.data.length : 0));
@@ -1619,7 +1621,7 @@ function App() {
   const fetchMasterData = async (table, q = '', page = 1) => {
     try {
       const targetTable = table || masterTab;
-      const pageSize = parseInt(getParamVal('DEFAULT_PAGE_SIZE', '10')) || parseInt(getParamVal('PAGINATION_LIMIT', '10')) || 10;
+      const pageSize = parseInt(getParamVal('PAGINATION_LIMIT', getParamVal('DEFAULT_PAGE_SIZE', '5'))) || 5;
       const response = await axios.get(`${API_BASE_URL}/api/master/${targetTable}?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
       setMasterDataList(response.data.data || []);
       setMasterTotalRecords(response.data.total_records || (response.data.data ? response.data.data.length : 0));
@@ -1632,15 +1634,15 @@ function App() {
   const fetchReferenceData = async () => {
     try {
       const [deptRes, empStatusRes, kopkaraStatusRes, empCatRes, empRes, memRes, roleRes, menuRes, roleMenuRes] = await Promise.all([
-        axios.get(`${API_BASE_URL}/api/master/departments`),
-        axios.get(`${API_BASE_URL}/api/master/employee-statuses`),
-        axios.get(`${API_BASE_URL}/api/master/kopkara-statuses`),
-        axios.get(`${API_BASE_URL}/api/master/employee-categories`),
-        axios.get(`${API_BASE_URL}/api/master/employees`),
-        axios.get(`${API_BASE_URL}/api/master/members`),
-        axios.get(`${API_BASE_URL}/api/master/roles`),
-        axios.get(`${API_BASE_URL}/api/master/menus`),
-        axios.get(`${API_BASE_URL}/api/master/role-menus`)
+        axios.get(`${API_BASE_URL}/api/master/departments?limit=1000`),
+        axios.get(`${API_BASE_URL}/api/master/employee-statuses?limit=1000`),
+        axios.get(`${API_BASE_URL}/api/master/kopkara-statuses?limit=1000`),
+        axios.get(`${API_BASE_URL}/api/master/employee-categories?limit=1000`),
+        axios.get(`${API_BASE_URL}/api/master/employees?limit=1000`),
+        axios.get(`${API_BASE_URL}/api/master/members?limit=1000`),
+        axios.get(`${API_BASE_URL}/api/master/roles?limit=1000`),
+        axios.get(`${API_BASE_URL}/api/master/menus?limit=1000`),
+        axios.get(`${API_BASE_URL}/api/master/role-menus?limit=1000`)
       ]);
       setReferenceData({
         departments: deptRes.data.data || [],
@@ -1665,10 +1667,7 @@ function App() {
       setMasterTab(tab);
       setCurrentPage(1);
       setMasterSearchQuery('');
-      fetchMasterData(tab, '', 1);
       setMasterForm({});
-    } else if (activeTab === 'master') {
-      fetchMasterData(masterTab, masterSearchQuery, currentPage);
     }
   }, [activeTab]);
 
@@ -1689,9 +1688,13 @@ function App() {
   useEffect(() => {
     if (activeTab === 'master' || activeTab.startsWith('master-')) {
       fetchMasterData(masterTab, masterSearchQuery, currentPage);
+      fetchReferenceData();
     }
     if (masterTab === 'members') {
       fetchPaginatedEmployeesForSelect('', 1);
+    }
+    if (masterTab === 'users') {
+      fetchPaginatedMembersForSelect('', 1);
     }
   }, [masterTab, currentPage]);
 
@@ -1838,21 +1841,80 @@ function App() {
     window.location.reload();
   };
 
+    const getMasterTitle = (tab) => {
+    if (tab === 'departments') return 'Master Department';
+    if (tab === 'employee-statuses') return 'Master Status Karyawan';
+    if (tab === 'kopkara-statuses') return 'Master Status Kopkara';
+    if (tab === 'employee-categories') return 'Master Kategori Karyawan';
+    if (tab === 'employees') return 'Master Data Karyawan';
+    if (tab === 'members') return 'Master Anggota Kopkara';
+    if (tab === 'roles') return 'Master Role Sistem';
+    if (tab === 'menus') return 'Master Menu Navigation';
+    if (tab === 'parameters') return 'Parameter Global';
+    if (tab === 'users') return 'Master User Accounts';
+    if (tab === 'sessions') return 'Master Active Sessions';
+    return `Master ${tab.replace('-', ' ')}`;
+  };
+
+  const getPrimaryKeyKey = (tab) => {
+    if (tab === 'departments') return 'deptno';
+    if (tab === 'employee-statuses' || tab === 'kopkara-statuses') return 'status_code';
+    if (tab === 'employee-categories') return 'category_code';
+    if (tab === 'employees') return 'employee_id';
+    if (tab === 'members') return 'member_no';
+    if (tab === 'roles') return 'role_id';
+    if (tab === 'menus') return 'menu_id';
+    if (tab === 'parameters') return 'id';
+    if (tab === 'users') return 'id';
+    return 'id';
+  };
+
+  const getFieldValue = (form, key) => {
+    if (!form) return '';
+    if (form[key] !== undefined && form[key] !== null) return form[key];
+    const match = Object.keys(form).find(m => m.toLowerCase() === key.toLowerCase());
+    if (match && form[match] !== undefined && form[match] !== null) return form[match];
+    return '';
+  };
+
+  const formatRupiahInput = (val) => {
+    if (val === null || val === undefined || val === '') return '';
+    const numbersOnly = String(val).replace(/[^0-9]/g, '');
+    if (!numbersOnly) return '';
+    const number = parseInt(numbersOnly, 10);
+    return isNaN(number) ? '' : `Rp ${number.toLocaleString('id-ID')}`;
+  };
+
+  const parseRupiahInput = (str) => {
+    const numbersOnly = String(str).replace(/[^0-9]/g, '');
+    return numbersOnly ? parseInt(numbersOnly, 10) : 0;
+  };
+
   const saveMasterData = async (e) => {
     e.preventDefault();
     try {
       const payload = { ...masterForm };
       ['role_id', 'employee_id', 'member_no', 'menu_id', 'parent_id', 'salary', 'max_limit', 'order'].forEach(key => {
-        if (payload[key] !== undefined && payload[key] !== '' && payload[key] !== null) {
-          payload[key] = (key === 'salary' || key === 'max_limit') ? parseFloat(payload[key]) : parseInt(payload[key]);
+        if (payload[key] !== undefined && payload[key] !== '' && payload[key] !== null && payload[key] !== 0) {
+          const parsed = (key === 'salary' || key === 'max_limit') ? parseFloat(payload[key]) : parseInt(payload[key]);
+          payload[key] = isNaN(parsed) ? (key === 'parent_id' ? null : 0) : parsed;
+        } else if (key === 'parent_id') {
+          payload[key] = null;
         }
       });
 
+      if (masterTab === 'departments') {
+        if (payload.deptno !== undefined && payload.deptno !== null) payload.deptno = String(payload.deptno).trim();
+        if (payload.Deptno !== undefined && payload.Deptno !== null) { payload.deptno = String(payload.Deptno).trim(); delete payload.Deptno; }
+        if (payload.DeptNo !== undefined && payload.DeptNo !== null) { payload.deptno = String(payload.DeptNo).trim(); delete payload.DeptNo; }
+      }
+
       await axios.post(`${API_BASE_URL}/api/master/${masterTab}`, payload);
-      alert('Data berhasil disimpan!');
+      setIsMasterModalOpen(false);
+      setIsEditMasterMode(false);
       setMasterForm({});
+      alert('Data berhasil disimpan!');
       fetchMasterData(masterTab);
-      fetchReferenceData();
     } catch (error) {
       alert('Gagal menyimpan: ' + (error.response?.data?.error || error.message));
     }
@@ -1868,6 +1930,18 @@ function App() {
       } catch (error) {
         alert('Gagal menghapus data: ' + (error.response?.data?.error || error.message));
       }
+    }
+  };
+
+  const handleCleanupSessions = async () => {
+    if (!window.confirm('Apakah Anda yakin ingin membersihkan semua session yang sudah expired / tidak aktif?')) return;
+    try {
+      const res = await axios.post(`${API_BASE_URL}/api/master/sessions/cleanup`);
+      alert(res.data?.message || 'Berhasil membersihkan session expired!');
+      fetchMasterData('sessions', masterSearchQuery, 1);
+    } catch (err) {
+      console.error('Failed to cleanup sessions:', err);
+      alert('Gagal membersihkan session expired: ' + (err.response?.data?.error || err.message));
     }
   };
 
@@ -3212,255 +3286,28 @@ function App() {
         )}
 
           {activeTab.startsWith('master-') && (
-            <div className="card" style={{ maxWidth: '1200px' }}>
-              <h2 style={{ textTransform: 'capitalize', marginBottom: '24px', borderBottom: '1px solid #e2e8f0', paddingBottom: '12px' }}>
-                Kelola Data Master: {masterTab.replace('-', ' ')}
-              </h2>
-
-              {masterTab === 'role-menus' ? (
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                    <div>
-                      <h3 style={{ margin: 0, color: 'var(--primary-blue)' }}>🔐 Access Privilege Matrix (APM)</h3>
-                      <p style={{ margin: '4px 0 0 0', color: '#64748B', fontSize: '0.9rem' }}>
-                        Centang kotak di bawah ini untuk mengatur hak akses menu setiap Role (Admin, Anggota, HRD/Approval). Perubahan langsung tersimpan ke Database!
-                      </p>
+            <>
+              <div className="card" style={{ maxWidth: '1200px', padding: 0, overflow: 'hidden' }}>
+                {/* Header Container khusus dengan background HEADER_BG & font putih */}
+                <div style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff', padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                  <div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#ffffff' }}>
+                      {getMasterTitle(masterTab)}
                     </div>
-                    <button onClick={fetchReferenceData} style={{ padding: '8px 16px', background: '#e0f2fe', color: '#0369a1', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>
-                      🔄 Refresh Matrix
-                    </button>
+                    <div style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.75)', marginTop: '2px' }}>
+                      Kelola data mastering sistem
+                    </div>
                   </div>
 
-                  <div style={{ overflowX: 'auto', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '700px' }}>
-                      <thead>
-                        <tr style={{ background: 'var(--primary-blue)', color: 'white' }}>
-                          <th style={{ padding: '14px', textAlign: 'left', minWidth: '240px' }}>Modul / Menu LMS</th>
-                          <th style={{ padding: '14px', textAlign: 'left', width: '160px' }}>Path Route</th>
-                          {referenceData.roles.map(r => (
-                            <th key={r.role_id} style={{ padding: '14px', textAlign: 'center', width: '150px' }}>
-                              <div>{r.role_name}</div>
-                              <div style={{ fontSize: '0.75rem', fontWeight: 'normal', opacity: 0.8 }}>ID: {r.role_id}</div>
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {referenceData.menus.map(menu => {
-                          const isParent = !menu.parent_id;
-                          return (
-                            <tr key={menu.menu_id} style={{ borderBottom: '1px solid #e2e8f0', background: isParent ? '#f8fafc' : 'white' }}>
-                              <td style={{ padding: '12px 16px', fontWeight: isParent ? '600' : 'normal', paddingLeft: isParent ? '16px' : '36px', color: isParent ? '#0f172a' : '#334155' }}>
-                                <span style={{ marginRight: '8px' }}>{menu.icon || '📌'}</span>
-                                {menu.title}
-                              </td>
-                              <td style={{ padding: '12px', fontSize: '0.85rem', color: '#64748B' }}>
-                                <code>{menu.path}</code>
-                              </td>
-                              {referenceData.roles.map(role => {
-                                const isGranted = referenceData.role_menus.some(
-                                  rm => String(rm.role_id) === String(role.role_id) && String(rm.menu_id) === String(menu.menu_id)
-                                );
-                                return (
-                                  <td key={role.role_id} style={{ padding: '12px', textAlign: 'center' }}>
-                                    <input 
-                                      type="checkbox"
-                                      checked={isGranted}
-                                      onChange={() => toggleRoleMenu(role.role_id, menu.menu_id, isGranted)}
-                                      style={{ width: '20px', height: '20px', cursor: 'pointer', accentColor: 'var(--primary-blue)' }}
-                                    />
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              ) : (
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '24px' }}>
-                {/* Form Input Dynamic */}
-                <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
-                  <h3>Tambah / Edit {masterTab.replace('-', ' ')}</h3>
-                  <form onSubmit={saveMasterData} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px' }}>
-                    
-                    {(() => {
-                      let fields = [];
-                      if (masterTab === 'departments') fields = [{k:'deptno', l:'Dept No (Number)', type: 'number'}, {k:'dept_name', l:'Dept Name'}];
-                      else if (masterTab === 'employee-statuses' || masterTab === 'kopkara-statuses') fields = [{k:'status_code', l:'Status Code'}, {k:'description', l:'Description'}];
-                      else if (masterTab === 'employee-categories') fields = [{k:'category_code', l:'Category Code'}, {k:'description', l:'Description'}, {k:'max_limit', l:'Max Limit (Number)', type:'number'}, {k:'is_eligible', l:'Is Eligible (Check for Yes)', type:'checkbox'}];
-                      else if (masterTab === 'employees') fields = [
-                        {k:'employee_id', l:'Employee ID (Number)', type:'number'}, 
-                        {k:'name', l:'Name'}, 
-                        {k:'employee_status', l:'Employee Status', type:'select', options: referenceData.employeeStatuses.map(d => ({val: d.status_code, label: d.description}))}, 
-                        {k:'deptno', l:'Department', type:'select', options: referenceData.departments.map(d => ({val: d.deptno, label: d.dept_name}))}, 
-                        {k:'category_code', l:'Category', type:'select', options: referenceData.employeeCategories.map(d => ({val: d.category_code, label: d.description}))},
-                        {k:'role_id', l:'Role', type:'select', options: referenceData.roles.map(d => ({val: d.role_id, label: d.role_name}))},
-                        {k:'salary', l:'Salary (Number)', type:'number'}
-                      ];
-                      else if (masterTab === 'members') fields = [
-                        {k:'member_no', l:'Member No (Number)', type:'number'}, 
-                        {k:'employee_id', l:'Employee', type:'select', options: referenceData.employees.map(d => ({val: d.employee_id, label: `${d.employee_id} - ${d.name}`}))}, 
-                        {k:'kopkara_status', l:'Kopkara Status', type:'select', options: referenceData.kopkaraStatuses.map(d => ({val: d.status_code, label: d.description}))}, 
-                        {k:'join_date', l:'Join Date (YYYY-MM-DD)', type:'date'},
-                        {k:'bank_name', l:'Nama Bank (Contoh: BCA, Mandiri)'},
-                        {k:'bank_account_no', l:'No. Rekening Bank'},
-                        {k:'bank_account_name', l:'Nama Pemilik Rekening'}
-                      ];
-                      else if (masterTab === 'roles') fields = [
-                        {k:'role_name', l:'Role Name'},
-                        {k:'description', l:'Description'}
-                      ];
-                      else if (masterTab === 'menus') fields = [
-                        {k:'title', l:'Menu Title'},
-                        {k:'icon', l:'Icon (Emoji)'},
-                        {k:'path', l:'Path (Route)'},
-                        {k:'order', l:'Order Sequence (Number)', type:'number'}
-                      ];
-                      else if (masterTab === 'role-menus') fields = [
-                        {k:'role_id', l:'Role', type:'select', options: referenceData.roles.map(d => ({val: d.role_id, label: d.role_name}))},
-                        {k:'menu_id', l:'Menu', type:'select', options: referenceData.menus.map(d => ({val: d.menu_id, label: `${d.title} (${d.path})`}))}
-                      ];
-                      else if (masterTab === 'parameters') fields = [
-                        {k:'key_name', l:'Key Name'},
-                        {k:'key_value', l:'Key Value'},
-                        {k:'description', l:'Description'}
-                      ];
-                      
-                      return fields.map(f => (
-                        <div key={f.k} style={{ display: 'flex', flexDirection: f.type === 'checkbox' ? 'row' : 'column', alignItems: f.type === 'checkbox' ? 'center' : 'flex-start', gap: f.type === 'checkbox' ? '8px' : '4px' }}>
-                          <label style={{ fontSize: '0.9rem', fontWeight: 500, color: '#334155' }}>{f.l}</label>
-                          {f.k === 'employee_id' && masterTab === 'members' ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '100%', backgroundColor: '#f8fafc', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
-                              {/* Field Search Employee dengan Klik tombol Cari / Press Enter */}
-                              <div style={{ display: 'flex', gap: '6px' }}>
-                                <input 
-                                  type="text"
-                                  placeholder="🔍 Cari Employee (ID / Nama)..."
-                                  value={empSelectSearchQuery}
-                                  onChange={e => setEmpSelectSearchQuery(e.target.value)}
-                                  onKeyDown={e => {
-                                    if (e.key === 'Enter') {
-                                      e.preventDefault();
-                                      setEmpSelectPage(1);
-                                      fetchPaginatedEmployeesForSelect(empSelectSearchQuery, 1);
-                                    }
-                                  }}
-                                  style={{ flex: 1, padding: '8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
-                                />
-                                <button 
-                                  type="button"
-                                  onClick={() => {
-                                    setEmpSelectPage(1);
-                                    fetchPaginatedEmployeesForSelect(empSelectSearchQuery, 1);
-                                  }}
-                                  style={{ padding: '8px 12px', background: '#2563eb', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
-                                >
-                                  Cari
-                                </button>
-                              </div>
-
-                              {/* Dropdown mengikuti Pagination (mengambil limit dari global_parameters: DEFAULT_PAGE_SIZE / PAGINATION_LIMIT) */}
-                              <select 
-                                required
-                                value={masterForm.employee_id || ''}
-                                onChange={e => setMasterForm({...masterForm, employee_id: parseInt(e.target.value) || ''})}
-                                style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)', backgroundColor: 'white', fontWeight: 500 }}
-                              >
-                                <option value="">-- Pilih Employee ({empSelectTotalRecords} data ditemukan) --</option>
-                                {masterForm.employee_id && !empSelectList.some(e => String(e.employee_id) === String(masterForm.employee_id)) && (
-                                  <option value={masterForm.employee_id}>
-                                    Selected: Employee ID #{masterForm.employee_id}
-                                  </option>
-                                )}
-                                {empSelectList.map(emp => (
-                                  <option key={emp.employee_id} value={emp.employee_id}>
-                                    {emp.employee_id} - {emp.name} ({emp.employee_id})
-                                  </option>
-                                ))}
-                              </select>
-
-                              {/* User bisa klik Next Page / Prev Page */}
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', color: '#64748b', marginTop: '2px' }}>
-                                <button 
-                                  type="button"
-                                  disabled={empSelectPage <= 1 || empSelectLoading}
-                                  onClick={() => {
-                                    const newPage = Math.max(1, empSelectPage - 1);
-                                    setEmpSelectPage(newPage);
-                                    fetchPaginatedEmployeesForSelect(empSelectSearchQuery, newPage);
-                                  }}
-                                  style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', background: empSelectPage <= 1 ? '#f1f5f9' : 'white', cursor: empSelectPage <= 1 ? 'not-allowed' : 'pointer' }}
-                                >
-                                  ◄ Prev Page
-                                </button>
-                                <span>Halaman <strong>{empSelectPage}</strong> dari <strong>{empSelectTotalPages}</strong></span>
-                                <button 
-                                  type="button"
-                                  disabled={empSelectPage >= empSelectTotalPages || empSelectLoading}
-                                  onClick={() => {
-                                    const newPage = Math.min(empSelectTotalPages, empSelectPage + 1);
-                                    setEmpSelectPage(newPage);
-                                    fetchPaginatedEmployeesForSelect(empSelectSearchQuery, newPage);
-                                  }}
-                                  style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', background: empSelectPage >= empSelectTotalPages ? '#f1f5f9' : 'white', cursor: empSelectPage >= empSelectTotalPages ? 'not-allowed' : 'pointer' }}
-                                >
-                                  Next Page ►
-                                </button>
-                              </div>
-                            </div>
-                          ) : f.type === 'select' ? (
-                            <select 
-                              required
-                              value={masterForm[f.k] || ''}
-                              onChange={e => setMasterForm({...masterForm, [f.k]: f.k === 'employee_id' ? parseInt(e.target.value) : e.target.value})}
-                              style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)', backgroundColor: 'white' }}
-                            >
-                              <option value="">-- Pilih {f.l} --</option>
-                              {f.options && f.options.map(opt => (
-                                <option key={opt.val} value={opt.val}>{opt.label} ({opt.val})</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input 
-                              type={f.type || 'text'}
-                              required={f.type !== 'checkbox'}
-                              checked={f.type === 'checkbox' ? (masterForm[f.k] || false) : undefined}
-                              value={f.type !== 'checkbox' ? (masterForm[f.k] || '') : undefined}
-                              onChange={e => setMasterForm({
-                                ...masterForm, 
-                                [f.k]: f.type === 'checkbox' ? e.target.checked : (f.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value)
-                              })}
-                              style={f.type !== 'checkbox' ? { width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)' } : { width: '20px', height: '20px' }}
-                            />
-                          )}
-                        </div>
-                      ));
-                    })()}
-                    
-                    <button type="submit" style={{ padding: '10px', background: 'var(--success-green)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, marginTop: '8px' }}>Simpan Data</button>
-                    {Object.keys(masterForm).length > 0 && (
-                      <button type="button" onClick={() => setMasterForm({})} style={{ padding: '10px', background: '#e2e8f0', color: '#475569', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>Batal / Form Baru</button>
-                    )}
-                  </form>
-                </div>
-
-                {/* Table View Dynamic with Search Filter */}
-                <div style={{ overflowX: 'auto', marginTop: '16px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                    <div style={{ display: 'flex', gap: '8px', flex: 1, maxWidth: '450px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                    {/* Search Filter Box */}
+                    <div style={{ background: '#ffffff', borderRadius: '8px', padding: '4px 6px', display: 'inline-flex', alignItems: 'center', gap: '6px', border: '1px solid #cbd5e1' }}>
                       <input 
                         type="text" 
-                        placeholder="🔍 Cari data di seluruh database (ID / Nama / Parameter)..."
+                        placeholder="Cari Nama atau ID..."
                         value={masterSearchQuery}
                         onChange={e => {
-                          const newQ = e.target.value;
-                          setMasterSearchQuery(newQ);
-                          setCurrentPage(1);
-                          fetchMasterData(masterTab, newQ, 1);
+                          setMasterSearchQuery(e.target.value);
                         }}
                         onKeyDown={e => {
                           if (e.key === 'Enter') {
@@ -3469,7 +3316,7 @@ function App() {
                             fetchMasterData(masterTab, masterSearchQuery, 1);
                           }
                         }}
-                        style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', flex: 1, fontSize: '0.9rem' }}
+                        style={{ border: 'none', outline: 'none', padding: '4px 8px', fontSize: '0.85rem', color: '#0f172a', width: '170px' }}
                       />
                       <button
                         type="button"
@@ -3477,195 +3324,860 @@ function App() {
                           setCurrentPage(1);
                           fetchMasterData(masterTab, masterSearchQuery, 1);
                         }}
-                        style={{ padding: '8px 14px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                        style={{ padding: '5px 14px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem' }}
                       >
-                        Cari
+                        Filter
                       </button>
                     </div>
-                    <span style={{ fontSize: '0.85rem', color: '#64748B' }}>
-                      Pencarian: <strong>{masterDataList.length}</strong> ditampilkan dari <strong>{masterTotalRecords}</strong> total data
-                    </span>
-                  </div>
 
-                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '600px' }}>
-                    <thead>
-                      <tr style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff' }}>
-                        {(() => {
-                          let keys = [];
-                          if (masterDataList.length > 0) {
-                            keys = Object.keys(masterDataList[0]).filter(k => 
-                              k !== 'CreatedAt' && k !== 'UpdatedAt' && k !== 'DeletedAt' && k !== 'CreatedUser' &&
-                              k.toLowerCase() !== 'updated_at' && k.toLowerCase() !== 'deleted_at'
-                            );
+                    {/* Tombol + Tambah Data (mengikuti BUTTON_BG dan font putih) */}
+                    {masterTab === 'sessions' ? (
+                      <button
+                        type="button"
+                        onClick={handleCleanupSessions}
+                        style={{ padding: '8px 18px', background: '#dc2626', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        🗑️ Bersihkan Sesi Kadaluarsa
+                      </button>
+                    ) : masterTab !== 'role-menus' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMasterForm({});
+                          setIsEditMasterMode(false);
+                          fetchReferenceData();
+                          if (masterTab === 'users') {
+                            setMemberSelectSearchQuery('');
+                            setMemberSelectPage(1);
+                            fetchPaginatedMembersForSelect('', 1);
                           }
-                          return keys.map(k => {
-                            if (k.toLowerCase() === 'failed_login_attempts') {
-                              return (
-                                <th key={k} style={{ padding: '8px 6px', textAlign: 'center', width: '90px', minWidth: '90px', fontSize: '0.8rem', whiteSpace: 'normal', lineHeight: '1.2', color: '#ffffff' }}>
-                                  Failed Login<br/>Attempts
-                                </th>
-                              );
-                            }
-                            return (
-                              <th key={k} style={{ padding: '8px 12px', textAlign: 'left', textTransform: 'capitalize', fontSize: '0.875rem', whiteSpace: 'nowrap', color: '#ffffff' }}>
-                                {k.replace(/_/g, ' ')}
-                              </th>
-                            );
-                          });
-                        })()}
-                        <th style={{ padding: '8px 12px', textAlign: 'center', width: '140px', fontSize: '0.875rem', whiteSpace: 'nowrap', color: '#ffffff' }}>Aksi</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {masterDataList.map((row, idx) => {
-                        const pkField = Object.keys(row).find(k => k.includes('id') || k.includes('no') || k.includes('code'));
-                        const pkValue = row[pkField];
-                        const keys = Object.keys(row).filter(k => 
-                          k !== 'CreatedAt' && k !== 'UpdatedAt' && k !== 'DeletedAt' && k !== 'CreatedUser' &&
-                          k.toLowerCase() !== 'updated_at' && k.toLowerCase() !== 'deleted_at'
-                        );
-                        
+                          setIsMasterModalOpen(true);
+                        }}
+                        style={{ padding: '8px 18px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        ➕ Tambah Data
+                      </button>
+                    )}
+
+                    {/* Tombol ✕ Tutup (mengikuti BUTTON_CLOSED_BG dan font putih) */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsMasterModalOpen(false);
+                        setIsEditMasterMode(false);
+                        setActiveTab('dashboard');
+                      }}
+                      style={{ padding: '8px 18px', background: 'var(--button-closed-bg, #475569)', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      ✕ Tutup
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ padding: '20px' }}>
+                  {masterTab === 'role-menus' ? (
+                    <div>
+                      {(() => {
+                        const q = (masterSearchQuery || '').toLowerCase().trim();
+                        const filteredMenus = (referenceData.menus || []).filter(m => {
+                          if (!q) return true;
+                          return (m.title || '').toLowerCase().includes(q) || (m.path || '').toLowerCase().includes(q) || String(m.menu_id).includes(q);
+                        });
+
+                        const limit = parseInt(getParamVal('PAGINATION_LIMIT', getParamVal('DEFAULT_PAGE_SIZE', '5'))) || 5;
+                        const totalRecords = filteredMenus.length;
+                        const totalPages = Math.ceil(totalRecords / limit) || 1;
+                        const startIdx = (currentPage - 1) * limit;
+                        const paginatedMenus = filteredMenus.slice(startIdx, startIdx + limit);
+
                         return (
-                          <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0', height: '40px' }}>
-                            {keys.map(k => {
-                              const isSalaryField = k.toLowerCase() === 'salary' || k.toLowerCase() === 'max_limit' || k.toLowerCase().includes('nominal') || k.toLowerCase().includes('amount');
-                              const rawVal = row[k];
-                              let formattedVal = String(rawVal ?? '');
+                          <>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                              <div>
+                                <h3 style={{ margin: 0, color: 'var(--primary-blue)' }}>🔐 Access Privilege Matrix (APM)</h3>
+                                <p style={{ margin: '4px 0 0 0', color: '#64748B', fontSize: '0.9rem' }}>
+                                  Centang kotak di bawah ini untuk mengatur hak akses menu setiap Role (Admin, Anggota, HRD/Approval). Perubahan langsung tersimpan ke Database!
+                                </p>
+                              </div>
+                              <button onClick={fetchReferenceData} style={{ padding: '8px 16px', background: '#e0f2fe', color: '#0369a1', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>
+                                🔄 Refresh Matrix
+                              </button>
+                            </div>
 
-                              if (k.toLowerCase() === 'failed_login_attempts') {
-                                return (
-                                  <td key={k} style={{ padding: '6px 8px', textAlign: 'center', fontSize: '0.875rem', width: '90px' }}>
-                                    {rawVal ?? 0}
-                                  </td>
-                                );
-                              }
+                            <div style={{ overflowX: 'auto', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '700px' }}>
+                                <thead>
+                                  <tr style={{ background: 'var(--primary-blue)', color: 'white' }}>
+                                    <th style={{ padding: '14px', textAlign: 'left', minWidth: '240px' }}>Modul / Menu LMS</th>
+                                    <th style={{ padding: '14px', textAlign: 'left', width: '160px' }}>Path Route</th>
+                                    {referenceData.roles.map(r => (
+                                      <th key={r.role_id} style={{ padding: '14px', textAlign: 'center', width: '150px' }}>
+                                        <div>{r.role_name}</div>
+                                        <div style={{ fontSize: '0.75rem', fontWeight: 'normal', opacity: 0.8 }}>ID: {r.role_id}</div>
+                                      </th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {paginatedMenus.map(menu => {
+                                    const isParent = !menu.parent_id;
+                                    return (
+                                      <tr key={menu.menu_id} style={{ borderBottom: '1px solid #e2e8f0', background: isParent ? '#f8fafc' : 'white' }}>
+                                        <td style={{ padding: '12px 16px', fontWeight: isParent ? '600' : 'normal', paddingLeft: isParent ? '16px' : '36px', color: isParent ? '#0f172a' : '#334155' }}>
+                                          <span style={{ marginRight: '8px' }}>{menu.icon || '📌'}</span>
+                                          {menu.title}
+                                        </td>
+                                        <td style={{ padding: '12px', fontSize: '0.85rem', color: '#64748B' }}>
+                                          <code>{menu.path}</code>
+                                        </td>
+                                        {referenceData.roles.map(role => {
+                                          const isGranted = referenceData.role_menus.some(
+                                            rm => String(rm.role_id) === String(role.role_id) && String(rm.menu_id) === String(menu.menu_id)
+                                          );
+                                          return (
+                                            <td key={role.role_id} style={{ padding: '12px', textAlign: 'center' }}>
+                                              <input 
+                                                type="checkbox"
+                                                checked={isGranted}
+                                                onChange={() => toggleRoleMenu(role.role_id, menu.menu_id, isGranted)}
+                                                style={{ width: '20px', height: '20px', cursor: 'pointer', accentColor: 'var(--primary-blue)' }}
+                                              />
+                                            </td>
+                                          );
+                                        })}
+                                      </tr>
+                                    );
+                                  })}
+                                  {paginatedMenus.length === 0 && (
+                                    <tr><td colSpan="100%" style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>Tidak ada menu ditemukan.</td></tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
 
-                              if (masterTab === 'menus' && k.toLowerCase() === 'parent_id') {
-                                const parentMenu = (referenceData.menus || []).find(m => String(m.menu_id) === String(rawVal));
-                                const parentText = parentMenu ? `${parentMenu.title} (${parentMenu.menu_id})` : (rawVal ? String(rawVal) : '-');
-                                return (
-                                  <td key={k} style={{ padding: '6px 12px', color: '#334155', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
-                                    {parentText}
-                                  </td>
-                                );
-                              }
+                            {/* Navigasi Tombol Next & Previous selalu tampil */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #cbd5e1' }}>
+                              <span style={{ fontSize: '0.85rem', color: '#64748B' }}>
+                                Halaman <strong>{currentPage}</strong> dari <strong>{totalPages}</strong> (Total <strong>{totalRecords}</strong> data)
+                              </span>
+                              <div style={{ display: 'flex', gap: '8px' }}>
+                                <button 
+                                  type="button"
+                                  disabled={currentPage <= 1}
+                                  onClick={() => setCurrentPage(Math.max(currentPage - 1, 1))}
+                                  style={{ padding: '6px 14px', background: currentPage <= 1 ? '#e2e8f0' : 'var(--button-bg, #10b981)', color: currentPage <= 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: currentPage <= 1 ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+                                >
+                                  ◀ Sebelumnya
+                                </button>
+                                <button 
+                                  type="button"
+                                  disabled={currentPage >= totalPages}
+                                  onClick={() => setCurrentPage(Math.min(currentPage + 1, totalPages))}
+                                  style={{ padding: '6px 14px', background: currentPage >= totalPages ? '#e2e8f0' : 'var(--button-bg, #10b981)', color: currentPage >= totalPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: currentPage >= totalPages ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+                                >
+                                  Selanjutnya ▶
+                                </button>
+                              </div>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  ) : (
+                  <div>
+                    {/* Table View Full Width */}
+                    {masterTab === 'sessions' ? (
+                      <div style={{ overflowX: 'auto' }}>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '12px' }}>
+                          <span style={{ fontSize: '0.85rem', color: '#64748B' }}>
+                            Pencarian: <strong>{masterDataList.length}</strong> ditampilkan dari <strong>{masterTotalRecords}</strong> total data
+                          </span>
+                        </div>
 
-                              if (masterTab === 'users' && k.toLowerCase() === 'role') {
-                                const rVal = String(rawVal || '').toLowerCase();
-                                const bg = rVal === 'admin' ? '#dbeafe' : rVal === 'hrd' ? '#f3e8ff' : '#d1fae5';
-                                const fg = rVal === 'admin' ? '#1e40af' : rVal === 'hrd' ? '#6b21a8' : '#065f46';
-                                return (
-                                  <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
-                                    <span style={{ background: bg, color: fg, padding: '3px 10px', borderRadius: '12px', fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase' }}>
-                                      {rawVal}
+                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '750px' }}>
+                          <thead>
+                            <tr style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff' }}>
+                              <th style={{ padding: '10px 12px', textAlign: 'center', fontSize: '0.85rem' }}>ID</th>
+                              <th style={{ padding: '10px 12px', textAlign: 'center', fontSize: '0.85rem' }}>User ID</th>
+                              <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '0.85rem' }}>Username</th>
+                              <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '0.85rem' }}>Alamat IP</th>
+                              <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '0.85rem' }}>User Agent</th>
+                              <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '0.85rem' }}>Dibuat</th>
+                              <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '0.85rem' }}>Aktivitas Terakhir</th>
+                              <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '0.85rem' }}>Kadaluarsa</th>
+                              <th style={{ padding: '10px 12px', textAlign: 'center', fontSize: '0.85rem' }}>Aksi</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {masterDataList.map((row, idx) => {
+                              const isExpired = row.expires_at && new Date(row.expires_at) < new Date();
+                              const formatSessionDate = (str) => {
+                                if (!str) return '-';
+                                const d = new Date(str);
+                                if (isNaN(d.getTime())) return String(str);
+                                const day = d.getDate();
+                                const month = d.getMonth() + 1;
+                                const year = d.getFullYear();
+                                const hours = String(d.getHours()).padStart(2, '0');
+                                const mins = String(d.getMinutes()).padStart(2, '0');
+                                const secs = String(d.getSeconds()).padStart(2, '0');
+                                return `${day}/${month}/${year}, ${hours}.${mins}.${secs}`;
+                              };
+
+                              const formatUA = (ua) => {
+                                if (!ua) return '-';
+                                const lower = String(ua).toLowerCase();
+                                let os = '';
+                                if (lower.includes('android')) os = 'android';
+                                else if (lower.includes('iphone') || lower.includes('ipad')) os = 'ios';
+                                else if (lower.includes('win')) os = 'windows';
+                                else if (lower.includes('mac')) os = 'macOS';
+                                else if (lower.includes('linux')) os = 'linux';
+
+                                let browser = '';
+                                if (lower.includes('edg/') || lower.includes('edge')) browser = 'edge';
+                                else if (lower.includes('chrome')) browser = 'chrome';
+                                else if (lower.includes('firefox')) browser = 'firefox';
+                                else if (lower.includes('safari') && !lower.includes('chrome')) browser = 'safari';
+                                else if (lower.includes('opera') || lower.includes('opr/')) browser = 'opera';
+
+                                if (os && browser) return `${os} ${browser}`;
+                                if (os) return os;
+                                if (browser) return browser;
+                                return String(ua).slice(0, 25);
+                              };
+
+                              return (
+                                <tr key={row.id || idx} style={{ borderBottom: '1px solid #e2e8f0', background: isExpired ? '#fff5f5' : (idx % 2 === 0 ? '#ffffff' : '#f8fafc') }}>
+                                  <td style={{ padding: '8px 12px', textAlign: 'center', fontSize: '0.875rem', fontWeight: 600 }}>{row.id}</td>
+                                  <td style={{ padding: '8px 12px', textAlign: 'center', fontSize: '0.875rem' }}>{row.user_id}</td>
+                                  <td style={{ padding: '8px 12px', fontSize: '0.875rem', fontWeight: 500 }}>{row.username || '-'}</td>
+                                  <td style={{ padding: '8px 12px', fontSize: '0.875rem', color: '#475569' }}>{row.ip_address || '-'}</td>
+                                  <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }} title={String(row.user_agent || '')}>
+                                    <span style={{ background: '#f1f5f9', color: '#334155', padding: '3px 8px', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 600, border: '1px solid #cbd5e1' }}>
+                                      {formatUA(row.user_agent)}
                                     </span>
                                   </td>
-                                );
-                              }
-
-                              if (masterTab === 'users' && (k.toLowerCase() === 'locked_until' || k.toLowerCase() === 'failed_login_attempts')) {
-                                const isLocked = (row.locked_until && new Date(row.locked_until) > new Date()) || row.failed_login_attempts >= 5;
-                                if (k.toLowerCase() === 'locked_until') {
-                                  return (
-                                    <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
-                                      {isLocked ? (
-                                        <span style={{ background: '#fee2e2', color: '#991b1b', padding: '3px 8px', borderRadius: '12px', fontWeight: 600, fontSize: '0.75rem' }}>
-                                          🔒 Locked
-                                        </span>
-                                      ) : (
-                                        <span style={{ background: '#d1fae5', color: '#065f46', padding: '3px 8px', borderRadius: '12px', fontWeight: 600, fontSize: '0.75rem' }}>
-                                          ● Normal
-                                        </span>
-                                      )}
-                                    </td>
-                                  );
-                                }
-                              }
-
-                              if (masterTab === 'sessions' && k.toLowerCase() === 'is_active') {
-                                const isActive = rawVal && (!row.expires_at || new Date(row.expires_at) > new Date());
-                                return (
-                                  <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
-                                    {isActive ? (
-                                      <span style={{ background: '#d1fae5', color: '#065f46', padding: '3px 10px', borderRadius: '12px', fontWeight: 700, fontSize: '0.75rem' }}>
-                                        ● Active
+                                  <td style={{ padding: '8px 12px', fontSize: '0.85rem', color: '#475569', whiteSpace: 'nowrap' }}>
+                                    {formatSessionDate(row.created_at || row.login_at)}
+                                  </td>
+                                  <td style={{ padding: '8px 12px', fontSize: '0.85rem', color: '#475569', whiteSpace: 'nowrap' }}>
+                                    {formatSessionDate(row.last_activity_at)}
+                                  </td>
+                                  <td style={{ padding: '8px 12px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
+                                    {isExpired ? (
+                                      <span style={{ color: '#dc2626', fontWeight: 700 }}>
+                                        {formatSessionDate(row.expires_at)} <span style={{ fontSize: '0.75rem' }}>(Kadaluarsa)</span>
                                       </span>
                                     ) : (
-                                      <span style={{ background: '#f1f5f9', color: '#64748b', padding: '3px 10px', borderRadius: '12px', fontWeight: 600, fontSize: '0.75rem' }}>
-                                        ○ Revoked / Expired
+                                      <span style={{ color: '#16a34a', fontWeight: 600 }}>
+                                        {formatSessionDate(row.expires_at)}
                                       </span>
                                     )}
                                   </td>
-                                );
-                              }
-
-                              if (typeof rawVal === 'boolean') {
-                                formattedVal = rawVal ? 'Ya' : 'Tidak';
-                              } else if (isSalaryField && rawVal !== null && rawVal !== undefined && rawVal !== '') {
-                                const num = Number(rawVal);
-                                formattedVal = !isNaN(num) ? `Rp ${Math.round(num).toLocaleString('id-ID')}` : String(rawVal);
-                              } else if (typeof rawVal === 'object' && rawVal !== null) {
-                                formattedVal = JSON.stringify(rawVal);
-                              }
-
-                              return (
-                                <td key={k} style={{ padding: '6px 12px', color: '#334155', fontSize: '0.875rem', whiteSpace: 'nowrap', fontWeight: isSalaryField ? 600 : 400 }}>
-                                  {formattedVal}
-                                </td>
+                                  <td style={{ padding: '8px 12px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                    <button 
+                                      type="button"
+                                      onClick={() => deleteMasterData('id', row.id)}
+                                      style={{ padding: '5px 12px', background: '#dc2626', color: '#ffffff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                    >
+                                      🗑️ Hapus
+                                    </button>
+                                  </td>
+                                </tr>
                               );
                             })}
-                            <td style={{ padding: '6px 12px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', flexWrap: 'nowrap' }}>
-                                <button onClick={() => setMasterForm(row)} style={{ padding: '3px 8px', background: '#e0f2fe', color: '#0369a1', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>Edit</button>
-                                <button onClick={() => deleteMasterData(pkField, pkValue)} style={{ padding: '3px 8px', background: '#fee2e2', color: '#b91c1c', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>Hapus</button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                      {masterDataList.length === 0 && (
-                        <tr><td colSpan="100%" style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>Belum ada data ditemukan di database.</td></tr>
-                      )}
-                    </tbody>
-                  </table>
+                            {masterDataList.length === 0 && (
+                              <tr><td colSpan="9" style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>Tidak ada data sesi ditemukan.</td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div style={{ overflowX: 'auto' }}>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '12px' }}>
+                          <span style={{ fontSize: '0.85rem', color: '#64748B' }}>
+                            Pencarian: <strong>{masterDataList.length}</strong> ditampilkan dari <strong>{masterTotalRecords}</strong> total data
+                          </span>
+                        </div>
 
-                  {/* Navigasi Tombol Next & Previous selalu tampil */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #cbd5e1' }}>
-                    <span style={{ fontSize: '0.85rem', color: '#64748B' }}>
-                      Halaman <strong>{currentPage}</strong> dari <strong>{masterTotalPages}</strong> (Total <strong>{masterTotalRecords}</strong> data)
-                    </span>
-                    <div style={{ display: 'flex', gap: '8px' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '600px' }}>
+                          <thead>
+                            <tr style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff' }}>
+                              {(() => {
+                                let keys = [];
+                                if (masterDataList.length > 0) {
+                                  keys = Object.keys(masterDataList[0]).filter(k => 
+                                    k !== 'CreatedAt' && k !== 'UpdatedAt' && k !== 'DeletedAt' && k !== 'CreatedUser' &&
+                                    k.toLowerCase() !== 'updated_at' && k.toLowerCase() !== 'deleted_at'
+                                  );
+                                }
+                                return (
+                                  <>
+                                    {keys.map(k => {
+                                      let label = k;
+                                      if (masterTab === 'departments') {
+                                        if (k.toLowerCase() === 'deptno') label = 'Deptno';
+                                        if (k.toLowerCase() === 'dept_name') label = 'Dept Name';
+                                      }
+                                      return <th key={k} style={{ padding: '10px 12px', textAlign: k.toLowerCase().includes('id') || k.toLowerCase().includes('no') ? 'center' : 'left', fontSize: '0.85rem' }}>{label}</th>;
+                                    })}
+                                    <th style={{ padding: '10px 12px', textAlign: 'center', fontSize: '0.85rem' }}>Aksi</th>
+                                  </>
+                                );
+                              })()}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {masterDataList.map((row, idx) => {
+                              const pkField = getPrimaryKeyKey(masterTab);
+                              const pkValue = getFieldValue(row, pkField) || row['ID'] || row['id'];
+                              const keys = Object.keys(row).filter(k => 
+                                k !== 'CreatedAt' && k !== 'UpdatedAt' && k !== 'DeletedAt' && k !== 'CreatedUser' &&
+                                k.toLowerCase() !== 'updated_at' && k.toLowerCase() !== 'deleted_at'
+                              );
+
+                              return (
+                                <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0', background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
+                                  {keys.map(k => {
+                                    const isSalaryField = k.toLowerCase() === 'salary' || k.toLowerCase() === 'max_limit' || k.toLowerCase().includes('nominal') || k.toLowerCase().includes('amount');
+                                    const rawVal = row[k];
+                                    let formattedVal = String(rawVal ?? '');
+
+                                    if (k.toLowerCase() === 'failed_login_attempts') {
+                                      return (
+                                        <td key={k} style={{ padding: '6px 8px', textAlign: 'center', fontSize: '0.875rem', width: '90px' }}>
+                                          {rawVal ?? 0}
+                                        </td>
+                                      );
+                                    }
+
+                                    if (masterTab === 'menus' && k.toLowerCase() === 'parent_id') {
+                                      const parentMenu = (referenceData.menus || []).find(m => String(m.menu_id) === String(rawVal));
+                                      const parentText = parentMenu ? `${parentMenu.title} (${parentMenu.menu_id})` : (rawVal ? String(rawVal) : '-');
+                                      return (
+                                        <td key={k} style={{ padding: '6px 12px', color: '#334155', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
+                                          {parentText}
+                                        </td>
+                                      );
+                                    }
+
+                                    if (masterTab === 'users' && k.toLowerCase() === 'role') {
+                                      const rVal = String(rawVal || '').toLowerCase();
+                                      const bg = rVal === 'admin' ? '#dbeafe' : rVal === 'hrd' ? '#f3e8ff' : '#d1fae5';
+                                      const fg = rVal === 'admin' ? '#1e40af' : rVal === 'hrd' ? '#6b21a8' : '#065f46';
+                                      return (
+                                        <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
+                                          <span style={{ background: bg, color: fg, padding: '3px 10px', borderRadius: '12px', fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase' }}>
+                                            {rawVal}
+                                          </span>
+                                        </td>
+                                      );
+                                    }
+
+                                    if (masterTab === 'users' && (k.toLowerCase() === 'locked_until' || k.toLowerCase() === 'failed_login_attempts')) {
+                                      const isLocked = (row.locked_until && new Date(row.locked_until) > new Date()) || row.failed_login_attempts >= 5;
+                                      if (k.toLowerCase() === 'locked_until') {
+                                        return (
+                                          <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
+                                            {isLocked ? (
+                                              <span style={{ background: '#fee2e2', color: '#991b1b', padding: '3px 8px', borderRadius: '12px', fontWeight: 600, fontSize: '0.75rem' }}>
+                                                🔒 Locked
+                                              </span>
+                                            ) : (
+                                              <span style={{ background: '#d1fae5', color: '#065f46', padding: '3px 8px', borderRadius: '12px', fontWeight: 600, fontSize: '0.75rem' }}>
+                                                ● Normal
+                                              </span>
+                                            )}
+                                          </td>
+                                        );
+                                      }
+                                    }
+
+                                    if (typeof rawVal === 'boolean') {
+                                      formattedVal = rawVal ? 'Ya' : 'Tidak';
+                                    } else if (isSalaryField && rawVal !== null && rawVal !== undefined && rawVal !== '') {
+                                      const num = Number(rawVal);
+                                      formattedVal = !isNaN(num) ? `Rp ${Math.round(num).toLocaleString('id-ID')}` : String(rawVal);
+                                    } else if (typeof rawVal === 'object' && rawVal !== null) {
+                                      formattedVal = JSON.stringify(rawVal);
+                                    }
+
+                                    return (
+                                      <td key={k} style={{ padding: '6px 12px', color: '#334155', fontSize: '0.875rem', whiteSpace: 'nowrap', fontWeight: isSalaryField ? 600 : 400 }}>
+                                        {formattedVal}
+                                      </td>
+                                    );
+                                  })}
+                                  <td style={{ padding: '6px 12px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', flexWrap: 'nowrap' }}>
+                                      <button 
+                                        type="button"
+                                        onClick={() => {
+                                          setMasterForm(row);
+                                          setIsEditMasterMode(true);
+                                          fetchReferenceData();
+                                          if (masterTab === 'users') {
+                                            setMemberSelectSearchQuery('');
+                                            setMemberSelectPage(1);
+                                            fetchPaginatedMembersForSelect('', 1);
+                                          }
+                                          setIsMasterModalOpen(true);
+                                        }} 
+                                        style={{ padding: '4px 10px', background: '#e0f2fe', color: '#0369a1', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                                      >
+                                        Edit
+                                      </button>
+                                      <button 
+                                        type="button"
+                                        onClick={() => deleteMasterData(pkField, pkValue)} 
+                                        style={{ padding: '4px 10px', background: '#fee2e2', color: '#b91c1c', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                                      >
+                                        Hapus
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                            {masterDataList.length === 0 && (
+                              <tr><td colSpan="100%" style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>Belum ada data ditemukan di database.</td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                      {/* Navigasi Tombol Next & Previous selalu tampil */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #cbd5e1' }}>
+                        <span style={{ fontSize: '0.85rem', color: '#64748B' }}>
+                          Halaman <strong>{currentPage}</strong> dari <strong>{masterTotalPages}</strong> (Total <strong>{masterTotalRecords}</strong> data)
+                        </span>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button 
+                            type="button"
+                            disabled={currentPage <= 1}
+                            onClick={() => {
+                              const prevPage = Math.max(currentPage - 1, 1);
+                              setCurrentPage(prevPage);
+                              fetchMasterData(masterTab, masterSearchQuery, prevPage);
+                            }}
+                            style={{ padding: '6px 14px', background: currentPage <= 1 ? '#e2e8f0' : 'var(--button-bg, #10b981)', color: currentPage <= 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: currentPage <= 1 ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+                          >
+                            ◀ Sebelumnya
+                          </button>
+                          <button 
+                            type="button"
+                            disabled={currentPage >= masterTotalPages}
+                            onClick={() => {
+                              const nextPage = Math.min(currentPage + 1, masterTotalPages);
+                              setCurrentPage(nextPage);
+                              fetchMasterData(masterTab, masterSearchQuery, nextPage);
+                            }}
+                            style={{ padding: '6px 14px', background: currentPage >= masterTotalPages ? '#e2e8f0' : 'var(--button-bg, #10b981)', color: currentPage >= masterTotalPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: currentPage >= masterTotalPages ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+                          >
+                            Selanjutnya ▶
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Stable Non-Flickering Modal UI (Outside Card Container) */}
+              {isMasterModalOpen && masterTab !== 'role-menus' && (
+                <div 
+                  style={{ 
+                    position: 'fixed', 
+                    top: 0, 
+                    left: 0, 
+                    width: '100vw', 
+                    height: '100vh', 
+                    backgroundColor: 'rgba(15, 23, 42, 0.65)', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center', 
+                    zIndex: 9999, 
+                    backdropFilter: 'blur(4px)',
+                    pointerEvents: 'auto'
+                  }}
+                >
+                  <div 
+                    onClick={e => e.stopPropagation()}
+                    style={{ 
+                      backgroundColor: '#ffffff', 
+                      borderRadius: '12px', 
+                      width: '90%', 
+                      maxWidth: '560px', 
+                      boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', 
+                      border: '1px solid #cbd5e1', 
+                      overflow: 'hidden' 
+                    }}
+                  >
+                    {/* Modal Header dengan background HEADER_BG & font putih */}
+                    <div style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff', padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <h3 style={{ margin: 0, color: '#ffffff', fontSize: '1.1rem', fontWeight: 700 }}>
+                        {isEditMasterMode ? 'Edit' : 'Tambah'} {getMasterTitle(masterTab)}
+                      </h3>
                       <button 
-                        disabled={currentPage <= 1}
+                        type="button"
                         onClick={() => {
-                          const prevPage = Math.max(currentPage - 1, 1);
-                          setCurrentPage(prevPage);
-                          fetchMasterData(masterTab, masterSearchQuery, prevPage);
-                        }}
-                        style={{ padding: '6px 14px', background: currentPage <= 1 ? '#e2e8f0' : '#0369a1', color: currentPage <= 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: currentPage <= 1 ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+                          setIsMasterModalOpen(false);
+                          setIsEditMasterMode(false);
+                        }} 
+                        style={{ background: 'none', border: 'none', color: '#ffffff', fontSize: '1.2rem', cursor: 'pointer', opacity: 0.85 }}
                       >
-                        ◀ Sebelumnya
+                        ✕
                       </button>
-                      <button 
-                        disabled={currentPage >= masterTotalPages}
-                        onClick={() => {
-                          const nextPage = Math.min(currentPage + 1, masterTotalPages);
-                          setCurrentPage(nextPage);
-                          fetchMasterData(masterTab, masterSearchQuery, nextPage);
-                        }}
-                        style={{ padding: '6px 14px', background: currentPage >= masterTotalPages ? '#e2e8f0' : '#0369a1', color: currentPage >= masterTotalPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: currentPage >= masterTotalPages ? 'not-allowed' : 'pointer', fontWeight: 600 }}
-                      >
-                        Selanjutnya ▶
-                      </button>
+                    </div>
+
+                    {/* Modal Body Form */}
+                    <div style={{ padding: '24px' }}>
+                      <form onSubmit={saveMasterData} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                        {(() => {
+                          const pkFieldKey = getPrimaryKeyKey(masterTab);
+                          const isEditMode = isEditMasterMode;
+
+                          let fields = [];
+                          if (masterTab === 'departments') fields = [{k:'deptno', l:'Dept No', type: 'text'}, {k:'dept_name', l:'Dept Name'}];
+                          else if (masterTab === 'employee-statuses' || masterTab === 'kopkara-statuses') fields = [{k:'status_code', l:'Status Code'}, {k:'description', l:'Description'}];
+                          else if (masterTab === 'employee-categories') fields = [{k:'category_code', l:'Category Code'}, {k:'description', l:'Description'}, {k:'max_limit', l:'Max Limit (IDR)', type:'idr'}, {k:'is_eligible', l:'Is Eligible (Check for Yes)', type:'checkbox'}];
+                          else if (masterTab === 'employees') fields = [
+                            {k:'employee_id', l:'Employee ID (Number)', type:'number'}, 
+                            {k:'name', l:'Name'}, 
+                            {k:'employee_status', l:'Employee Status', type:'select', options: referenceData.employeeStatuses.map(d => ({val: d.status_code, label: d.description}))}, 
+                            {k:'deptno', l:'Department', type:'select', options: referenceData.departments.map(d => ({val: d.deptno, label: d.dept_name}))}, 
+                            {k:'category_code', l:'Category', type:'select', options: referenceData.employeeCategories.map(d => ({val: d.category_code, label: d.description}))},
+                            {k:'role_id', l:'Role', type:'select', options: referenceData.roles.map(d => ({val: d.role_id, label: d.role_name}))},
+                            {k:'salary', l:'Salary (IDR)', type:'idr'}
+                          ];
+                          else if (masterTab === 'members') fields = [
+                            {k:'member_no', l:'Member No (Number)', type:'number'}, 
+                            {k:'employee_id', l:'Employee', type:'select', options: referenceData.employees.map(d => ({val: d.employee_id, label: `${d.employee_id} - ${d.name}`}))}, 
+                            {k:'kopkara_status', l:'Kopkara Status', type:'select', options: referenceData.kopkaraStatuses.map(d => ({val: d.status_code, label: d.description}))}, 
+                            {k:'join_date', l:'Join Date (YYYY-MM-DD)', type:'date'},
+                            {k:'bank_name', l:'Nama Bank (Contoh: BCA, Mandiri)'},
+                            {k:'bank_account_no', l:'No. Rekening Bank'},
+                            {k:'bank_account_name', l:'Nama Pemilik Rekening'}
+                          ];
+                          else if (masterTab === 'roles') fields = [
+                            {k:'role_name', l:'Role Name'},
+                            {k:'description', l:'Description'}
+                          ];
+                          else if (masterTab === 'menus') fields = [
+                            {k:'title', l:'Menu Title'},
+                            {k:'icon', l:'Icon (Emoji)'},
+                            {k:'path', l:'Path (Route)'},
+                            {k:'parent_id', l:'Parent ID (Number)', type:'number'},
+                            {k:'order', l:'Order Sequence (Number)', type:'number'}
+                          ];
+                          else if (masterTab === 'role-menus') fields = [
+                            {k:'role_id', l:'Role', type:'select', options: referenceData.roles.map(d => ({val: d.role_id, label: d.role_name}))},
+                            {k:'menu_id', l:'Menu', type:'select', options: referenceData.menus.map(d => ({val: d.menu_id, label: `${d.title} (${d.path})`}))}
+                          ];
+                          else if (masterTab === 'parameters') fields = [
+                            {k:'key_name', l:'Key Name'},
+                            {k:'key_value', l:'Key Value'},
+                            {k:'description', l:'Description'}
+                          ];
+                          else if (masterTab === 'users') fields = [
+                            {k:'username', l:'Username'},
+                            {k:'name', l:'Full Name (Nama Lengkap)'},
+                            {k:'role', l:'Role', type:'select', options: [
+                              ...((referenceData.roles || []).map(r => ({val: r.role_name, label: r.role_name}))),
+                              ...((!referenceData.roles || referenceData.roles.length === 0) ? [
+                                {val: 'admin', label: 'admin'},
+                                {val: 'hrd', label: 'hrd'},
+                                {val: 'anggota', label: 'anggota'}
+                              ] : [])
+                            ]},
+                            {k:'member_no', l:'Member No (Anggota)', type:'select', options: [
+                              {val: '', label: '-- Tidak Terkait Member (Non-Anggota) --'},
+                              ...((referenceData.members || []).map(m => ({
+                                val: m.member_no, 
+                                label: `No. ${m.member_no}${m.bank_account_name ? ' - ' + m.bank_account_name : ''}`
+                              })))
+                            ]},
+                            {k:'password', l: isEditMode ? 'New Password (Kosongkan jika tidak diubah)' : 'Password', type:'password'}
+                          ];
+                          
+                          return fields.map(f => {
+                            const val = getFieldValue(masterForm, f.k);
+                            const isPk = (f.k === pkFieldKey);
+                            const isDisabled = isEditMode && (isPk || (masterTab === 'users' && f.k === 'username'));
+
+                            return (
+                              <div key={f.k} style={{ display: 'flex', flexDirection: f.type === 'checkbox' ? 'row' : 'column', alignItems: f.type === 'checkbox' ? 'center' : 'flex-start', gap: f.type === 'checkbox' ? '8px' : '4px' }}>
+                                <label style={{ fontSize: '0.9rem', fontWeight: 600, color: '#334155' }}>
+                                  {f.l}{isDisabled ? ' (Read Only / Locked)' : ''}
+                                </label>
+
+                                {f.k === 'member_no' && masterTab === 'users' ? (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '100%', backgroundColor: '#f8fafc', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
+                                    <div style={{ display: 'flex', gap: '6px' }}>
+                                      <input 
+                                        type="text"
+                                        disabled={isDisabled}
+                                        placeholder="🔍 Cari Member No / Nama..."
+                                        value={memberSelectSearchQuery}
+                                        onChange={e => setMemberSelectSearchQuery(e.target.value)}
+                                        onKeyDown={e => {
+                                          if (e.key === 'Enter') {
+                                            e.preventDefault();
+                                            setMemberSelectPage(1);
+                                            fetchPaginatedMembersForSelect(memberSelectSearchQuery, 1);
+                                          }
+                                        }}
+                                        style={{ flex: 1, padding: '8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
+                                      />
+                                      <button 
+                                        type="button"
+                                        disabled={isDisabled}
+                                        onClick={() => {
+                                          setMemberSelectPage(1);
+                                          fetchPaginatedMembersForSelect(memberSelectSearchQuery, 1);
+                                        }}
+                                        style={{ padding: '8px 12px', background: 'var(--button-bg, #10b981)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
+                                      >
+                                        Cari
+                                      </button>
+                                    </div>
+
+                                    <select 
+                                      disabled={isDisabled}
+                                      value={val ?? ''}
+                                      onChange={e => setMasterForm({...masterForm, [f.k]: e.target.value !== '' ? parseInt(e.target.value) : ''})}
+                                      style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid #cbd5e1', backgroundColor: isDisabled ? '#f1f5f9' : 'white', fontWeight: 500 }}
+                                    >
+                                      <option value="">-- Tidak Terkait Member (Non-Anggota) --</option>
+                                      {val !== null && val !== undefined && val !== '' && !memberSelectList.some(m => String(m.member_no) === String(val)) && (
+                                        <option value={val}>
+                                          Selected: Member No. #{val}
+                                        </option>
+                                      )}
+                                      {memberSelectList.map(mem => (
+                                        <option key={mem.member_no} value={mem.member_no}>
+                                          No. {mem.member_no} - {mem.bank_account_name || 'Anggota'}
+                                        </option>
+                                      ))}
+                                    </select>
+
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', color: '#64748b', marginTop: '2px' }}>
+                                      <button 
+                                        type="button"
+                                        disabled={memberSelectPage <= 1 || memberSelectLoading}
+                                        onClick={() => {
+                                          const newPage = Math.max(1, memberSelectPage - 1);
+                                          setMemberSelectPage(newPage);
+                                          fetchPaginatedMembersForSelect(memberSelectSearchQuery, newPage);
+                                        }}
+                                        style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', background: memberSelectPage <= 1 ? '#f1f5f9' : 'white', cursor: memberSelectPage <= 1 ? 'not-allowed' : 'pointer' }}
+                                      >
+                                        ◄ Prev Page
+                                      </button>
+                                      <span>Halaman <strong>{memberSelectPage}</strong> dari <strong>{memberSelectTotalPages}</strong> ({memberSelectTotalRecords} data)</span>
+                                      <button 
+                                        type="button"
+                                        disabled={memberSelectPage >= memberSelectTotalPages || memberSelectLoading}
+                                        onClick={() => {
+                                          const newPage = Math.min(memberSelectTotalPages, memberSelectPage + 1);
+                                          setMemberSelectPage(newPage);
+                                          fetchPaginatedMembersForSelect(memberSelectSearchQuery, newPage);
+                                        }}
+                                        style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', background: memberSelectPage >= memberSelectTotalPages ? '#f1f5f9' : 'white', cursor: memberSelectPage >= memberSelectTotalPages ? 'not-allowed' : 'pointer' }}
+                                      >
+                                        Next Page ►
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : f.k === 'employee_id' && masterTab === 'members' ? (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '100%', backgroundColor: '#f8fafc', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
+                                    <div style={{ display: 'flex', gap: '6px' }}>
+                                      <input 
+                                        type="text"
+                                        disabled={isDisabled}
+                                        placeholder="🔍 Cari Employee (ID / Nama)..."
+                                        value={empSelectSearchQuery}
+                                        onChange={e => setEmpSelectSearchQuery(e.target.value)}
+                                        onKeyDown={e => {
+                                          if (e.key === 'Enter') {
+                                            e.preventDefault();
+                                            setEmpSelectPage(1);
+                                            fetchPaginatedEmployeesForSelect(empSelectSearchQuery, 1);
+                                          }
+                                        }}
+                                        style={{ flex: 1, padding: '8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
+                                      />
+                                      <button 
+                                        type="button"
+                                        disabled={isDisabled}
+                                        onClick={() => {
+                                          setEmpSelectPage(1);
+                                          fetchPaginatedEmployeesForSelect(empSelectSearchQuery, 1);
+                                        }}
+                                        style={{ padding: '8px 12px', background: 'var(--button-bg, #10b981)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
+                                      >
+                                        Cari
+                                      </button>
+                                    </div>
+
+                                    <select 
+                                      required
+                                      disabled={isDisabled}
+                                      value={val || ''}
+                                      onChange={e => setMasterForm({...masterForm, [f.k]: parseInt(e.target.value) || ''})}
+                                      style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)', backgroundColor: isDisabled ? '#f1f5f9' : 'white', fontWeight: 500 }}
+                                    >
+                                      <option value="">-- Pilih Employee ({empSelectTotalRecords} data ditemukan) --</option>
+                                      {val && !empSelectList.some(e => String(e.employee_id) === String(val)) && (
+                                        <option value={val}>
+                                          Selected: Employee ID #{val}
+                                        </option>
+                                      )}
+                                      {empSelectList.map(emp => (
+                                        <option key={emp.employee_id} value={emp.employee_id}>
+                                          {emp.employee_id} - {emp.name} ({emp.employee_id})
+                                        </option>
+                                      ))}
+                                    </select>
+
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', color: '#64748b', marginTop: '2px' }}>
+                                      <button 
+                                        type="button"
+                                        disabled={empSelectPage <= 1 || empSelectLoading}
+                                        onClick={() => {
+                                          const newPage = Math.max(1, empSelectPage - 1);
+                                          setEmpSelectPage(newPage);
+                                          fetchPaginatedEmployeesForSelect(empSelectSearchQuery, newPage);
+                                        }}
+                                        style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', background: empSelectPage <= 1 ? '#f1f5f9' : 'white', cursor: empSelectPage <= 1 ? 'not-allowed' : 'pointer' }}
+                                      >
+                                        ◄ Prev Page
+                                      </button>
+                                      <span>Halaman <strong>{empSelectPage}</strong> dari <strong>{empSelectTotalPages}</strong></span>
+                                      <button 
+                                        type="button"
+                                        disabled={empSelectPage >= empSelectTotalPages || empSelectLoading}
+                                        onClick={() => {
+                                          const newPage = Math.min(empSelectTotalPages, empSelectPage + 1);
+                                          setEmpSelectPage(newPage);
+                                          fetchPaginatedEmployeesForSelect(empSelectSearchQuery, newPage);
+                                        }}
+                                        style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', background: empSelectPage >= empSelectTotalPages ? '#f1f5f9' : 'white', cursor: empSelectPage >= empSelectTotalPages ? 'not-allowed' : 'pointer' }}
+                                      >
+                                        Next Page ►
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : f.type === 'select' ? (
+                                  <select 
+                                    required
+                                    disabled={isDisabled}
+                                    value={val ?? ''}
+                                    onChange={e => setMasterForm({...masterForm, [f.k]: f.k === 'employee_id' ? parseInt(e.target.value) : e.target.value})}
+                                    style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: isDisabled ? '#f1f5f9' : 'white' }}
+                                  >
+                                    <option value="">-- Pilih {f.l} --</option>
+                                    {f.options && f.options.map(opt => (
+                                      <option key={opt.val} value={opt.val}>{opt.label} ({opt.val})</option>
+                                    ))}
+                                  </select>
+                                ) : f.type === 'password' ? (
+                                  <div style={{ position: 'relative', width: '100%' }}>
+                                    <input 
+                                      type={showPassword ? 'text' : 'password'}
+                                      disabled={isDisabled}
+                                      required={!isEditMode}
+                                      placeholder={isEditMode ? 'Kosongkan jika tidak diubah' : 'Masukkan password...'}
+                                      value={val ?? ''}
+                                      onChange={e => setMasterForm({...masterForm, [f.k]: e.target.value})}
+                                      style={{ 
+                                        width: '100%', 
+                                        padding: '10px 42px 10px 10px', 
+                                        borderRadius: '6px', 
+                                        border: '1px solid #cbd5e1',
+                                        backgroundColor: isDisabled ? '#f1f5f9' : '#ffffff',
+                                        color: isDisabled ? '#64748b' : '#0f172a'
+                                      }}
+                                    />
+                                    <button 
+                                      type="button"
+                                      onClick={() => setShowPassword(!showPassword)}
+                                      title={showPassword ? "Sembunyikan Password" : "Tampilkan Password"}
+                                      style={{
+                                        position: 'absolute',
+                                        right: '10px',
+                                        top: '50%',
+                                        transform: 'translateY(-50%)',
+                                        background: 'none',
+                                        border: 'none',
+                                        cursor: 'pointer',
+                                        fontSize: '1.1rem',
+                                        padding: '4px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                      }}
+                                    >
+                                      {showPassword ? '🙈' : '👁️'}
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <input 
+                                    type={f.type === 'idr' ? 'text' : (f.type || 'text')}
+                                    disabled={isDisabled}
+                                    required={f.type !== 'checkbox' && (f.k !== 'password' || !isEditMode) && f.k !== 'member_no'}
+                                    checked={f.type === 'checkbox' ? Boolean(val) : undefined}
+                                    value={f.type === 'idr' ? formatRupiahInput(val) : (f.type !== 'checkbox' ? (val ?? '') : undefined)}
+                                    onChange={e => setMasterForm({
+                                      ...masterForm, 
+                                      [f.k]: f.type === 'checkbox' ? e.target.checked : (f.type === 'idr' ? parseRupiahInput(e.target.value) : (f.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value))
+                                    })}
+                                    style={f.type !== 'checkbox' ? { 
+                                      width: '100%', 
+                                      padding: '10px', 
+                                      borderRadius: '6px', 
+                                      border: '1px solid #cbd5e1',
+                                      backgroundColor: isDisabled ? '#f1f5f9' : '#ffffff',
+                                      color: isDisabled ? '#64748b' : '#0f172a',
+                                      fontWeight: isDisabled ? 600 : 400,
+                                      cursor: isDisabled ? 'not-allowed' : 'text'
+                                    } : { width: '20px', height: '20px' }}
+                                  />
+                                )}
+                              </div>
+                            );
+                          });
+                        })()}
+                        
+                        {/* Modal Footer Buttons - Left Aligned */}
+                        <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '10px', marginTop: '20px' }}>
+                          <button 
+                            type="submit" 
+                            style={{ padding: '8px 20px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.9rem', width: 'auto' }}
+                          >
+                            Simpan Data
+                          </button>
+                          <button 
+                            type="button" 
+                            onClick={() => {
+                              setMasterForm({});
+                              setIsMasterModalOpen(false);
+                              setIsEditMasterMode(false);
+                            }} 
+                            style={{ padding: '8px 20px', background: 'var(--button-cancel-bg, #64748b)', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.9rem', width: 'auto' }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </form>
                     </div>
                   </div>
                 </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {activeTab === 'manual-repayment' && (() => {
+              )}
+            </>
+          )}{activeTab === 'manual-repayment' && (() => {
           // 1. Dynamic Payment Sources from Parameters
           const paymentSourcesParam = parameters.find(p => String(p.KeyName || p.key_name || '').toUpperCase() === 'PAYMENT_SOURCES');
           let paymentSourceOptions = [
@@ -4180,36 +4692,45 @@ function App() {
           const canManageProducts = !['anggota'].includes(String(realRoleName || '').toLowerCase());
           return (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', background: 'var(--header-bg, #0B2545)', padding: '16px 20px', borderRadius: '8px' }}>
               <div>
-                <h2 style={{ margin: 0, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <h2 style={{ margin: 0, color: '#ef4444', display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700 }}>
                   📦 Katalog & Pengaturan Produk Pinjaman Kopkara
                 </h2>
-                <p style={{ margin: '4px 0 0 0', color: '#64748b', fontSize: '0.9rem' }}>
+                <p style={{ margin: '4px 0 0 0', color: '#fee2e2', fontSize: '0.9rem' }}>
                   Kelola jenis produk pinjaman, aturan suku bunga, max tenor, dan batas plafon peminjaman.
                 </p>
               </div>
-              {canManageProducts && (
-                <button 
-                  onClick={() => {
-                    setEditingProduct(null);
-                    setProductForm({
-                      name: '',
-                      loan_type: 'FLAT',
-                      max_tenor_months: 24,
-                      submission_period_start: 1,
-                      submission_period_end: 25,
-                      max_percentage_salary: 40.0,
-                      interest_rate: 1.5,
-                      status: 'ACTIVE'
-                    });
-                    setProductModalOpen(true);
-                  }}
-                  style={{ padding: '10px 18px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
-                >
-                  ➕ Tambah Produk Baru
-                </button>
-              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <input 
+                  type="text" 
+                  value={productSearchQuery}
+                  onChange={(e) => setProductSearchQuery(e.target.value)}
+                  placeholder="🔍 Cari nama produk / tipe..."
+                  style={{ width: '260px', padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
+                />
+                {canManageProducts && (
+                  <button 
+                    onClick={() => {
+                      setEditingProduct(null);
+                      setProductForm({
+                        name: '',
+                        loan_type: 'FLAT',
+                        max_tenor_months: 24,
+                        submission_period_start: 1,
+                        submission_period_end: 25,
+                        max_percentage_salary: 40.0,
+                        interest_rate: 1.5,
+                        status: 'ACTIVE'
+                      });
+                      setProductModalOpen(true);
+                    }}
+                    style={{ padding: '9px 18px', background: 'var(--button-bg, #10b981)', color: 'white', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}
+                  >
+                    ➕ Tambah Produk Baru
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Product Summary Statistics Cards */}
@@ -4237,14 +4758,7 @@ function App() {
             </div>
 
             {/* Filter & Search Bar */}
-            <div className="card" style={{ padding: '12px 16px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <input 
-                type="text" 
-                value={productSearchQuery}
-                onChange={(e) => setProductSearchQuery(e.target.value)}
-                placeholder="🔍 Cari nama produk / tipe pinjaman (FLAT / SLIDING / ANUITAS)..."
-                style={{ width: '350px', padding: '8px 12px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
-              />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '12px' }}>
               <span style={{ fontSize: '0.85rem', color: '#64748b' }}>
                 Menampilkan <strong>{products.filter(p => (p.name || '').toLowerCase().includes(productSearchQuery.toLowerCase()) || (p.loan_type || '').toLowerCase().includes(productSearchQuery.toLowerCase())).length}</strong> dari {products.length} produk
               </span>
@@ -4254,7 +4768,7 @@ function App() {
             <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                 <thead>
-                  <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0', color: '#475569' }}>
+                  <tr style={{ background: 'var(--header-bg, #0B2545)', borderBottom: '2px solid #e2e8f0', color: '#ef4444' }}>
                     <th style={{ padding: '12px 16px', textAlign: 'left' }}>ID</th>
                     <th style={{ padding: '12px 16px', textAlign: 'left' }}>Nama Produk Pinjaman</th>
                     <th style={{ padding: '12px 16px', textAlign: 'center' }}>Tipe Angsuran</th>

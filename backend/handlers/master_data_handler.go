@@ -223,7 +223,7 @@ func (h *MasterDataHandler) GetAll(c *gin.Context) {
 			sQuery = sQuery.Where("(LOWER(username) LIKE ? OR LOWER(ip_address) LIKE ? OR LOWER(user_agent) LIKE ?)", likeStr, likeStr, likeStr)
 		}
 		sQuery.Count(&totalRecords)
-		sQuery.Order("id DESC").Limit(limit).Offset(offset).Find(&data)
+		sQuery.Order("id ASC").Limit(limit).Offset(offset).Find(&data)
 		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
 		if totalPages < 1 { totalPages = 1 }
 		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
@@ -242,55 +242,115 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if err := h.db.Save(&data).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		var count int64
+		if data.DeptNo != "" {
+			h.db.Model(&models.Department{}).Where("deptno = ?", data.DeptNo).Count(&count)
+		}
+		if count > 0 {
+			if err := h.db.Model(&models.Department{}).Where("deptno = ?", data.DeptNo).Updates(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			if err := h.db.Create(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"data": data})
+
 	case "employee-statuses":
 		var data models.EmployeeStatus
 		if err := c.ShouldBindJSON(&data); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if err := h.db.Save(&data).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		var count int64
+		if data.StatusCode != "" {
+			h.db.Model(&models.EmployeeStatus{}).Where("status_code = ?", data.StatusCode).Count(&count)
+		}
+		if count > 0 {
+			if err := h.db.Model(&models.EmployeeStatus{}).Where("status_code = ?", data.StatusCode).Updates(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			if err := h.db.Create(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"data": data})
+
 	case "kopkara-statuses":
 		var data models.KopkaraStatus
 		if err := c.ShouldBindJSON(&data); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if err := h.db.Save(&data).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		var count int64
+		if data.StatusCode != "" {
+			h.db.Model(&models.KopkaraStatus{}).Where("status_code = ?", data.StatusCode).Count(&count)
+		}
+		if count > 0 {
+			if err := h.db.Model(&models.KopkaraStatus{}).Where("status_code = ?", data.StatusCode).Updates(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			if err := h.db.Create(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"data": data})
+
 	case "employee-categories":
 		var data models.EmployeeCategory
 		if err := c.ShouldBindJSON(&data); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if err := h.db.Save(&data).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		var count int64
+		if data.CategoryCode != "" {
+			h.db.Model(&models.EmployeeCategory{}).Where("category_code = ?", data.CategoryCode).Count(&count)
+		}
+		if count > 0 {
+			if err := h.db.Model(&models.EmployeeCategory{}).Where("category_code = ?", data.CategoryCode).Updates(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			if err := h.db.Create(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"data": data})
+
 	case "employees":
 		var data models.Employee
 		if err := c.ShouldBindJSON(&data); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if err := h.db.Save(&data).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		var count int64
+		if data.EmployeeID > 0 {
+			h.db.Model(&models.Employee{}).Where("employee_id = ?", data.EmployeeID).Count(&count)
+		}
+		if count > 0 {
+			if err := h.db.Model(&models.Employee{}).Where("employee_id = ?", data.EmployeeID).Updates(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			if err := h.db.Create(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"data": data})
+
 	case "members":
 		var data models.Member
 		if err := c.ShouldBindJSON(&data); err != nil {
@@ -312,34 +372,70 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 			}
 		}
 
-		if err := h.db.Save(&data).Error; err != nil {
-			if strings.Contains(err.Error(), "members_employee_id_key") || strings.Contains(err.Error(), "23505") {
-				var existing models.Member
-				_ = h.db.Where("employee_id = ?", data.EmployeeID).First(&existing)
-				memberNoStr := fmt.Sprintf("%d", existing.MemberNo)
-				if existing.MemberNo == 0 {
-					memberNoStr = "terkait"
+		var count int64
+		if data.MemberNo > 0 {
+			h.db.Model(&models.Member{}).Where("member_no = ?", data.MemberNo).Count(&count)
+		}
+		if count > 0 {
+			if err := h.db.Model(&models.Member{}).Where("member_no = ?", data.MemberNo).Updates(&data).Error; err != nil {
+				if strings.Contains(err.Error(), "members_employee_id_key") || strings.Contains(err.Error(), "23505") {
+					var existing models.Member
+					_ = h.db.Where("employee_id = ?", data.EmployeeID).First(&existing)
+					memberNoStr := fmt.Sprintf("%d", existing.MemberNo)
+					if existing.MemberNo == 0 {
+						memberNoStr = "terkait"
+					}
+					c.JSON(http.StatusBadRequest, gin.H{
+						"error": fmt.Sprintf("employee_id %d sudah menjadi anggota dengan nomor anggota %s", data.EmployeeID, memberNoStr),
+					})
+					return
 				}
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error": fmt.Sprintf("employee_id %d sudah menjadi anggota dengan nomor anggota %s", data.EmployeeID, memberNoStr),
-				})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		} else {
+			if err := h.db.Create(&data).Error; err != nil {
+				if strings.Contains(err.Error(), "members_employee_id_key") || strings.Contains(err.Error(), "23505") {
+					var existing models.Member
+					_ = h.db.Where("employee_id = ?", data.EmployeeID).First(&existing)
+					memberNoStr := fmt.Sprintf("%d", existing.MemberNo)
+					if existing.MemberNo == 0 {
+						memberNoStr = "terkait"
+					}
+					c.JSON(http.StatusBadRequest, gin.H{
+						"error": fmt.Sprintf("employee_id %d sudah menjadi anggota dengan nomor anggota %s", data.EmployeeID, memberNoStr),
+					})
+					return
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"data": data})
+
 	case "roles":
 		var data models.Role
 		if err := c.ShouldBindJSON(&data); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if err := h.db.Save(&data).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		var count int64
+		if data.RoleID > 0 {
+			h.db.Model(&models.Role{}).Where("role_id = ?", data.RoleID).Count(&count)
+		}
+		if count > 0 {
+			if err := h.db.Model(&models.Role{}).Where("role_id = ?", data.RoleID).Updates(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			if err := h.db.Create(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"data": data})
+
 	case "menus":
 		var req map[string]interface{}
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -396,33 +492,67 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 			}
 		}
 
-		if err := h.db.Save(&menu).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		var count int64
+		if menu.MenuID > 0 {
+			h.db.Model(&models.Menu{}).Where("menu_id = ?", menu.MenuID).Count(&count)
+		}
+		if count > 0 {
+			if err := h.db.Model(&models.Menu{}).Where("menu_id = ?", menu.MenuID).Updates(&menu).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			if err := h.db.Create(&menu).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"data": menu})
+
 	case "role-menus":
 		var data models.RoleMenu
 		if err := c.ShouldBindJSON(&data); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if err := h.db.Save(&data).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		var count int64
+		h.db.Model(&models.RoleMenu{}).Where("role_id = ? AND menu_id = ?", data.RoleID, data.MenuID).Count(&count)
+		if count > 0 {
+			if err := h.db.Model(&models.RoleMenu{}).Where("role_id = ? AND menu_id = ?", data.RoleID, data.MenuID).Updates(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			if err := h.db.Create(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"data": data})
+
 	case "parameters":
 		var data models.GlobalParameter
 		if err := c.ShouldBindJSON(&data); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if err := h.db.Save(&data).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		var count int64
+		if data.KeyName != "" {
+			h.db.Model(&models.GlobalParameter{}).Where("key_name = ?", data.KeyName).Count(&count)
+		}
+		if count > 0 {
+			if err := h.db.Model(&models.GlobalParameter{}).Where("key_name = ?", data.KeyName).Updates(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			if err := h.db.Create(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"data": data})
+
 	case "users":
 		var req map[string]interface{}
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -451,45 +581,39 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 		if role, ok := req["role"].(string); ok && role != "" {
 			user.Role = role
 		}
-		if memNo, ok := req["member_no"]; ok && memNo != nil {
-			switch v := memNo.(type) {
-			case float64:
-				m := int64(v)
-				user.MemberNo = &m
-			case int64:
-				user.MemberNo = &v
+		if password, ok := req["password"].(string); ok && password != "" {
+			hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
+				return
+			}
+			user.Password = string(hashed)
+		}
+		currentUser := c.GetString("username")
+		if currentUser == "" {
+			currentUser = "admin"
+		}
+		var count int64
+		if user.ID > 0 {
+			h.db.Model(&models.User{}).Where("id = ?", user.ID).Count(&count)
+		}
+		if count > 0 {
+			user.UpdatedUser = &currentUser
+			user.UpdatedAt = time.Now()
+			if err := h.db.Model(&models.User{}).Where("id = ?", user.ID).Updates(&user).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
 			}
 		} else {
-			user.MemberNo = nil
-		}
-		if pwd, ok := req["password"].(string); ok && strings.TrimSpace(pwd) != "" {
-			hashed, errH := bcrypt.GenerateFromPassword([]byte(strings.TrimSpace(pwd)), bcrypt.DefaultCost)
-			if errH == nil {
-				user.Password = string(hashed)
-				user.PasswordChangedAt = time.Now()
+			user.CreatedUser = &currentUser
+			user.UpdatedUser = &currentUser
+			if err := h.db.Create(&user).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
 			}
-		} else if user.ID == 0 {
-			hashed, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
-			user.Password = string(hashed)
-			user.PasswordChangedAt = time.Now()
-		}
-
-		if err := h.db.Save(&user).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
 		}
 		c.JSON(http.StatusOK, gin.H{"data": user})
-	case "sessions":
-		var data models.Session
-		if err := c.ShouldBindJSON(&data); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		if err := h.db.Save(&data).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"data": data})
+
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Unknown master table"})
 	}
@@ -520,9 +644,21 @@ func (h *MasterDataHandler) Delete(c *gin.Context) {
 	case "role-menus":
 		err = h.db.Where("role_id = ? AND menu_id = ?", c.Query("role_id"), c.Query("menu_id")).Delete(&models.RoleMenu{}).Error
 	case "parameters":
-		err = h.db.Where("id = ?", id).Delete(&models.GlobalParameter{}).Error
+		if parsedID, errP := strconv.ParseInt(id, 10, 64); errP == nil && parsedID > 0 {
+			err = h.db.Where("id = ?", parsedID).Delete(&models.GlobalParameter{}).Error
+		} else {
+			err = h.db.Where("key_name = ?", id).Delete(&models.GlobalParameter{}).Error
+		}
 	case "users":
-		err = h.db.Where("id = ?", id).Delete(&models.User{}).Error
+		currentUser := c.GetString("username")
+		if currentUser == "" {
+			currentUser = "admin"
+		}
+		err = h.db.Model(&models.User{}).Where("id = ? AND deleted_at IS NULL", id).Updates(map[string]interface{}{
+			"deleted_at":   time.Now(),
+			"updated_at":   time.Now(),
+			"deleted_user": currentUser,
+		}).Error
 	case "sessions":
 		err = h.db.Where("id = ?", id).Delete(&models.Session{}).Error
 	default:
@@ -576,11 +712,12 @@ func (h *MasterDataHandler) RevokeSession(c *gin.Context) {
 }
 
 func (h *MasterDataHandler) CleanupSessions(c *gin.Context) {
-	if err := h.db.Where("expires_at < ?", time.Now()).Delete(&models.Session{}).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	res := h.db.Where("expires_at < ? OR is_active = ?", time.Now(), false).Delete(&models.Session{})
+	if res.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": res.Error.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Expired sessions cleaned up successfully"})
+	c.JSON(http.StatusOK, gin.H{"status": "success", "message": fmt.Sprintf("Berhasil membersihkan %d session expired / non-aktif", res.RowsAffected), "rows_affected": res.RowsAffected})
 }
 
 func (h *MasterDataHandler) GetUserInfo(c *gin.Context) {
