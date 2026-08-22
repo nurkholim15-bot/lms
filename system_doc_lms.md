@@ -1265,7 +1265,7 @@ Demi menjaga kerahasiaan data keuangan anggota, sistem LMS membedakan hak akses 
 | `PAGINATION_LIMIT` | `5` | Jumlah baris data per halaman untuk query tabel master/transaksi |
 | `LOG_SUBMIT_LOAN_PATH` | `./logs/submit_loan.log` | Path dan nama file log transaksi pengajuan pinjaman |
 | `RC_SUBMIT_LOAN_SUCCESS` | `00` | Response Code transaksi pengajuan pinjaman sukses (`SUBMITTED`) |
-| `RC_SUBMIT_LOAN_NON_KOPKARA` | `10` | Response Code ditolak bukan anggota Kopkara |
+| `RC_SUBMIT_LOAN_NON_KOPKARA` | `401` | Response Code ditolak bukan anggota Kopkara |
 | `RC_SUBMIT_LOAN_NON_ADIRA` | `11` | Response Code ditolak bukan karyawan Adira |
 | `RC_SUBMIT_LOAN_TENOR` | `12` | Response Code ditolak Tenor Melebihi Batas Maksimum |
 | `RC_SUBMIT_LOAN_CREDIT_LIMIT` | `13` | Response Code ditolak Jumlah Pinjaman Melebihi Credit Limit |
@@ -1292,3 +1292,172 @@ datetime, RC, employee_id, product_id, submission_date, requested_amount, tenor,
 - `requested_amount`: Nominal pinjaman yang diajukan.
 - `tenor`: Tenor pinjaman dalam bulan.
 - `status`: Status hasil evaluasi pengajuan (`SUBMITTED`, `REJECTED_NON_KOPKARA`, `REJECTED_NON_ADIRA`, `REJECTED_PERIOD`, `REJECTED_TENOR`, `REJECTED_CREDIT_LIMIT`, `REJECTED_PRODUCT_NOT_FOUND`).
+
+
+---
+
+### 13.2 Pengujian Validasi Backend via cURL (Perintah Real & Respon JSON)
+
+Berikut adalah riwayat eksekusi perintah `curl` real beserta respon JSON asli dari server backend LMS:
+
+#### 🔑 1. Login Ke Sistem (`POST /api/karisma/login`)
+```bash
+curl -k -c cookies.txt -X POST https://localhost:8086/api/karisma/login \
+  -H "Content-Type: application/json" \
+  -d "{\"username\": \"nur\", \"password\": \"Nkl@130200\"}"
+```
+**Respon Server:**
+```json
+{"status":"success","token":"820bfacb5c321dfdebd557837aa147eeba60fa03c8bd3c8185891daa62b0f171","token_name":"ewa_token"}
+```
+
+---
+
+#### 🛑 2. Testing RC 11 — Ditolak Bukan Karyawan Adira (`REJECTED_NON_ADIRA`)
+```bash
+curl -k -X POST https://localhost:8086/api/applications \
+  -H "Authorization: Bearer f2576101bd813faeacaf74b94f1764fd6d0c618403783f975b065ee575c17368" \
+  -H "Content-Type: application/json" \
+  -d "{\"member_no\": 999999, \"product_id\": 1, \"requested_amount\": 1000000, \"tenor\": 1}"
+```
+**Respon Server:**
+```json
+{"error":"ditolak bukan karyawan Adira"}
+```
+
+---
+
+#### 🛑 3. Testing RC 12 — Ditolak Tenor Melebihi Batas Maksimum (`REJECTED_TENOR`)
+```bash
+curl -k -X POST https://localhost:8086/api/applications \
+  -H "Authorization: Bearer f2576101bd813faeacaf74b94f1764fd6d0c618403783f975b065ee575c17368" \
+  -H "Content-Type: application/json" \
+  -d "{\"member_no\": 100001, \"product_id\": 1, \"requested_amount\": 1000000, \"tenor\": 24}"
+```
+**Respon Server:**
+```json
+{"error":"ditolak Tenor Melebihi Batas Maksimum (1 bulan)"}
+```
+
+---
+
+#### 🛑 4. Testing RC 13 — Ditolak Jumlah Pinjaman Melebihi Credit Limit (`REJECTED_CREDIT_LIMIT`)
+```bash
+curl -k -X POST https://localhost:8086/api/applications \
+  -H "Authorization: Bearer f2576101bd813faeacaf74b94f1764fd6d0c618403783f975b065ee575c17368" \
+  -H "Content-Type: application/json" \
+  -d "{\"member_no\": 200001, \"product_id\": 5, \"requested_amount\": 100000000, \"tenor\": 1}"
+```
+**Respon Server:**
+```json
+{"error":"Pengajuan ditolak. Total kewajiban pinjaman Anda (Rp 1.616.000) + pengajuan baru (Rp 101.000.000) = Rp 102.616.000 melebihi Credit Limit (Rp 4.583.333). Sisa limit yang dapat diajukan (Pokok + Bunga): Rp 2.967.333"}
+```
+
+---
+
+#### ✅ 5. Testing RC 00 — Transaksi Pengajuan Berhasil (`SUBMITTED`)
+```bash
+curl -k -X POST https://localhost:8086/api/applications \
+  -H "Authorization: Bearer f2576101bd813faeacaf74b94f1764fd6d0c618403783f975b065ee575c17368" \
+  -H "Content-Type: application/json" \
+  -d "{\"member_no\": 200001, \"product_id\": 5, \"requested_amount\": 100000, \"tenor\": 1}"
+```
+**Respon Server:**
+```json
+{
+  "data": {
+    "application_no": "1787405426153100276",
+    "member_no": "200001",
+    "product_id": 5,
+    "submission_date": "2026-08-22T20:30:26.153076664+07:00",
+    "requested_amount": 100000,
+    "tenor": 1,
+    "eligibility_result": "ELIGIBLE",
+    "status": "SUBMITTED",
+    "principal_per_month": 100000,
+    "interest_per_month": 1000,
+    "admin_fee": 30000,
+    "total_installment": 101000,
+    "total_loan_cost": 131000,
+    "interest_rate": 1,
+    "credit_limit": 4583333.333333333
+  },
+  "message": "Application submitted successfully"
+}
+```
+
+---
+
+#### 🛑 6. Testing RC 401 — Ditolak Bukan Anggota Kopkara (`REJECTED_NON_KOPKARA`)
+
+Untuk menguji skenario **RC 401** (pengguna/karyawan memiliki kredensial valid tetapi `kopkara_status` di tabel `lms_sch.members` bernilai `'INACTIVE'` / `'RESIGNED'` atau belum menjadi Anggota Koperasi):
+
+**Langkah Testing:**
+1. Non-aktifkan status keanggotaan sementara di PostgreSQL (PgAdmin):
+```sql
+UPDATE lms_sch.members SET kopkara_status = 'INACTIVE' WHERE member_no = 200001;
+```
+
+2. Jalankan perintah `curl` submit loan:
+```bash
+curl -k -X POST https://localhost:8086/api/applications \
+  -H "Authorization: Bearer f2576101bd813faeacaf74b94f1764fd6d0c618403783f975b065ee575c17368" \
+  -H "Content-Type: application/json" \
+  -d "{\"member_no\": 200001, \"product_id\": 1, \"requested_amount\": 1000000, \"tenor\": 1}"
+```
+**Respon Server:**
+```json
+{"error":"ditolak bukan anggota Kopkara"}
+```
+**Hasil Log (`logs/submit_loan.log`):**
+```text
+2026-08-22 20:51:00, 401, 100001, 1, 2026-08-22, 1000000, 1, REJECTED_NON_KOPKARA
+```
+
+3. Kembalikan status keanggotaan setelah testing selesai:
+```sql
+UPDATE lms_sch.members SET kopkara_status = 'ACTIVE' WHERE member_no = 200001;
+```
+
+
+### 13.3 Cara Testing RC 401 (Unauthorized)
+
+Untuk menguji respon **`RC 401 / HTTP Status 401 Unauthorized`**, kirimkan request **tanpa header `Authorization`** atau menggunakan **token yang salah/kadaluarsa**:
+
+```bash
+curl -k -X POST https://localhost:8086/api/applications \
+  -H "Authorization: Bearer invalid-token-12345" \
+  -H "Content-Type: application/json" \
+  -d "{\"member_no\": 200001, \"product_id\": 5, \"requested_amount\": 100000, \"tenor\": 1}"
+```
+
+**Respon Server (RC 401):**
+```json
+{"error":"Unauthorized: Akses ditolak. Token autentikasi tidak ditemukan di Cookie maupun Authorization Header."}
+```
+
+---
+
+### 13.4 Daftar Lengkap Response Code (RC) Sistem LMS
+
+#### A. Response Code Log Transaksi Submit Loan (`LOG_SUBMIT_LOAN_PATH`)
+| Kode RC | Parameter Global | Deskripsi Status |
+|---|---|---|
+| `00` | `RC_SUBMIT_LOAN_SUCCESS` | Transaksi pengajuan pinjaman berhasil (`SUBMITTED`) |
+| `401` | `RC_SUBMIT_LOAN_NON_KOPKARA` | Ditolak bukan anggota Kopkara (`REJECTED_NON_KOPKARA`) |
+| `11` | `RC_SUBMIT_LOAN_NON_ADIRA` | Ditolak bukan karyawan Adira (`REJECTED_NON_ADIRA`) |
+| `12` | `RC_SUBMIT_LOAN_TENOR` | Ditolak Tenor Melebihi Batas Maksimum (`REJECTED_TENOR`) |
+| `13` | `RC_SUBMIT_LOAN_CREDIT_LIMIT` | Ditolak Jumlah Pinjaman Melebihi Credit Limit (`REJECTED_CREDIT_LIMIT`) |
+| `14` | `RC_SUBMIT_LOAN_PERIOD` | Ditolak Di Luar Periode Tanggal Pengajuan (`REJECTED_PERIOD`) |
+| `99` | `RC_SUBMIT_LOAN_OTHERS` | Ditolak alasan lainnya / system error (`REJECTED_OTHERS`) |
+
+#### B. Response Code HTTP Standard (System API RC)
+| Status Code | Nama Status | Keterangan & Trigger |
+|---|---|---|
+| `200` / `201` | **OK / Created** | Request API berhasil diproses |
+| `400` | **Bad Request** | Payload JSON tidak valid atau parameter request salah format |
+| `401` | **Unauthorized** | Token autentikasi/cookie tidak ditemukan, salah, atau kadaluarsa |
+| `403` | **Forbidden** | Otorisasi RBAC ditolak (Role ID pengguna tidak memiliki hak akses menu) |
+| `404` | **Not Found** | Endpoint API atau data record (user/loan/application) tidak ditemukan |
+| `429` | **Too Many Requests** | Laju request melebihi ambang batas Rate Limiter (`RATE_LIMIT_GENERAL_RPM`) |
+| `500` | **Internal Server Error** | Eror internal server atau kegagalan query database PostgreSQL |

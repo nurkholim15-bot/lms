@@ -1,13 +1,18 @@
 -- =========================================================================
--- DDL/SQL SCRIPT UNTUK MEMBUAT INDEX FIELD member_no PADA TABEL lms_sch.users
+-- DDL/SQL SCRIPT UNTUK MEMBUAT UNIQUE INDEX FIELD member_no PADA TABEL lms_sch.users
 -- MANUAL EXECUTION VIA PGADMIN (TANPA AUTO-MIGRATION / SEEDING BACKEND)
 -- =========================================================================
 
--- 1. Buat B-Tree Index pada kolom member_no di tabel lms_sch.users jika belum ada
-CREATE INDEX IF NOT EXISTS idx_users_member_no 
+-- OPSE 1: UNIQUE INDEX (Direkomendasikan agar 1 Member_No hanya memiliki 1 Akun User)
+-- Di PostgreSQL, UNIQUE index tetap mengizinkan multiple NULL (untuk akun Admin/Non-Anggota)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_member_no 
 ON lms_sch.users (member_no);
 
--- 2. Query Verifikasi Keberadaan Index setelah Eksekusi di PgAdmin
+-- OPSE 2: NON-UNIQUE INDEX (Gunakan skrip di bawah jika 1 Member_No diperbolehkan memiliki > 1 akun)
+-- DROP INDEX IF EXISTS lms_sch.idx_users_member_no;
+-- CREATE INDEX IF NOT EXISTS idx_users_member_no ON lms_sch.users (member_no);
+
+-- Verifikasi Keberadaan Index setelah Eksekusi di PgAdmin
 SELECT 
     schemaname, 
     tablename, 

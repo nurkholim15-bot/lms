@@ -367,7 +367,7 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 	// Validate Kopkara Member Keaktifan
 	statusUpper := strings.ToUpper(strings.TrimSpace(member.KopkaraStatus))
 	if member.MemberNo == 0 || (statusUpper != "ACTIVE" && statusUpper != "AKTIF" && statusUpper != "") {
-		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_NON_KOPKARA", "10", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_NON_KOPKARA")
+		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_NON_KOPKARA", "401", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_NON_KOPKARA")
 		return nil, fmt.Errorf("ditolak bukan anggota Kopkara")
 	}
 
