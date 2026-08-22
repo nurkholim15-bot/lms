@@ -4,12 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Knetic/govaluate"
+	"gorm.io/gorm"
 
 	"lms-backend/models"
 	"lms-backend/repositories"
@@ -37,6 +39,36 @@ type applicationUseCase struct {
 	productCache sync.Map
 }
 
+func FormatIDR(val float64) string {
+	in := int64(val + 0.5)
+	if in == 0 {
+		return "Rp 0"
+	}
+	sign := ""
+	if in < 0 {
+		sign = "-"
+		in = -in
+	}
+	str := strconv.FormatInt(in, 10)
+	n := len(str)
+	if n <= 3 {
+		return fmt.Sprintf("Rp %s%s", sign, str)
+	}
+	var out []byte
+	rem := n % 3
+	if rem > 0 {
+		out = append(out, str[:rem]...)
+		out = append(out, '.')
+	}
+	for i := rem; i < n; i += 3 {
+		out = append(out, str[i:i+3]...)
+		if i+3 < n {
+			out = append(out, '.')
+		}
+	}
+	return "Rp " + sign + string(out)
+}
+
 func NewApplicationUseCase(ar repositories.ApplicationRepository, pr repositories.ProductRepository, pRepo repositories.ParameterRepository) ApplicationUseCase {
 	return &applicationUseCase{appRepo: ar, productRepo: pr, paramRepo: pRepo}
 }
@@ -49,14 +81,16 @@ type SubmitApplicationRequest struct {
 }
 
 type SimulationResult struct {
-	PrincipalPerMonth float64 `json:"principal_per_month"`
-	InterestPerMonth  float64 `json:"interest_per_month"`
-	AdminFee          float64 `json:"admin_fee"`
-	TotalInstallment  float64 `json:"total_installment"`
-	TotalLoanCost     float64 `json:"total_loan_cost"`
-	Tenor             int     `json:"tenor"`
-	InterestRate      float64 `json:"interest_rate"`
-	CreditLimit       float64 `json:"credit_limit"`
+	PrincipalPerMonth  float64 `json:"principal_per_month"`
+	InterestPerMonth   float64 `json:"interest_per_month"`
+	AdminFee           float64 `json:"admin_fee"`
+	TotalInstallment   float64 `json:"total_installment"`
+	TotalLoanCost      float64 `json:"total_loan_cost"`
+	Tenor              int     `json:"tenor"`
+	InterestRate       float64 `json:"interest_rate"`
+	CreditLimit        float64 `json:"credit_limit"`
+	TotalPreviousLoans float64 `json:"total_previous_loans"`
+	RemainingLimit     float64 `json:"remaining_limit"`
 }
 
 // Helper to resolve employee_id and name dynamically from lms_sch.employees
@@ -159,8 +193,18 @@ func (u *applicationUseCase) runSimulation(req SubmitApplicationRequest, product
 					limitVal = category.MaxLimit
 				}
 				
-				if req.RequestedAmount > limitVal {
-					return SimulationResult{}, fmt.Errorf("requested amount exceeds maximum limit of %.2f", limitVal)
+				// Multi-Loan Credit Limit Check: total_loan = Pokok + Bunga
+				interestRate := product.InterestRate
+				newAppTotalLoan := req.RequestedAmount + (req.RequestedAmount * (interestRate / 100.0) * float64(req.Tenor))
+				cumulativeExposure := employee.TotalLoan + newAppTotalLoan
+
+				if cumulativeExposure > limitVal {
+					availableLimit := limitVal - employee.TotalLoan
+					if availableLimit < 0 {
+						availableLimit = 0
+					}
+					return SimulationResult{}, fmt.Errorf("Pengajuan ditolak. Total kewajiban pinjaman Anda (%s) + pengajuan baru (%s) = %s melebihi Credit Limit (%s). Sisa limit yang dapat diajukan (Pokok + Bunga): %s", 
+						FormatIDR(employee.TotalLoan), FormatIDR(newAppTotalLoan), FormatIDR(cumulativeExposure), FormatIDR(limitVal), FormatIDR(availableLimit))
 				}
 			}
 		}
@@ -187,15 +231,22 @@ func (u *applicationUseCase) runSimulation(req SubmitApplicationRequest, product
 	interestPerMonth := (req.RequestedAmount * (product.InterestRate / 100.0))
 	totalInstallment := principalPerMonth + interestPerMonth
 
+	remLimit := limitVal - employee.TotalLoan
+	if remLimit < 0 {
+		remLimit = 0
+	}
+
 	return SimulationResult{
-		PrincipalPerMonth: principalPerMonth,
-		InterestPerMonth:  interestPerMonth,
-		AdminFee:          adminFee,
-		TotalInstallment:  totalInstallment,
-		TotalLoanCost:     totalInstallment*float64(req.Tenor) + adminFee,
-		Tenor:             req.Tenor,
-		InterestRate:      product.InterestRate,
-		CreditLimit:       limitVal,
+		PrincipalPerMonth:  principalPerMonth,
+		InterestPerMonth:   interestPerMonth,
+		AdminFee:           adminFee,
+		TotalInstallment:   totalInstallment,
+		TotalLoanCost:      totalInstallment*float64(req.Tenor) + adminFee,
+		Tenor:              req.Tenor,
+		InterestRate:       product.InterestRate,
+		CreditLimit:        limitVal,
+		TotalPreviousLoans: employee.TotalLoan,
+		RemainingLimit:     remLimit,
 	}, nil
 }
 
@@ -274,10 +325,33 @@ func (u *applicationUseCase) GetApplicationsByPeriodAndStatus(period string, sta
 	return u.appRepo.FindByPeriodAndStatus(period, status)
 }
 
+func (u *applicationUseCase) writeSubmitLoanLog(rcParam string, defaultRC string, empID int64, productID int64, submissionDate time.Time, requestedAmount float64, tenor int, status string) {
+	rc := u.getParamVal(rcParam, defaultRC)
+	logPath := u.getParamVal("LOG_SUBMIT_LOAN_PATH", "./logs/submit_loan.log")
+
+	dir := filepath.Dir(logPath)
+	if dir != "" && dir != "." {
+		_ = os.MkdirAll(dir, 0755)
+	}
+
+	nowStr := time.Now().Format("2006-01-02 15:04:05")
+	subDateStr := submissionDate.Format("2006-01-02")
+	logLine := fmt.Sprintf("%s, %s, %d, %d, %s, %.0f, %d, %s\n",
+		nowStr, rc, empID, productID, subDateStr, requestedAmount, tenor, status)
+
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err == nil {
+		defer f.Close()
+		_, _ = f.WriteString(logLine)
+	}
+}
+
 func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*models.LoanApplication, error) {
+	now := time.Now()
 	// 1. Get Product Details for validation
 	product, err := u.getProductCached(req.ProductID)
 	if err != nil {
+		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_OTHERS", "99", req.MemberNo, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_PRODUCT_NOT_FOUND")
 		return nil, errors.New("product not found")
 	}
 
@@ -285,8 +359,16 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 	var member models.Member
 	if err := db.Where("member_no = ?", req.MemberNo).First(&member).Error; err != nil {
 		if err2 := db.Where("employee_id = ?", req.MemberNo).First(&member).Error; err2 != nil {
-			return nil, fmt.Errorf("member not found")
+			u.writeSubmitLoanLog("RC_SUBMIT_LOAN_NON_ADIRA", "11", req.MemberNo, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_NON_ADIRA")
+			return nil, fmt.Errorf("ditolak bukan karyawan Adira")
 		}
+	}
+
+	// Validate Kopkara Member Keaktifan
+	statusUpper := strings.ToUpper(strings.TrimSpace(member.KopkaraStatus))
+	if member.MemberNo == 0 || (statusUpper != "ACTIVE" && statusUpper != "AKTIF" && statusUpper != "") {
+		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_NON_KOPKARA", "10", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_NON_KOPKARA")
+		return nil, fmt.Errorf("ditolak bukan anggota Kopkara")
 	}
 
 	// 2. Validate Submission Date (LOAN_START_PERIOD to LOAN_END_PERIOD)
@@ -295,9 +377,10 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 	startPeriod, _ := strconv.Atoi(startPeriodStr)
 	endPeriod, _ := strconv.Atoi(endPeriodStr)
 	
-	currentDay := time.Now().Day()
+	currentDay := now.Day()
 	if currentDay < startPeriod || currentDay > endPeriod {
-		return nil, fmt.Errorf("pengajuan pinjaman hanya diizinkan antara tanggal %d sampai %d", startPeriod, endPeriod)
+		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_PERIOD", "14", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_PERIOD")
+		return nil, fmt.Errorf("ditolak Di Luar Periode Tanggal Pengajuan (hanya diizinkan antara tanggal %d sampai %d)", startPeriod, endPeriod)
 	}
 
 	// 3. Validate Tenor (Override product with Global Max Tenor if smaller)
@@ -308,17 +391,18 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 	}
 	
 	if req.Tenor > maxTenor {
-		return nil, fmt.Errorf("requested tenor exceeds maximum allowed (%d months)", maxTenor)
+		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_TENOR", "12", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_TENOR")
+		return nil, fmt.Errorf("ditolak Tenor Melebihi Batas Maksimum (%d bulan)", maxTenor)
 	}
 
-	// 4. Run Simulation & get Breakdown
+	// 4. Run Simulation & get Breakdown (Credit Limit Validation)
 	simResult, err := u.runSimulation(req, product)
 	if err != nil {
+		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_CREDIT_LIMIT", "13", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_CREDIT_LIMIT")
 		return nil, err
 	}
 
 	// 5. Create Application Record
-	now := time.Now()
 	// Gunakan UnixNano + offset mikrodetik unik untuk mencegah bentrok primary key saat high-concurrency (500 VUs)
 	appNo := now.UnixNano() + time.Now().UnixNano()%100000 + int64(now.Nanosecond()%999) 
 	
@@ -344,6 +428,15 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 	if err != nil {
 		return nil, err
 	}
+
+	// Write successful submit transaction log
+	u.writeSubmitLoanLog("RC_SUBMIT_LOAN_SUCCESS", "00", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "SUBMITTED")
+
+	// Accumulate employees.total_loan (+ Pokok + Bunga) upon successful application submission
+	interestRate := product.InterestRate
+	newAppTotalLoan := req.RequestedAmount + (req.RequestedAmount * (interestRate / 100.0) * float64(req.Tenor))
+	_ = db.Model(&models.Employee{}).Where("employee_id = ?", member.EmployeeID).
+		Update("total_loan", gorm.Expr("COALESCE(total_loan, 0) + ?", newAppTotalLoan)).Error
 
 	// Save initial Tracking entry
 	subUserId, subUserName := u.resolveUserInfo(fmt.Sprintf("%d", member.EmployeeID))
@@ -510,8 +603,16 @@ func (u *applicationUseCase) DisburseApplication(applicationNo int64, req Disbur
 		}
 	}
 
+	dueMonthOffset := 0
+	if dueMonthParam, err := u.paramRepo.FindByKey("LOAN_DUEMONTH"); err == nil && dueMonthParam.KeyValue != "" {
+		if m, errConv := strconv.Atoi(strings.TrimSpace(dueMonthParam.KeyValue)); errConv == nil {
+			dueMonthOffset = m
+		}
+	}
+
 	for i := 1; i <= tenor; i++ {
-		dueDate := now.AddDate(0, i, 0)
+		monthAdd := dueMonthOffset + (i - 1)
+		dueDate := now.AddDate(0, monthAdd, 0)
 		dueDate = time.Date(dueDate.Year(), dueDate.Month(), dueDay, 0, 0, 0, 0, dueDate.Location())
 		periodStr := dueDate.Format("2006-01")
 

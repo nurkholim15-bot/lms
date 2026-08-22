@@ -189,7 +189,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA lms_sch
 | `lms_sch.global_parameters` | Parameter konfigurasi sistem (folder, mode scan, dll) | `id` |
 | `lms_sch.loan_products` | Produk pinjaman (APM, reguler, dll) | `id` |
 | `lms_sch.employee_categories` | Kategori karyawan & limit pinjaman | `category_code` |
-| `lms_sch.employees` | Data karyawan dari Karisma/HRD | `employee_id` |
+| `lms_sch.employees` | Data karyawan dari Karisma/HRD (termasuk `total_loan` untuk validasi credit limit multi-loan) | `employee_id` |
 | `lms_sch.members` | Anggota koperasi (mapping employee → member) | `member_no` |
 | `lms_sch.employee_statuses` | Referensi status karyawan | `status_code` |
 | `lms_sch.departments` | Referensi departemen | `deptno` |
@@ -529,12 +529,16 @@ disbursement_amount = approved_amount − admin_fee
 ```
 > Dana yang benar-benar diterima anggota adalah `disbursement_amount` (setelah dipotong admin fee).
 
-**Credit Limit:**
+**Credit Limit & Validasi Multi-Loan:**
 ```
 credit_limit = evaluasi(LOAN_LIMIT_FORMULA)
 Jika credit_limit > employee_categories.max_limit → credit_limit = max_limit
-Jika requested_amount > credit_limit → TOLAK
+
+Total Exposure Baru = employees.total_loan + Pengajuan Baru (Pokok + Bunga)
+Jika Total Exposure Baru > credit_limit → TOLAK
+Sisa Limit Tersedia = max(0, credit_limit - employees.total_loan)
 ```
+> **Catatan Multi-Loan:** Field `total_loan` pada `lms_sch.employees` menyimpan total kewajiban (Pokok + Bunga) dari seluruh pinjaman aktif dan pengajuan gantung (`SUBMITTED`/`APPROVED`).
 
 ---
 
@@ -649,9 +653,15 @@ Sebelum record pengajuan disimpan ke database dengan status `SUBMITTED`, backend
    - Jika diluar periode, pengajuan ditolak dengan pesan: *"Pengajuan hanya diizinkan antara tanggal X sampai Y"*.
 3. **Validasi Tenor Maksimum (`LOAN_MAX_TENOR`)**:
    - Tenor yang diajukan tidak boleh melebihi `min(loan_products.max_tenor_months, LOAN_MAX_TENOR)`.
-4. **Validasi Credit Limit Dinamis (`LOAN_LIMIT_FORMULA`)**:
+4. **Validasi Credit Limit Dinamis & Multi-Loan (`LOAN_LIMIT_FORMULA` & `employees.total_loan`)**:
    - Credit limit dihitung secara *real-time* menggunakan expression engine `govaluate` dengan formula dari `LOAN_LIMIT_FORMULA` (variabel: `DAY`, `SALARY`, `REQUESTED_AMOUNT`, `TENOR`).
-   - Apabila `requested_amount > credit_limit`, backend menolak pengajuan dan menampilkan batas maksimum kredit yang diizinkan.
+   - **Multi-Loan Credit Limit Engine**:
+     - Sistem mengambil nilai kewajiban eksisting `employees.total_loan` ($	ext{Pokok} + 	ext{Bunga}$) dari tabel `lms_sch.employees`.
+     - Menghitung total kewajiban pengajuan baru: $N_{	ext{total}} = 	ext{Requested Amount} + 	ext{Total Bunga Tenor}$.
+     - Akumulasi total kewajiban: $	ext{Total Exposure} = 	ext{employees.total\_loan} + N_{	ext{total}}$.
+     - Jika $	ext{Total Exposure} > 	ext{credit\_limit}$, pengajuan **DITOLAK** dengan pesan presisi dalam format Rupiah:
+       > *"Pengajuan ditolak. Total kewajiban pinjaman Anda (Rp X) + pengajuan baru (Rp Y) = Rp Z melebihi Credit Limit (Rp CL). Sisa limit yang dapat diajukan (Pokok + Bunga): Rp Available"*
+     - Jika $	ext{Total Exposure} \le 	ext{credit\_limit}$, pengajuan diterima dan `employees.total_loan` langsung diperbarui secara komulatif.
 5. **Kalkulasi Biaya Admin (`LOAN_ADMIN_FORMULA` & `LOAN_MIN_ADMIN_FEE`)**:
    - Biaya admin dihitung otomatis melalui formula `LOAN_ADMIN_FORMULA`.
    - Jika hasil kalkulasi di bawah `LOAN_MIN_ADMIN_FEE` (floor value), maka biaya admin ditetapkan sebesar `LOAN_MIN_ADMIN_FEE`.
@@ -686,7 +696,7 @@ Setelah pengajuan berstatus `APPROVED`, pencairan dana dikonfirmasi oleh petugas
 
 ---
 
-### 8.7 Pencairan Pinjaman (Disbursement)### 8.7 Pencairan Pinjaman (Disbursement)
+### 8.8 Pencairan Pinjaman (Disbursement)
 
 **Narasi Proses:**
 
@@ -698,7 +708,7 @@ Setelah pengajuan berstatus `APPROVED`, petugas melakukan pencairan (`POST /api/
 
 ---
 
-### 8.7 Siklus Penagihan Payroll Bulanan
+### 8.9 Siklus Penagihan Payroll Bulanan
 
 **Narasi Proses:**
 
@@ -910,6 +920,49 @@ Setiap pelunasan manual dicatat ke `payroll_deductions` dengan `status = 'SUCCES
 
 
 ---
+
+
+
+---
+
+### 8.7 Spesifikasi Teknis Validasi Credit Limit Multi-Loan (Tabel Employees)
+
+#### 1. Pokok-Pokok Ketentuan
+1. **Lokasi Field `total_loan`**:  
+   Ditambahkan pada tabel **`lms_sch.employees`** (berdampingan dengan field `salary` dan `employee_id`).
+2. **Definisi `total_loan`**:  
+   `total_loan` = **Pokok + Bunga** (Total Nilai Kewajiban Angsuran Pinjaman Eksisting).
+3. **Formula Validasi Credit Limit**:  
+   $$\text{Total Loan Kumulatif} = \text{employees.total\_loan} + \text{Pengajuan Baru (Pokok + Bunga)} \le \text{Credit Limit}$$
+
+#### 2. Matriks Lifecycle Perubahan State `employees.total_loan`
+| Event / Aksi | Perubahan `total_loan` di `lms_sch.employees` | Keterangan |
+|---|---|---|
+| **Submit Pinjaman Baru** | `total_loan += (Pokok + Bunga)` | Mengunci limit sejak status `SUBMITTED` / `PENDING` |
+| **Penolakan (`REJECTED`) / Batal** | `total_loan -= (Pokok + Bunga)` | Melepas kuncian limit jika pengajuan ditolak/dibatalkan |
+| **Pembayaran Angsuran (Payroll / Manual)** | `total_loan -= Total Angsuran Dibayar` | Mengurangi `total_loan` sebesar nominal angsuran terbayar |
+| **Pelunasan Penuh (`CLOSED`)** | Resync otomatis ke sisa kewajiban | Pinjaman lunas, limit kembali pulih sepenuhnya |
+
+#### 3. DDL Migration Script (`backend/migrations/add_total_loan_to_employees.sql`)
+```sql
+-- Tambah kolom total_loan pada tabel lms_sch.employees
+ALTER TABLE lms_sch.employees 
+ADD COLUMN IF NOT EXISTS total_loan NUMERIC(15, 2) DEFAULT 0.00;
+
+-- Update nilai awal total_loan berdasarkan saldo pinjaman aktif + pengajuan gantung
+UPDATE lms_sch.employees e
+SET total_loan = COALESCE((
+    SELECT SUM(l.outstanding_amount) 
+    FROM lms_sch.loans l 
+    JOIN lms_sch.members m ON l.member_no = m.member_no
+    WHERE m.employee_id = e.employee_id AND l.status = 'ACTIVE'
+), 0) + COALESCE((
+    SELECT SUM(la.requested_amount * (1 + (la.tenor * 0.01))) 
+    FROM lms_sch.loan_applications la 
+    JOIN lms_sch.members m ON la.member_no = m.member_no
+    WHERE m.employee_id = e.employee_id AND la.status IN ('SUBMITTED', 'PENDING', 'REVIEWED', 'APPROVED')
+), 0);
+```
 
 ## 9. Integrasi Billing HRD-Adira
 
@@ -1193,35 +1246,49 @@ Demi menjaga kerahasiaan data keuangan anggota, sistem LMS membedakan hak akses 
 
 ---
 
+
+
+---
+
 ## 13. Global Parameters Kunci
 
-| Key Name | Contoh Nilai | Fungsi |
+| Parameter | Default | Deskripsi |
 |---|---|---|
-| `FOLDER_BILL_EXPORT` | `D:\Data_NK\Project5\LMS\Billing\Export` | Folder output export CSV |
-| `FOLDER_BILL_IMPORT` | `D:\Data_NK\Project5\LMS\Billing\Import` | Folder input import CSV |
-| `FOLDER_BILL_IMPORT_BCK` | `D:\Data_NK\Project5\LMS\Billing\BCK` | Backup file import |
-| `FOLDER_BILL_EXPORT_BCK` | `D:\Data_NK\Project5\LMS\Billing\BCK` | Backup file export |
-| `SCAN_DUEDATE_BILLING` | `PERIOD` | Mode scan export: PERIOD / DUEDATE |
+| `LOAN_START_PERIOD` | `1` | Tanggal awal periode diizinkan pengajuan pinjaman |
+| `LOAN_END_PERIOD` | `31` | Tanggal akhir periode diizinkan pengajuan pinjaman |
+| `LOAN_DUEDATE` | `25` | Tanggal jatuh tempo angsuran setiap bulannya |
+| `LOAN_DUEMONTH` | `0` | Offset bulan jatuh tempo angsuran pertama (`0` = bulan ini, `1` = bulan depan) |
+| `LOAN_MAX_TENOR` | `12` | Batas maksimum tenor (bulan) secara global |
+| `LOAN_LIMIT_FORMULA` | `SALARY * 0.5` | Formula perhitungan credit limit berbasis gaji/hari |
+| `LOAN_ADMIN_FORMULA` | `REQUESTED_AMOUNT * 0.01` | Formula biaya administrasi pinjaman |
+| `LOAN_MIN_ADMIN_FEE` | `30000` | Minimum biaya administrasi pinjaman (floor value) |
+| `PAGINATION_LIMIT` | `5` | Jumlah baris data per halaman untuk query tabel master/transaksi |
+| `LOG_SUBMIT_LOAN_PATH` | `./logs/submit_loan.log` | Path dan nama file log transaksi pengajuan pinjaman |
+| `RC_SUBMIT_LOAN_SUCCESS` | `00` | Response Code transaksi pengajuan pinjaman sukses (`SUBMITTED`) |
+| `RC_SUBMIT_LOAN_NON_KOPKARA` | `10` | Response Code ditolak bukan anggota Kopkara |
+| `RC_SUBMIT_LOAN_NON_ADIRA` | `11` | Response Code ditolak bukan karyawan Adira |
+| `RC_SUBMIT_LOAN_TENOR` | `12` | Response Code ditolak Tenor Melebihi Batas Maksimum |
+| `RC_SUBMIT_LOAN_CREDIT_LIMIT` | `13` | Response Code ditolak Jumlah Pinjaman Melebihi Credit Limit |
+| `RC_SUBMIT_LOAN_PERIOD` | `14` | Response Code ditolak Di Luar Periode Tanggal Pengajuan |
+| `RC_SUBMIT_LOAN_OTHERS` | `99` | Response Code ditolak alasan lainnya (`OTHERS`) |
 
 ---
 
-## Lampiran: Konvensi Kode
+### 13.1 Spesifikasi Log Transaksi Submit Loan & Response Code (RC)
 
-### Naming Convention
-- **Go:** `camelCase` lokal, `PascalCase` publik
-- **Database:** `snake_case` kolom dan tabel
-- **JSON API:** `snake_case` field request/response
+Setiap transaksi pengajuan pinjaman (`POST /api/applications`) secara otomatis dicatat ke file log yang ditentukan oleh parameter `LOG_SUBMIT_LOAN_PATH`.
 
-### Error Handling
-- Handler return `gin.H{"error": "..."}` dengan HTTP status sesuai
-- DB error di-log via `log.Printf()`
-- Import error dicatat ke `payroll_deductions` sebagai `status = 'FAILED'`
+**Format File Log:**
+```text
+datetime, RC, employee_id, product_id, submission_date, requested_amount, tenor, status
+```
 
-### Audit Trail
-- Setiap write: `updated_user` (employee_id) + `updated_at` (timestamp)
-- Tracking lengkap: `loan_trackings` untuk lifecycle pengajuan
-- Log import: `loan_payroll_import_logs` per file CSV
-
----
-
-*Dokumentasi teknis sistem LMS Kopkara. Tim IT, Agustus 2026.*
+**Penjelasan Field Log:**
+- `datetime`: Timestamp transaksi sistem saat log ditulis (`YYYY-MM-DD HH:MM:SS`).
+- `RC`: Response Code sesuai tabel parameter `RC_SUBMIT_LOAN_*` yang dievaluasi sebelum dan saat submit.
+- `employee_id`: ID karyawan dari pemohon pinjaman.
+- `product_id`: ID produk pinjaman yang diajukan.
+- `submission_date`: Tanggal pengajuan pinjaman (`YYYY-MM-DD`).
+- `requested_amount`: Nominal pinjaman yang diajukan.
+- `tenor`: Tenor pinjaman dalam bulan.
+- `status`: Status hasil evaluasi pengajuan (`SUBMITTED`, `REJECTED_NON_KOPKARA`, `REJECTED_NON_ADIRA`, `REJECTED_PERIOD`, `REJECTED_TENOR`, `REJECTED_CREDIT_LIMIT`, `REJECTED_PRODUCT_NOT_FOUND`).

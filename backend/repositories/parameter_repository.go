@@ -36,7 +36,7 @@ func NewParameterRepository(db *gorm.DB) ParameterRepository {
 
 func (r *parameterRepository) refreshCache() {
 	var params []models.GlobalParameter
-	if err := r.db.Where("deleted_at IS NULL").Find(&params).Error; err == nil {
+	if err := r.db.Where("deleted_at IS NULL").Order("id ASC").Find(&params).Error; err == nil {
 		r.mu.Lock()
 		r.cache = params
 		r.cacheMap = make(map[string]models.GlobalParameter)
@@ -49,13 +49,6 @@ func (r *parameterRepository) refreshCache() {
 }
 
 func (r *parameterRepository) FindAll() ([]models.GlobalParameter, error) {
-	r.mu.RLock()
-	if r.isLoaded {
-		defer r.mu.RUnlock()
-		return r.cache, nil
-	}
-	r.mu.RUnlock()
-
 	r.refreshCache()
 	r.mu.RLock()
 	defer r.mu.RUnlock()

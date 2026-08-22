@@ -28,12 +28,13 @@ func (EmployeeCategory) TableName() string {
 
 // Employee represents lms_sch.employees
 type Employee struct {
-	EmployeeID     int64  `gorm:"primaryKey;column:employee_id;autoIncrement:false" json:"employee_id"`
-	Name           string `gorm:"column:name" json:"name"`
+	EmployeeID     int64   `gorm:"primaryKey;column:employee_id;autoIncrement:false" json:"employee_id"`
+	Name           string  `gorm:"column:name" json:"name"`
 	EmployeeStatus string  `gorm:"column:employee_status" json:"employee_status"` // renamed from work_status
-	DeptNo         string `gorm:"column:deptno" json:"deptno"`
+	DeptNo         string  `gorm:"column:deptno" json:"deptno"`
 	CategoryCode   string  `gorm:"column:category_code" json:"category_code"`
 	Salary         float64 `gorm:"column:salary" json:"salary"`
+	TotalLoan      float64 `gorm:"column:total_loan" json:"total_loan"`
 	MasterBaseModel
 }
 

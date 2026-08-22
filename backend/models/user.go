@@ -11,7 +11,7 @@ type User struct {
 	Password            string     `gorm:"column:password" json:"-"`
 	Name                string     `gorm:"column:name" json:"name"`
 	RoleID              int64      `gorm:"column:role_id" json:"role_id"`
-	MemberNo            *int64     `gorm:"column:member_no" json:"member_no"`
+	MemberNo            *int64     `gorm:"column:member_no;index" json:"member_no"`
 	FailedLoginAttempts int        `gorm:"column:failed_login_attempts;default:0" json:"failed_login_attempts"`
 	LockedUntil         *time.Time `gorm:"column:locked_until" json:"locked_until"`
 	PasswordChangedAt   time.Time  `gorm:"column:password_changed_at;autoCreateTime" json:"password_changed_at"`

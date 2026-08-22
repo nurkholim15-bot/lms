@@ -7,6 +7,16 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || `${API_PROTOCOL}//localhost
 // Enable credentials (HttpOnly Cookie Transmission) across all Axios requests
 axios.defaults.withCredentials = true;
 
+// Axios Request Interceptor: Automatically attach Authorization Bearer Token to all API requests
+axios.interceptors.request.use((config) => {
+  config.withCredentials = true;
+  const token = sessionStorage.getItem('lms_auth_token') || localStorage.getItem('lms_auth_token') || '';
+  if (token && !config.headers['Authorization']) {
+    config.headers['Authorization'] = `Bearer ${token}`;
+  }
+  return config;
+}, (error) => Promise.reject(error));
+
 // Konfigurasi Role dan Menu
 const MENU_CONFIG = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊', roles: ['anggota', 'admin', 'hrd'] },
@@ -25,7 +35,7 @@ function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [masterTab, setMasterTab] = useState('departments');
-  const [expandedParents, setExpandedParents] = useState({ 10: true });
+  const [expandedParents, setExpandedParents] = useState({ 9: true, 10: true });
   const [masterSearchQuery, setMasterSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -368,15 +378,26 @@ function App() {
 
   // Default Fallback System Menus apabila database belum termuat
   const defaultFallbackMenus = [
-    { menu_id: 1, title: 'Dashboard', icon: '📊', path: 'dashboard', roles: ['admin', 'anggota', 'hrd'] },
-    { menu_id: 2, title: 'Pengajuan Pinjaman', icon: '📝', path: 'pengajuan', roles: ['admin', 'anggota'] },
-    { menu_id: 3, title: 'Daftar Pinjaman', icon: '💰', path: 'pinjaman', roles: ['admin', 'anggota', 'hrd'] },
-    { menu_id: 4, title: 'Approval Pinjaman', icon: '✅', path: 'approval', roles: ['admin'] },
-    { menu_id: 5, title: 'Potong Gaji (HRD)', icon: '✂️', path: 'payroll', roles: ['admin', 'hrd'] },
-    { menu_id: 6, title: 'Pelunasan Manual', icon: '💳', path: 'manual-repayment', roles: ['admin'] },
-    { menu_id: 7, title: 'Produk Pinjaman', icon: '📦', path: 'products', roles: ['admin', 'anggota', 'hrd'] },
-    { menu_id: 8, title: 'Pengaturan Parameter', icon: '⚙️', path: 'parameters', roles: ['admin'] },
-    { menu_id: 9, title: 'Data Master', icon: '🗃️', path: 'master', roles: ['admin'] }
+    { menu_id: 1, parent_id: null, title: 'Dashboard', icon: '📊', path: 'dashboard', roles: ['admin', 'anggota', 'hrd'], order_seq: 1 },
+    { menu_id: 2, parent_id: null, title: 'Pengajuan Pinjaman', icon: '📝', path: 'pengajuan', roles: ['admin', 'anggota'], order_seq: 2 },
+    { menu_id: 3, parent_id: null, title: 'Daftar Pinjaman', icon: '💰', path: 'pinjaman', roles: ['admin', 'anggota', 'hrd'], order_seq: 3 },
+    { menu_id: 4, parent_id: null, title: 'Approval Pinjaman', icon: '✅', path: 'approval', roles: ['admin'], order_seq: 4 },
+    { menu_id: 5, parent_id: null, title: 'Potong Gaji (HRD)', icon: '✂️', path: 'payroll', roles: ['admin', 'hrd'], order_seq: 5 },
+    { menu_id: 6, parent_id: null, title: 'Pelunasan Manual', icon: '💳', path: 'manual-repayment', roles: ['admin'], order_seq: 6 },
+    { menu_id: 7, parent_id: null, title: 'Produk Pinjaman', icon: '📦', path: 'products', roles: ['admin', 'anggota', 'hrd'], order_seq: 7 },
+    { menu_id: 8, parent_id: null, title: 'Pengaturan Parameter', icon: '⚙️', path: 'parameters', roles: ['admin'], order_seq: 8 },
+    { menu_id: 9, parent_id: null, title: 'Data Master', icon: '🗃️', path: 'master', roles: ['admin'], order_seq: 9 },
+    { menu_id: 901, parent_id: 9, title: 'Master User Accounts', icon: '👥', path: 'master-users', roles: ['admin'], order_seq: 901 },
+    { menu_id: 902, parent_id: 9, title: 'Master Data Karyawan', icon: '👨‍💼', path: 'master-employees', roles: ['admin'], order_seq: 902 },
+    { menu_id: 903, parent_id: 9, title: 'Master Anggota Kopkara', icon: '💳', path: 'master-members', roles: ['admin'], order_seq: 903 },
+    { menu_id: 904, parent_id: 9, title: 'Master Role Sistem', icon: '🔑', path: 'master-roles', roles: ['admin'], order_seq: 904 },
+    { menu_id: 905, parent_id: 9, title: 'Master Menu Navigation', icon: '📜', path: 'master-menus', roles: ['admin'], order_seq: 905 },
+    { menu_id: 906, parent_id: 9, title: 'Hak Akses Role-Menu', icon: '🔒', path: 'master-role-menus', roles: ['admin'], order_seq: 906 },
+    { menu_id: 907, parent_id: 9, title: 'Master Active Sessions', icon: '🖥️', path: 'master-sessions', roles: ['admin'], order_seq: 907 },
+    { menu_id: 908, parent_id: 9, title: 'Master Department', icon: '🏢', path: 'master-departments', roles: ['admin'], order_seq: 908 },
+    { menu_id: 909, parent_id: 9, title: 'Master Status Karyawan', icon: '📊', path: 'master-employee-statuses', roles: ['admin'], order_seq: 909 },
+    { menu_id: 910, parent_id: 9, title: 'Master Status Kopkara', icon: '🏷️', path: 'master-kopkara-statuses', roles: ['admin'], order_seq: 910 },
+    { menu_id: 911, parent_id: 9, title: 'Master Kategori Karyawan', icon: '📁', path: 'master-employee-categories', roles: ['admin'], order_seq: 911 }
   ].filter(m => {
     if (roleId === 1 || String(realRoleName).toLowerCase() === 'admin') return true;
     if (roleId === 3 || String(realRoleName).toLowerCase() === 'hrd') return m.roles.includes('hrd');
@@ -387,21 +408,34 @@ function App() {
     ? (referenceData.menus || []).map(m => String(m.menu_id)) 
     : (referenceData.role_menus || []).filter(rm => String(rm.role_id) === String(roleId)).map(rm => String(rm.menu_id));
 
-  let computedVisible = (userInfo && userInfo.menus && userInfo.menus.length > 0) 
+  let sourceMenus = (userInfo && userInfo.menus && userInfo.menus.length > 0) 
     ? userInfo.menus 
     : ((referenceData.menus && referenceData.menus.length > 0)
-        ? referenceData.menus.filter(m => (roleId === 1 || String(realRoleName).toLowerCase() === 'admin' || allowedMenuIds.includes(String(m.menu_id)))).sort((a, b) => (a.order || 0) - (b.order || 0))
+        ? referenceData.menus.filter(m => (roleId === 1 || String(realRoleName).toLowerCase() === 'admin' || allowedMenuIds.includes(String(m.menu_id))))
         : defaultFallbackMenus);
 
-  let visibleMenus = (computedVisible && computedVisible.length > 0) ? computedVisible : defaultFallbackMenus;
-
-  // Garansi Akses Menu Data Master untuk Setiap Pengguna Ber-Role Admin (roleId === 1)
-  if (roleId === 1 || String(realRoleName).toLowerCase() === 'admin') {
-    const hasMaster = visibleMenus.some(m => m.path === 'master' || String(m.title).toLowerCase().includes('master'));
-    if (!hasMaster) {
-      visibleMenus = [...visibleMenus, { menu_id: 9, title: 'Data Master', icon: '🗃️', path: 'master', order_seq: 9 }];
-    }
+  if (!sourceMenus || sourceMenus.length === 0) {
+    sourceMenus = defaultFallbackMenus;
   }
+
+  // Deduplicate menus by path & title to guarantee zero duplicate master parent menus on sidebar
+  const uniqueMenuMap = new Map();
+  sourceMenus.forEach(m => {
+    let normalizedPath = String(m.path || '').toLowerCase().trim();
+    if (normalizedPath === 'master-data' || normalizedPath === 'master') {
+      normalizedPath = 'master';
+    }
+    // Key by normalized path OR title to prevent legacy DB rows ('Master Data' vs 'Data Master') from duplicating
+    const key = (normalizedPath === 'master' || (m.title && m.title.toLowerCase().includes('master') && !m.parent_id))
+      ? 'parent_master'
+      : `${m.menu_id}_${normalizedPath}`;
+
+    if (!uniqueMenuMap.has(key)) {
+      uniqueMenuMap.set(key, { ...m, path: normalizedPath === 'master' ? 'master' : m.path, title: normalizedPath === 'master' ? 'Data Master' : m.title });
+    }
+  });
+
+  let visibleMenus = Array.from(uniqueMenuMap.values()).sort((a, b) => (a.order_seq || a.menu_id || 0) - (b.order_seq || b.menu_id || 0));
 
   // Update HTML Document Title
   useEffect(() => {
@@ -1604,7 +1638,7 @@ function App() {
 
   const fetchParameters = async () => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/parameters`);
+      const response = await axios.get(`${API_BASE_URL}/api/parameters?limit=1000`);
       setParameters(response.data.data || []);
     } catch (error) {
       console.error("Error fetching parameters:", error);
@@ -1683,7 +1717,12 @@ function App() {
 
   // Sync masterTab with activeTab for dynamic master menus
   useEffect(() => {
-    if (activeTab.startsWith('master-')) {
+    if (activeTab === 'master') {
+      if (!masterTab) setMasterTab('users');
+      setCurrentPage(1);
+      setMasterSearchQuery('');
+      setMasterForm({});
+    } else if (activeTab.startsWith('master-')) {
       const tab = activeTab.replace('master-', '');
       setMasterTab(tab);
       setCurrentPage(1);
@@ -1796,6 +1835,9 @@ function App() {
         headers
       });
       const user = res.data.user;
+      if (overrideToken) {
+        sessionStorage.setItem('lms_auth_token', overrideToken);
+      }
       setCurrentUser(user);
       const appUserKey = getParamVal('APP_USER', 'ewa_user');
       localStorage.setItem(appUserKey, JSON.stringify(user));
@@ -1827,6 +1869,9 @@ function App() {
     try {
       const res = await axios.post(`${API_BASE_URL}/api/karisma/login`, loginForm, { withCredentials: true });
       const receivedToken = res.data?.token || '';
+      if (receivedToken) {
+        sessionStorage.setItem('lms_auth_token', receivedToken);
+      }
       await verifySession(receivedToken);
     } catch (err) {
       setLoginError(err.response?.data?.error || 'Username atau Password salah!');
@@ -1844,13 +1889,16 @@ function App() {
     localStorage.removeItem('karisma_user');
     localStorage.removeItem('karisma_token');
     localStorage.removeItem('ewa_token');
+    localStorage.removeItem('lms_auth_token');
+    sessionStorage.removeItem('lms_auth_token');
+    sessionStorage.clear();
     setCurrentUser(null);
     setUserInfo(null);
     setActiveTab('dashboard');
     if (reason) {
       setLoginError(reason);
     }
-    window.location.reload();
+    window.location.href = '/';
   };
 
     const getMasterTitle = (tab) => {
@@ -1862,7 +1910,7 @@ function App() {
     if (tab === 'members') return 'Master Anggota Kopkara';
     if (tab === 'roles') return 'Master Role Sistem';
     if (tab === 'menus') return 'Master Menu Navigation';
-    if (tab === 'parameters') return 'Parameter Global';
+    if (tab === 'parameters') return 'Pengaturan Parameter Global';
     if (tab === 'users') return 'Master User Accounts';
     if (tab === 'sessions') return 'Master Active Sessions';
     return `Master ${tab.replace('-', ' ')}`;
@@ -1876,16 +1924,22 @@ function App() {
     if (tab === 'members') return 'member_no';
     if (tab === 'roles') return 'role_id';
     if (tab === 'menus') return 'menu_id';
-    if (tab === 'parameters') return 'id';
+    if (tab === 'parameters') return 'key_name';
     if (tab === 'users') return 'id';
     return 'id';
   };
 
   const getFieldValue = (form, key) => {
-    if (!form) return '';
-    if (form[key] !== undefined && form[key] !== null) return form[key];
-    const match = Object.keys(form).find(m => m.toLowerCase() === key.toLowerCase());
-    if (match && form[match] !== undefined && form[match] !== null) return form[match];
+    if (form && form[key] !== undefined && form[key] !== null) return form[key];
+    if (paramForm && paramForm[key] !== undefined && paramForm[key] !== null) return paramForm[key];
+    if (form) {
+      const match = Object.keys(form).find(m => m.toLowerCase() === key.toLowerCase());
+      if (match && form[match] !== undefined && form[match] !== null) return form[match];
+    }
+    if (paramForm) {
+      const match = Object.keys(paramForm).find(m => m.toLowerCase() === key.toLowerCase());
+      if (match && paramForm[match] !== undefined && paramForm[match] !== null) return paramForm[match];
+    }
     return '';
   };
 
@@ -1921,7 +1975,7 @@ function App() {
         if (payload.DeptNo !== undefined && payload.DeptNo !== null) { payload.deptno = String(payload.DeptNo).trim(); delete payload.DeptNo; }
       }
 
-      await axios.post(`${API_BASE_URL}/api/master/${masterTab}`, payload);
+      await axios.post(`${API_BASE_URL}/api/master/${masterTab}`, payload, { withCredentials: true });
       setIsMasterModalOpen(false);
       setIsEditMasterMode(false);
       setMasterForm({});
@@ -1935,7 +1989,7 @@ function App() {
   const deleteMasterData = async (pkField, pkValue) => {
     if (window.confirm(`Yakin ingin menghapus data dengan ${pkField} = ${pkValue}?`)) {
       try {
-        await axios.delete(`${API_BASE_URL}/api/master/${masterTab}/${pkValue}`);
+        await axios.delete(`${API_BASE_URL}/api/master/${masterTab}/${pkValue}`, { withCredentials: true });
         alert('Data berhasil dihapus!');
         fetchMasterData(masterTab);
         fetchReferenceData();
@@ -1963,17 +2017,26 @@ function App() {
     }
   }, [activeTab, masterTab]);
 
-  const submitParameter = async (e) => {
-    e.preventDefault();
+    const submitParameter = async (e) => {
+    if (e) e.preventDefault();
     try {
+      const kName = paramForm.key_name || masterForm.key_name || '';
+      const kVal = paramForm.key_value || masterForm.key_value || '';
+      const kDesc = paramForm.description || masterForm.description || '';
+      const pId = paramForm.id || masterForm.id || 0;
+
       await axios.post(`${API_BASE_URL}/api/parameters`, {
-        id: parseInt(paramForm.id),
-        key_name: paramForm.key_name,
-        key_value: paramForm.key_value,
-        description: paramForm.description
-      });
+        id: pId,
+        key_name: kName,
+        key_value: kVal,
+        description: kDesc
+      }, { withCredentials: true });
+
       alert('Parameter berhasil disimpan!');
       setParamForm({ id: 0, key_name: '', key_value: '', description: '' });
+      setMasterForm({});
+      setIsMasterModalOpen(false);
+      setIsEditMasterMode(false);
       fetchParameters();
     } catch (error) {
       alert('Gagal menyimpan parameter: ' + (error.response?.data?.error || error.message));
@@ -2390,11 +2453,7 @@ function App() {
                           }}
                           style={{ width: '100%', padding: '10px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontWeight: 600, fontSize: '0.95rem', outline: 'none' }}
                         />
-                        {form.requested_amount && (
-                          <span style={{ fontSize: '0.8rem', color: '#0284c7', display: 'block', marginTop: '4px', fontWeight: 500 }}>
-                            Nominal Terbaca: <strong>Rp {Number(form.requested_amount).toLocaleString('id-ID')}</strong>
-                          </span>
-                        )}
+
                       </div>
                     </div>
 
@@ -2427,18 +2486,45 @@ function App() {
                     {simulation && !simulation.error && (
                       <div style={{ marginTop: '12px', padding: '16px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#1e293b' }}>
                         <h3 style={{ fontSize: '1rem', marginBottom: '12px', color: 'var(--header-bg, #0B2545)', borderBottom: '1px solid #e2e8f0', paddingBottom: '6px' }}>Rincian Simulasi Pinjaman</h3>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '0.875rem' }}>
-                          <div><span style={{ color: '#64748b' }}>Pokok per Bulan:</span> <br/><strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.principal_per_month).toLocaleString('id-ID')}</strong></div>
-                          <div><span style={{ color: '#64748b' }}>Bunga per Bulan ({simulation.interest_rate}%):</span> <br/><strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.interest_per_month).toLocaleString('id-ID')}</strong></div>
-                          <div><span style={{ color: '#64748b' }}>Biaya Administrasi:</span> <br/><strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.admin_fee).toLocaleString('id-ID')}</strong></div>
-                          <div><span style={{ color: '#64748b' }}>Total Angsuran per Bulan:</span> <br/><strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.total_installment).toLocaleString('id-ID')}</strong></div>
-                          <div style={{ gridColumn: 'span 2', marginTop: '6px', paddingTop: '6px', borderTop: '1px dashed #cbd5e1' }}>
-                            <span style={{ color: '#64748b' }}>Batas Plafon Maksimal (Berdasarkan Rumus):</span> <br/>
-                            <strong style={{ fontSize: '1.05rem', color: '#047857' }}>Rp {simulation.credit_limit ? Math.round(simulation.credit_limit).toLocaleString('id-ID') : 'Tidak Dibatasi'}</strong>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 24px', fontSize: '0.875rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ color: '#64748b' }}>Pokok per Bulan:</span>
+                            <strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.principal_per_month).toLocaleString('id-ID')}</strong>
                           </div>
-                          <div style={{ gridColumn: 'span 2', marginTop: '4px' }}>
-                            <span style={{ color: '#64748b' }}>Total Kewajiban (Pokok + Bunga + Admin):</span> <br/>
-                            <strong style={{ fontSize: '1.15rem', color: '#0f172a' }}>Rp {Math.round(simulation.total_loan_cost).toLocaleString('id-ID')}</strong>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ color: '#64748b' }}>Bunga per Bulan ({simulation.interest_rate}%):</span>
+                            <strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.interest_per_month).toLocaleString('id-ID')}</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ color: '#64748b' }}>Biaya Administrasi:</span>
+                            <strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.admin_fee).toLocaleString('id-ID')}</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ color: '#64748b' }}>Total Angsuran per Bulan:</span>
+                            <strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.total_installment).toLocaleString('id-ID')}</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gridColumn: 'span 2', marginTop: '6px', paddingTop: '8px', borderTop: '1px dashed #cbd5e1' }}>
+                            <span style={{ color: '#64748b' }}>
+                              {(() => {
+                                const d = new Date();
+                                const day = String(d.getDate()).padStart(2, '0');
+                                const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+                                const m = months[d.getMonth()];
+                                const y = d.getFullYear();
+                                return `Batas Plafon Maksimal ${day}-${m}-${y}:`;
+                              })()}
+                            </span>
+                            <strong style={{ fontSize: '1rem', color: '#047857' }}>Rp {simulation.credit_limit ? Math.round(simulation.credit_limit).toLocaleString('id-ID') : 'Tidak Dibatasi'}</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gridColumn: 'span 2' }}>
+                            <span style={{ color: '#64748b' }}>Total Pinjaman Sebelumnya:</span>
+                            <strong style={{ fontSize: '0.95rem', color: '#0f172a' }}>Rp {Math.round(simulation.total_previous_loans || 0).toLocaleString('id-ID')}</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gridColumn: 'span 2' }}>
+                            <span style={{ color: '#64748b' }}>Sisa Plafon Pinjaman:</span>
+                            <strong style={{ fontSize: '0.95rem', color: '#047857' }}>
+                              {simulation.credit_limit ? `Rp ${Math.round(simulation.remaining_limit !== undefined ? simulation.remaining_limit : Math.max(0, simulation.credit_limit - (simulation.total_previous_loans || 0))).toLocaleString('id-ID')}` : 'Tidak Dibatasi'}
+                            </strong>
                           </div>
                         </div>
                       </div>
@@ -2742,83 +2828,187 @@ function App() {
             </div>
           )}
 
-          {activeTab === 'parameters' && (
-            <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
-              <div className="card" style={{ flex: '1', minWidth: '300px' }}>
-                <h2>{paramForm.id ? 'Edit Parameter' : 'Tambah Parameter Baru'}</h2>
-                <form onSubmit={submitParameter} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '24px' }}>
-                  <div>
-                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Key Name (Misal: max_loan_limit)</label>
-                    <input 
-                      type="text" required
-                      value={paramForm.key_name}
-                      onChange={e => setParamForm({...paramForm, key_name: e.target.value})}
-                      style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)' }}
-                      disabled={paramForm.id > 0} // Key tidak bisa diubah jika edit
-                    />
-                  </div>
-                  <div>
-                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Key Value</label>
-                    <input 
-                      type="text" required
-                      value={paramForm.key_value}
-                      onChange={e => setParamForm({...paramForm, key_value: e.target.value})}
-                      style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)' }}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Deskripsi</label>
-                    <textarea 
-                      value={paramForm.description}
-                      onChange={e => setParamForm({...paramForm, description: e.target.value})}
-                      style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)', minHeight: '80px' }}
-                    />
-                  </div>
-                  <div style={{ display: 'flex', gap: '12px' }}>
-                    <button type="submit" style={{ padding: '10px 20px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '4px', fontWeight: 600, cursor: 'pointer' }}>
-                      Simpan Parameter
-                    </button>
-                    {paramForm.id > 0 && (
-                      <button type="button" onClick={() => setParamForm({ id: 0, key_name: '', key_value: '', description: '' })} style={{ padding: '10px 20px', background: 'var(--button-cancel-bg, #64748b)', color: '#ffffff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                </form>
-              </div>
+          {(activeTab === 'parameters' || activeTab === 'master-parameters') && (() => {
+            const q = (masterSearchQuery || '').toLowerCase().trim();
+            const sortedParams = [...(parameters || [])].sort((a, b) => {
+              const idA = parseInt(a.id || a.ID || 0);
+              const idB = parseInt(b.id || b.ID || 0);
+              return idA - idB;
+            });
+            const filteredParams = sortedParams.filter(p => {
+              if (!q) return true;
+              const kn = String(p.key_name || p.KeyName || '').toLowerCase();
+              const kv = String(p.key_value || p.KeyValue || '').toLowerCase();
+              const kd = String(p.description || p.Description || '').toLowerCase();
+              return kn.includes(q) || kv.includes(q) || kd.includes(q);
+            });
 
-              <div className="table-container" style={{ flex: '2', minWidth: '500px' }}>
-                <div className="table-header">Daftar Parameter Global</div>
-                <table>
-                  <thead>
-                    <tr>
-                      <th style={{ padding: '8px 12px', fontSize: '0.875rem' }}>Key Name</th>
-                      <th style={{ padding: '8px 12px', fontSize: '0.875rem' }}>Value</th>
-                      <th style={{ padding: '8px 12px', fontSize: '0.875rem' }}>Deskripsi</th>
-                      <th style={{ padding: '8px 12px', fontSize: '0.875rem' }}>Aksi</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {parameters.length === 0 ? (
-                      <tr><td colSpan="4" style={{ textAlign: 'center' }}>Belum ada konfigurasi parameter</td></tr>
-                    ) : (
-                      parameters.map(param => (
-                        <tr key={param.ID} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                          <td style={{ padding: '6px 12px', fontSize: '0.875rem' }}><strong>{param.KeyName}</strong></td>
-                          <td style={{ padding: '6px 12px', fontSize: '0.875rem' }}>{param.KeyValue}</td>
-                          <td style={{ padding: '6px 12px', fontSize: '0.875rem' }}>{param.Description}</td>
-                          <td style={{ padding: '6px 12px' }}>
-                            <button onClick={() => setParamForm({id: param.ID, key_name: param.KeyName, key_value: param.KeyValue, description: param.Description})} style={{ padding: '3px 8px', marginRight: '8px', background: '#fef3c7', color: '#92400E', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>Edit</button>
-                            <button onClick={() => deleteParameter(param.ID)} style={{ padding: '3px 8px', background: '#fee2e2', color: '#991B1B', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>Hapus</button>
-                          </td>
+            const limit = parseInt(getParamVal('PAGINATION_LIMIT', getParamVal('DEFAULT_PAGE_SIZE', '5'))) || 5;
+            const totalRecords = filteredParams.length;
+            const totalPages = Math.ceil(totalRecords / limit) || 1;
+            const startIdx = (currentPage - 1) * limit;
+            const paginatedParams = filteredParams.slice(startIdx, startIdx + limit);
+
+            return (
+              <div className="card" style={{ maxWidth: '1200px', padding: 0, overflow: 'hidden' }}>
+                {/* Header Container khusus dengan background HEADER_BG & font putih */}
+                <div style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff', padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                  <div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#ffffff' }}>
+                      Pengaturan Parameter Global
+                    </div>
+                    <div style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.75)', marginTop: '2px' }}>
+                      Kelola data parameter sistem
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                    {/* Search Filter Box */}
+                    <div style={{ background: '#ffffff', borderRadius: '8px', padding: '4px 6px', display: 'inline-flex', alignItems: 'center', gap: '6px', border: '1px solid #cbd5e1' }}>
+                      <input 
+                        type="text" 
+                        placeholder="Cari Nama atau ID..."
+                        value={masterSearchQuery}
+                        onChange={e => setMasterSearchQuery(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            setCurrentPage(1);
+                          }
+                        }}
+                        style={{ border: 'none', outline: 'none', padding: '4px 8px', fontSize: '0.85rem', color: '#0f172a', width: '170px' }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage(1)}
+                        style={{ padding: '5px 14px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem' }}
+                      >
+                        Filter
+                      </button>
+                    </div>
+
+                    {/* Tombol + Tambah Data (mengikuti BUTTON_BG dan font putih) */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMasterTab('parameters');
+                        setParamForm({ id: 0, key_name: '', key_value: '', description: '' });
+                        setMasterForm({ key_name: '', key_value: '', description: '' });
+                        setIsEditMasterMode(false);
+                        setIsMasterModalOpen(true);
+                      }}
+                      style={{ padding: '8px 18px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      ➕ Tambah Data
+                    </button>
+
+                    {/* Tombol ✕ Tutup (mengikuti BUTTON_CLOSED_BG dan font putih) */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsMasterModalOpen(false);
+                        setActiveTab('dashboard');
+                      }}
+                      style={{ padding: '8px 18px', background: 'var(--button-closed-bg, #475569)', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      ✕ Tutup
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ padding: '20px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '12px', fontSize: '0.85rem', color: '#64748B' }}>
+                    <span>Pencarian: <strong>{paginatedParams.length}</strong> ditampilkan dari <strong>{totalRecords}</strong> total data</span>
+                  </div>
+
+                  <div style={{ overflowX: 'auto', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '700px' }}>
+                      <thead>
+                        <tr style={{ background: '#0B2545', color: '#ffffff' }}>
+                          <th style={{ padding: '12px 14px', fontSize: '0.85rem', textAlign: 'left', color: '#ffffff', width: '60px' }}>id</th>
+                          <th style={{ padding: '12px 14px', fontSize: '0.85rem', textAlign: 'left', color: '#ffffff' }}>key_name</th>
+                          <th style={{ padding: '12px 14px', fontSize: '0.85rem', textAlign: 'left', color: '#ffffff' }}>key_value</th>
+                          <th style={{ padding: '12px 14px', fontSize: '0.85rem', textAlign: 'left', color: '#ffffff' }}>description</th>
+                          <th style={{ padding: '12px 14px', fontSize: '0.85rem', textAlign: 'center', color: '#ffffff', width: '140px' }}>Aksi</th>
                         </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+                      </thead>
+                      <tbody>
+                        {paginatedParams.map((param, idx) => {
+                          const pId = param.id || param.ID || (idx + 1);
+                          const kName = param.key_name || param.KeyName || '';
+                          const kVal = param.key_value || param.KeyValue || '';
+                          const kDesc = param.description || param.Description || '';
+
+                          return (
+                            <tr key={pId} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                              <td style={{ padding: '10px 14px', fontSize: '0.85rem', color: '#0f172a', fontWeight: 600 }}>{pId}</td>
+                              <td style={{ padding: '10px 14px', fontSize: '0.85rem', color: '#0f172a', fontWeight: 600 }}>{kName}</td>
+                              <td style={{ padding: '10px 14px', fontSize: '0.85rem', color: '#334155' }}>{kVal}</td>
+                              <td style={{ padding: '10px 14px', fontSize: '0.85rem', color: '#64748b' }}>{kDesc}</td>
+                              <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setMasterTab('parameters');
+                                    setParamForm({ id: pId, key_name: kName, key_value: kVal, description: kDesc });
+                                    setMasterForm({ id: pId, key_name: kName, key_value: kVal, description: kDesc });
+                                    setIsEditMasterMode(true);
+                                    setIsMasterModalOpen(true);
+                                  }}
+                                  style={{ padding: '4px 10px', marginRight: '6px', background: '#fef3c7', color: '#92400E', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteParameter(pId)}
+                                  style={{ padding: '4px 10px', background: '#fee2e2', color: '#991B1B', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
+                                >
+                                  Hapus
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {paginatedParams.length === 0 && (
+                          <tr>
+                            <td colSpan="5" style={{ textAlign: 'center', padding: '24px', color: '#64748B' }}>
+                              Belum ada data parameter
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination Footer (mengikuti PAGINATION_LIMIT) */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', flexWrap: 'wrap', gap: '12px' }}>
+                    <div style={{ fontSize: '0.85rem', color: '#64748B' }}>
+                      Halaman <strong>{currentPage}</strong> dari <strong>{totalPages}</strong> (Total <strong>{totalRecords}</strong> data)
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                        disabled={currentPage <= 1}
+                        style={{ padding: '6px 14px', background: currentPage <= 1 ? '#e2e8f0' : 'var(--button-bg, #10b981)', color: currentPage <= 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: currentPage <= 1 ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+                      >
+                        ◄ Sebelumnya
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                        disabled={currentPage >= totalPages}
+                        style={{ padding: '6px 14px', background: currentPage >= totalPages ? '#e2e8f0' : 'var(--button-bg, #10b981)', color: currentPage >= totalPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: currentPage >= totalPages ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+                      >
+                        Selanjutnya ►
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()} //
 
           {activeTab === 'disbursement' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -3297,7 +3487,7 @@ function App() {
           </div>
         )}
 
-          {activeTab.startsWith('master-') && (
+          {(activeTab === 'master' || activeTab.startsWith('master-')) && (
             <>
               <div className="card" style={{ maxWidth: '1200px', padding: 0, overflow: 'hidden' }}>
                 {/* Header Container khusus dengan background HEADER_BG & font putih */}
@@ -3391,7 +3581,11 @@ function App() {
                     <div>
                       {(() => {
                         const q = (masterSearchQuery || '').toLowerCase().trim();
-                        const filteredMenus = (referenceData.menus || []).filter(m => {
+                        const allAvailableMenus = (referenceData.menus && referenceData.menus.length > 0)
+                          ? referenceData.menus
+                          : defaultFallbackMenus;
+
+                        const filteredMenus = allAvailableMenus.filter(m => {
                           if (!q) return true;
                           return (m.title || '').toLowerCase().includes(q) || (m.path || '').toLowerCase().includes(q) || String(m.menu_id).includes(q);
                         });
@@ -3797,8 +3991,11 @@ function App() {
                 </div>
               </div>
 
-              {/* Stable Non-Flickering Modal UI (Outside Card Container) */}
-              {isMasterModalOpen && masterTab !== 'role-menus' && (
+            </>
+          )}
+
+          {/* Stable Non-Flickering Modal UI (Outside Card Container) */}
+          {isMasterModalOpen && masterTab !== 'role-menus' && (
                 <div 
                   style={{ 
                     position: 'fixed', 
@@ -3846,7 +4043,7 @@ function App() {
 
                     {/* Modal Body Form */}
                     <div style={{ padding: '24px' }}>
-                      <form onSubmit={saveMasterData} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                      <form onSubmit={paramForm.id > 0 || masterTab === 'parameters' ? submitParameter : saveMasterData} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                         {(() => {
                           const pkFieldKey = getPrimaryKeyKey(masterTab);
                           const isEditMode = isEditMasterMode;
@@ -3863,15 +4060,17 @@ function App() {
                             {k:'category_code', l:'Category', type:'select', options: referenceData.employeeCategories.map(d => ({val: d.category_code, label: d.description}))},
                             {k:'salary', l:'Salary (IDR)', type:'idr'}
                           ];
-                          else if (masterTab === 'members') fields = [
-                            {k:'member_no', l:'Member No (Number)', type:'number'}, 
-                            {k:'employee_id', l:'Employee', type:'select', options: referenceData.employees.map(d => ({val: d.employee_id, label: `${d.employee_id} - ${d.name}`}))}, 
-                            {k:'kopkara_status', l:'Kopkara Status', type:'select', options: referenceData.kopkaraStatuses.map(d => ({val: d.status_code, label: d.description}))}, 
-                            {k:'join_date', l:'Join Date (YYYY-MM-DD)', type:'date'},
-                            {k:'bank_name', l:'Nama Bank (Contoh: BCA, Mandiri)'},
-                            {k:'bank_account_no', l:'No. Rekening Bank'},
-                            {k:'bank_account_name', l:'Nama Pemilik Rekening'}
-                          ];
+                          else if (masterTab === 'members') {
+                            fields = [
+                              {k:'member_no', l:'Member No (Number)', type:'number'}, 
+                              {k:'employee_id', l:'Employee', type:'select', options: (referenceData.employees || []).map(d => ({val: d.employee_id, label: `${d.employee_id} - ${d.name || ''}`}))}, 
+                              {k:'kopkara_status', l:'Kopkara Status', type:'select', options: (referenceData.kopkaraStatuses || []).map(d => ({val: d.status_code, label: d.description ? `${d.status_code} - ${d.description}` : d.status_code}))}, 
+                              {k:'join_date', l:'Join Date (YYYY-MM-DD)', type:'date'},
+                              {k:'bank_name', l:'Nama Bank (Contoh: BCA, Mandiri)'},
+                              {k:'bank_account_no', l:'No. Rekening Bank'},
+                              {k:'bank_account_name', l:'Nama Pemilik Rekening'}
+                            ];
+                          }
                           else if (masterTab === 'roles') fields = [
                             {k:'role_name', l:'Role Name'},
                             {k:'description', l:'Description'}
@@ -3888,9 +4087,9 @@ function App() {
                             {k:'menu_id', l:'Menu', type:'select', options: referenceData.menus.map(d => ({val: d.menu_id, label: `${d.title} (${d.path})`}))}
                           ];
                           else if (masterTab === 'parameters') fields = [
-                            {k:'key_name', l:'Key Name'},
+                            {k:'key_name', l:'Key Name (Misal: max_loan_limit)'},
                             {k:'key_value', l:'Key Value'},
-                            {k:'description', l:'Description'}
+                            {k:'description', l:'Deskripsi', type: 'textarea'}
                           ];
                           else if (masterTab === 'users') fields = [
                             {k:'username', l:'Username'},
@@ -4134,6 +4333,18 @@ function App() {
                                       {showPassword ? '🙈' : '👁️'}
                                     </button>
                                   </div>
+                                ) : f.type === 'textarea' ? (
+                                  <textarea 
+                                    disabled={isDisabled}
+                                    required
+                                    value={val ?? ''}
+                                    onChange={e => {
+                                      const newVal = e.target.value;
+                                      setMasterForm(prev => ({ ...prev, [f.k]: newVal }));
+                                      setParamForm(prev => ({ ...prev, [f.k]: newVal }));
+                                    }}
+                                    style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', minHeight: '80px', fontFamily: 'inherit' }}
+                                  />
                                 ) : (
                                   <input 
                                     type={f.type === 'idr' ? 'text' : (f.type || 'text')}
@@ -4141,10 +4352,11 @@ function App() {
                                     required={f.type !== 'checkbox' && (f.k !== 'password' || !isEditMode) && f.k !== 'member_no'}
                                     checked={f.type === 'checkbox' ? Boolean(val) : undefined}
                                     value={f.type === 'idr' ? formatRupiahInput(val) : (f.type !== 'checkbox' ? (val ?? '') : undefined)}
-                                    onChange={e => setMasterForm({
-                                      ...masterForm, 
-                                      [f.k]: f.type === 'checkbox' ? e.target.checked : (f.type === 'idr' ? parseRupiahInput(e.target.value) : (f.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value))
-                                    })}
+                                    onChange={e => {
+                                      const newVal = f.type === 'checkbox' ? e.target.checked : (f.type === 'idr' ? parseRupiahInput(e.target.value) : (f.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value));
+                                      setMasterForm(prev => ({ ...prev, [f.k]: newVal }));
+                                      setParamForm(prev => ({ ...prev, [f.k]: newVal }));
+                                    }}
                                     style={f.type !== 'checkbox' ? { 
                                       width: '100%', 
                                       padding: '10px', 
@@ -4187,8 +4399,8 @@ function App() {
                   </div>
                 </div>
               )}
-            </>
-          )}{activeTab === 'manual-repayment' && (() => {
+
+          {activeTab === 'manual-repayment' && (() => {
           // 1. Dynamic Payment Sources from Parameters
           const paymentSourcesParam = parameters.find(p => String(p.KeyName || p.key_name || '').toUpperCase() === 'PAYMENT_SOURCES');
           let paymentSourceOptions = [
