@@ -100,6 +100,10 @@ func (u *applicationUseCase) resolveUserInfo(userKey string) (string, string) {
 		userKey = "10101"
 	}
 
+	if strings.EqualFold(userKey, "SYSTEM_AUTO") || strings.EqualFold(userKey, "SYSTEM") {
+		return "SYSTEM_AUTO", "System Automation"
+	}
+
 	var emp models.Employee
 	empIdInt, errConv := strconv.ParseInt(userKey, 10, 64)
 	if errConv == nil && empIdInt > 0 {
@@ -141,13 +145,17 @@ func (u *applicationUseCase) getProductCached(productID int64) (models.LoanProdu
 	return product, nil
 }
 
-func (u *applicationUseCase) runSimulation(req SubmitApplicationRequest, product models.LoanProduct) (SimulationResult, error) {
+func (u *applicationUseCase) runSimulation(req SubmitApplicationRequest, product models.LoanProduct, existingMember ...*models.Member) (SimulationResult, error) {
 	db := u.appRepo.GetDB()
 
 	var member models.Member
-	if err := db.Where("member_no = ?", req.MemberNo).First(&member).Error; err != nil {
-		if err2 := db.Where("employee_id = ?", req.MemberNo).First(&member).Error; err2 != nil {
-			member = models.Member{MemberNo: req.MemberNo, EmployeeID: req.MemberNo}
+	if len(existingMember) > 0 && existingMember[0] != nil && existingMember[0].MemberNo > 0 {
+		member = *existingMember[0]
+	} else {
+		if err := db.Where("member_no = ?", req.MemberNo).First(&member).Error; err != nil {
+			if err2 := db.Where("employee_id = ?", req.MemberNo).First(&member).Error; err2 != nil {
+				member = models.Member{MemberNo: req.MemberNo, EmployeeID: req.MemberNo}
+			}
 		}
 	}
 
@@ -363,6 +371,7 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 			return nil, fmt.Errorf("ditolak bukan karyawan Adira")
 		}
 	}
+	req.MemberNo = member.MemberNo
 
 	// Validate Kopkara Member Keaktifan
 	statusUpper := strings.ToUpper(strings.TrimSpace(member.KopkaraStatus))
@@ -396,7 +405,7 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 	}
 
 	// 4. Run Simulation & get Breakdown (Credit Limit Validation)
-	simResult, err := u.runSimulation(req, product)
+	simResult, err := u.runSimulation(req, product, &member)
 	if err != nil {
 		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_CREDIT_LIMIT", "13", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_CREDIT_LIMIT")
 		return nil, err
@@ -452,6 +461,32 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 		UserAgent:     "Browser/Kopkara LMS",
 	}
 	_ = u.appRepo.GetDB().Create(tracking).Error
+
+	// 6. Check LOAN_APPROVAL_AUTOMATIC parameter (default: "true")
+	autoApproveStr := u.getParamVal("LOAN_APPROVAL_AUTOMATIC", "true")
+	if strings.EqualFold(strings.TrimSpace(autoApproveStr), "true") {
+		if errApp := u.ProcessApproval(appNo, "APPROVED", "Auto-approved by System Automation", "SYSTEM_AUTO"); errApp == nil {
+			// 7. Check LOAN_DISBURSE_AUTOMATIC parameter (default: "true")
+			autoDisburseStr := u.getParamVal("LOAN_DISBURSE_AUTOMATIC", "true")
+			if strings.EqualFold(strings.TrimSpace(autoDisburseStr), "true") {
+				disburseReq := DisburseRequest{
+					BankAccountNo: member.BankAccountNo,
+					BankName:      member.BankName,
+					Notes:         "Auto-disbursed by System Automation",
+					UpdatedUser:   "SYSTEM_AUTO",
+				}
+				if errDisb := u.DisburseApplication(appNo, disburseReq, "SYSTEM_AUTO"); errDisb == nil {
+					if refreshedApp, errRef := u.appRepo.FindByID(appNo); errRef == nil {
+						return &refreshedApp, nil
+					}
+				}
+			} else {
+				if refreshedApp, errRef := u.appRepo.FindByID(appNo); errRef == nil {
+					return &refreshedApp, nil
+				}
+			}
+		}
+	}
 
 	return app, nil
 }

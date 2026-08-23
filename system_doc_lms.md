@@ -1256,12 +1256,17 @@ Demi menjaga kerahasiaan data keuangan anggota, sistem LMS membedakan hak akses 
 |---|---|---|
 | `LOAN_START_PERIOD` | `1` | Tanggal awal periode diizinkan pengajuan pinjaman |
 | `LOAN_END_PERIOD` | `31` | Tanggal akhir periode diizinkan pengajuan pinjaman |
+| `LOAN_APPROVAL_AUTOMATIC` | `true` | Mode approval otomatis pengajuan pinjaman (`true` = otomatis, `false` = manual approval) |
+| `LOAN_DISBURSE_AUTOMATIC` | `true` | Mode pencairan otomatis (`true` = otomatis terbit kontrak & jadwal, `false` = manual disburse) |
 | `LOAN_DUEDATE` | `25` | Tanggal jatuh tempo angsuran setiap bulannya |
 | `LOAN_DUEMONTH` | `0` | Offset bulan jatuh tempo angsuran pertama (`0` = bulan ini, `1` = bulan depan) |
 | `LOAN_MAX_TENOR` | `12` | Batas maksimum tenor (bulan) secara global |
 | `LOAN_LIMIT_FORMULA` | `SALARY * 0.5` | Formula perhitungan credit limit berbasis gaji/hari |
 | `LOAN_ADMIN_FORMULA` | `REQUESTED_AMOUNT * 0.01` | Formula biaya administrasi pinjaman |
 | `LOAN_MIN_ADMIN_FEE` | `30000` | Minimum biaya administrasi pinjaman (floor value) |
+| `APPROVAL_MODE` | `MANUAL` | Mode persetujuan pinjaman (`MANUAL`: review Admin, `AUTO`: persetujuan otomatis) |
+| `AUTO_APPROVAL_MAX_AMOUNT` | `0` | Maksimum nominal pinjaman untuk auto-approve (`0` = tanpa batasan nominal) |
+| `DISBURSEMENT_MODE` | `MANUAL` | Mode pencairan dana (`MANUAL`: transfer Admin, `AUTO`: otomatis terbit kontrak & jadwal) |
 | `PAGINATION_LIMIT` | `5` | Jumlah baris data per halaman untuk query tabel master/transaksi |
 | `LOG_SUBMIT_LOAN_PATH` | `./logs/submit_loan.log` | Path dan nama file log transaksi pengajuan pinjaman |
 | `RC_SUBMIT_LOAN_SUCCESS` | `00` | Response Code transaksi pengajuan pinjaman sukses (`SUBMITTED`) |

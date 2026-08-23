@@ -33,3 +33,11 @@ WHERE key_name IN (
     'RC_SUBMIT_LOAN_OTHERS'
 )
 ORDER BY id ASC;
+
+
+INSERT INTO lms_sch.global_parameters (key_name, key_value, description) VALUES
+('LOAN_APPROVAL_AUTOMATIC', 'true', 'Mode approval otomatis pengajuan pinjaman (true = otomatis, false = manual approval)'),
+('LOAN_DISBURSE_AUTOMATIC', 'true', 'Mode pencairan dana otomatis (true = otomatis terbit kontrak & jadwal, false = manual disburse)')
+ON CONFLICT (key_name) DO UPDATE SET
+    key_value = EXCLUDED.key_value,
+    description = EXCLUDED.description;
