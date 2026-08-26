@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"lms-backend/usecases"
 
@@ -99,6 +101,21 @@ func (h *ApplicationHandler) Submit(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid input: " + err.Error()})
 		return
+	}
+
+	if req.CreatedUser == "" {
+		if usernameVal, exists := c.Get("username"); exists && fmt.Sprintf("%v", usernameVal) != "" {
+			req.CreatedUser = fmt.Sprintf("%v", usernameVal)
+		} else {
+			authHeader := c.GetHeader("Authorization")
+			if authHeader != "" {
+				token := strings.TrimPrefix(authHeader, "Bearer ")
+				token = strings.TrimSpace(token)
+				if strings.HasPrefix(token, "mock-token-") {
+					req.CreatedUser = strings.TrimPrefix(token, "mock-token-")
+				}
+			}
+		}
 	}
 
 	app, err := h.usecase.SubmitApplication(req)

@@ -13,6 +13,7 @@ import (
 	"github.com/Knetic/govaluate"
 	"gorm.io/gorm"
 
+	"lms-backend/cache"
 	"lms-backend/models"
 	"lms-backend/repositories"
 )
@@ -25,7 +26,7 @@ type ApplicationUseCase interface {
 	IsHighPrivilegeRole(roleId string) bool
 	SimulateApplication(req SubmitApplicationRequest) (SimulationResult, error)
 	SubmitApplication(req SubmitApplicationRequest) (*models.LoanApplication, error)
-	ApproveApplication(applicationNo int64, approvedAmount float64, notes string) error
+	ApproveApplication(applicationNo int64, approvedAmount float64, notes string, updatedUser ...string) error
 	ProcessApproval(applicationNo int64, action string, notes string, updatedUser string) error
 	GetLoanTrackings(applicationNo int64) ([]models.LoanTracking, error)
 	DisburseApplication(applicationNo int64, req DisburseRequest, updatedUser string) error
@@ -78,6 +79,7 @@ type SubmitApplicationRequest struct {
 	ProductID       int64   `json:"product_id"`
 	RequestedAmount float64 `json:"requested_amount"`
 	Tenor           int     `json:"tenor"`
+	CreatedUser     string  `json:"created_user"`
 }
 
 type SimulationResult struct {
@@ -94,6 +96,40 @@ type SimulationResult struct {
 }
 
 // Helper to resolve employee_id and name dynamically from lms_sch.employees
+// Helper to resolve real users.username from DB if createdUser/updatedUser is not provided
+func (u *applicationUseCase) resolveUsername(providedUser string, memberNo int64, empID int64) string {
+	providedUser = strings.TrimSpace(providedUser)
+	if strings.EqualFold(providedUser, "SYSTEM_AUTO") || strings.EqualFold(providedUser, "SYSTEM") {
+		return "SYSTEM_AUTO"
+	}
+	if providedUser != "" && providedUser != "10101" {
+		return providedUser
+	}
+
+	db := u.appRepo.GetDB()
+	if db != nil {
+		var usr models.User
+		if memberNo > 0 {
+			if err := db.Where("member_no = ? AND deleted_at IS NULL", memberNo).First(&usr).Error; err == nil && strings.TrimSpace(usr.Username) != "" {
+				return strings.TrimSpace(usr.Username)
+			}
+		}
+		if empID > 0 {
+			if err := db.Where("(id = ? OR member_no = ?) AND deleted_at IS NULL", empID, empID).First(&usr).Error; err == nil && strings.TrimSpace(usr.Username) != "" {
+				return strings.TrimSpace(usr.Username)
+			}
+		}
+	}
+
+	if memberNo > 0 {
+		return fmt.Sprintf("%d", memberNo)
+	}
+	if empID > 0 {
+		return fmt.Sprintf("%d", empID)
+	}
+	return "SYSTEM_AUTO"
+}
+
 func (u *applicationUseCase) resolveUserInfo(userKey string) (string, string) {
 	userKey = strings.TrimSpace(userKey)
 	if userKey == "" {
@@ -121,15 +157,7 @@ func (u *applicationUseCase) resolveUserInfo(userKey string) (string, string) {
 
 // Helper to get parameter value safely with RAM caching
 func (u *applicationUseCase) getParamVal(key string, defaultVal string) string {
-	if val, ok := u.paramCache.Load(key); ok {
-		return val.(string)
-	}
-	param, err := u.paramRepo.FindByKey(key)
-	if err != nil {
-		return defaultVal
-	}
-	u.paramCache.Store(key, param.KeyValue)
-	return param.KeyValue
+	return cache.ParameterCache.Get(key, defaultVal, u.appRepo.GetDB())
 }
 
 // Helper to get product safely with RAM caching
@@ -333,19 +361,79 @@ func (u *applicationUseCase) GetApplicationsByPeriodAndStatus(period string, sta
 	return u.appRepo.FindByPeriodAndStatus(period, status)
 }
 
-func (u *applicationUseCase) writeSubmitLoanLog(rcParam string, defaultRC string, empID int64, productID int64, submissionDate time.Time, requestedAmount float64, tenor int, status string) {
+func (u *applicationUseCase) writeSubmitLoanLog(rcParam string, defaultRC string, empID int64, productID int64, submissionDate time.Time, requestedAmount float64, tenor int, status string, appNo int64, createdOrUpdatedUser string) {
 	rc := u.getParamVal(rcParam, defaultRC)
-	logPath := u.getParamVal("LOG_SUBMIT_LOAN_PATH", "./logs/submit_loan.log")
+	logPath := u.getParamVal("LOG_LOAN_TRANSACTION_PATH", "./logs/loans.log")
 
 	dir := filepath.Dir(logPath)
 	if dir != "" && dir != "." {
 		_ = os.MkdirAll(dir, 0755)
 	}
 
+	appNoStr := "NULL"
+	if (rc == "00" || rc == "200") && appNo > 0 {
+		appNoStr = fmt.Sprintf("%d", appNo)
+	}
+
+	userStr := strings.TrimSpace(createdOrUpdatedUser)
+	if userStr == "" {
+		userStr = "SYSTEM_AUTO"
+	}
+
+	roleName := "User"
+	var roleID int64 = 0
+	userLower := strings.ToLower(userStr)
+	if userLower == "system_auto" || userLower == "system" {
+		roleName = "System Automation"
+		roleID = 0
+	} else if userLower == "admin" || userLower == "9999" {
+		roleName = "Administrator"
+		roleID = 1
+	} else if userLower == "hrd" {
+		roleName = "HRD"
+		roleID = 3
+	} else {
+		db := u.appRepo.GetDB()
+		if db != nil {
+			var usr models.User
+			if errU := db.Where("username = ? OR CAST(id AS TEXT) = ? OR CAST(member_no AS TEXT) = ?", userStr, userStr, userStr).First(&usr).Error; errU == nil {
+				roleID = usr.RoleID
+				if usr.RoleID == 1 {
+					roleName = "Administrator"
+				} else if usr.RoleID == 3 {
+					roleName = "HRD"
+				} else if usr.RoleID == 2 {
+					roleName = "Anggota"
+				}
+			}
+		}
+	}
+
+	highPrivWarning := ""
+	if strings.EqualFold(status, "SUBMITTED") {
+		highPrivRoles := u.getParamVal("HIGH_PRIVILEGE_ROLES", "1,3,Admin,HRD,Administrator")
+		isHighPriv := false
+		if roleID == 1 || roleID == 3 || strings.EqualFold(roleName, "Administrator") || strings.EqualFold(roleName, "HRD") {
+			isHighPriv = true
+		} else {
+			tokens := strings.Split(highPrivRoles, ",")
+			for _, t := range tokens {
+				t = strings.TrimSpace(t)
+				if strings.EqualFold(t, fmt.Sprintf("%d", roleID)) || strings.EqualFold(t, roleName) {
+					isHighPriv = true
+					break
+				}
+			}
+		}
+		if isHighPriv {
+			highPrivWarning = u.getParamVal("LOG_WARNING_HIGH_PRIV", "HIGH_PRIVILEGE_ACTION")
+		}
+	}
+
 	nowStr := time.Now().Format("2006-01-02 15:04:05")
 	subDateStr := submissionDate.Format("2006-01-02")
-	logLine := fmt.Sprintf("%s, %s, %d, %d, %s, %.0f, %d, %s\n",
-		nowStr, rc, empID, productID, subDateStr, requestedAmount, tenor, status)
+	logLine := fmt.Sprintf("%s, %s, %s, %d, %d, %s, %.0f, %d, %s, %s, %s, %s\n",
+		nowStr, appNoStr, rc, empID, productID, subDateStr, requestedAmount, tenor, status, userStr, roleName, highPrivWarning)
 
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err == nil {
@@ -359,7 +447,7 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 	// 1. Get Product Details for validation
 	product, err := u.getProductCached(req.ProductID)
 	if err != nil {
-		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_OTHERS", "99", req.MemberNo, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_PRODUCT_NOT_FOUND")
+		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_OTHERS", "99", req.MemberNo, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_PRODUCT_NOT_FOUND", 0, req.CreatedUser)
 		return nil, errors.New("product not found")
 	}
 
@@ -367,7 +455,7 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 	var member models.Member
 	if err := db.Where("member_no = ?", req.MemberNo).First(&member).Error; err != nil {
 		if err2 := db.Where("employee_id = ?", req.MemberNo).First(&member).Error; err2 != nil {
-			u.writeSubmitLoanLog("RC_SUBMIT_LOAN_NON_ADIRA", "11", req.MemberNo, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_NON_ADIRA")
+			u.writeSubmitLoanLog("RC_SUBMIT_LOAN_NON_ADIRA", "11", req.MemberNo, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_NON_ADIRA", 0, req.CreatedUser)
 			return nil, fmt.Errorf("ditolak bukan karyawan Adira")
 		}
 	}
@@ -376,7 +464,7 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 	// Validate Kopkara Member Keaktifan
 	statusUpper := strings.ToUpper(strings.TrimSpace(member.KopkaraStatus))
 	if member.MemberNo == 0 || (statusUpper != "ACTIVE" && statusUpper != "AKTIF" && statusUpper != "") {
-		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_NON_KOPKARA", "401", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_NON_KOPKARA")
+		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_NON_KOPKARA", "401", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_NON_KOPKARA", 0, req.CreatedUser)
 		return nil, fmt.Errorf("ditolak bukan anggota Kopkara")
 	}
 
@@ -388,7 +476,7 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 	
 	currentDay := now.Day()
 	if currentDay < startPeriod || currentDay > endPeriod {
-		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_PERIOD", "14", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_PERIOD")
+		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_PERIOD", "14", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_PERIOD", 0, req.CreatedUser)
 		return nil, fmt.Errorf("ditolak Di Luar Periode Tanggal Pengajuan (hanya diizinkan antara tanggal %d sampai %d)", startPeriod, endPeriod)
 	}
 
@@ -400,18 +488,19 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 	}
 	
 	if req.Tenor > maxTenor {
-		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_TENOR", "12", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_TENOR")
+		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_TENOR", "12", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_TENOR", 0, req.CreatedUser)
 		return nil, fmt.Errorf("ditolak Tenor Melebihi Batas Maksimum (%d bulan)", maxTenor)
 	}
 
 	// 4. Run Simulation & get Breakdown (Credit Limit Validation)
 	simResult, err := u.runSimulation(req, product, &member)
 	if err != nil {
-		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_CREDIT_LIMIT", "13", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_CREDIT_LIMIT")
+		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_CREDIT_LIMIT", "13", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_CREDIT_LIMIT", 0, req.CreatedUser)
 		return nil, err
 	}
 
 	// 5. Create Application Record
+	userStr := u.resolveUsername(req.CreatedUser, member.MemberNo, member.EmployeeID)
 	// Gunakan UnixNano + offset mikrodetik unik untuk mencegah bentrok primary key saat high-concurrency (500 VUs)
 	appNo := now.UnixNano() + time.Now().UnixNano()%100000 + int64(now.Nanosecond()%999) 
 	
@@ -431,6 +520,12 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 		TotalLoanCost:     simResult.TotalLoanCost,
 		InterestRate:      simResult.InterestRate,
 		CreditLimit:       simResult.CreditLimit,
+		BaseModel: models.BaseModel{
+			CreatedAt:   &now,
+			CreatedUser: &userStr,
+			UpdatedAt:   &now,
+			UpdatedUser: &userStr,
+		},
 	}
 
 	err = u.appRepo.Create(app)
@@ -439,16 +534,24 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 	}
 
 	// Write successful submit transaction log
-	u.writeSubmitLoanLog("RC_SUBMIT_LOAN_SUCCESS", "00", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "SUBMITTED")
+	u.writeSubmitLoanLog("RC_SUBMIT_LOAN_SUCCESS", "00", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "SUBMITTED", appNo, userStr)
 
 	// Accumulate employees.total_loan (+ Pokok + Bunga) upon successful application submission
 	interestRate := product.InterestRate
 	newAppTotalLoan := req.RequestedAmount + (req.RequestedAmount * (interestRate / 100.0) * float64(req.Tenor))
 	_ = db.Model(&models.Employee{}).Where("employee_id = ?", member.EmployeeID).
-		Update("total_loan", gorm.Expr("COALESCE(total_loan, 0) + ?", newAppTotalLoan)).Error
+		Updates(map[string]interface{}{
+			"total_loan":   gorm.Expr("COALESCE(total_loan, 0) + ?", newAppTotalLoan),
+			"updated_user": userStr,
+			"updated_at":   now,
+		}).Error
 
 	// Save initial Tracking entry
 	subUserId, subUserName := u.resolveUserInfo(fmt.Sprintf("%d", member.EmployeeID))
+	appUserStr := strings.TrimSpace(req.CreatedUser)
+	if appUserStr == "" {
+		appUserStr = fmt.Sprintf("%d", member.MemberNo)
+	}
 	tracking := &models.LoanTracking{
 		ApplicationNo: appNo,
 		Status:        "SUBMITTED",
@@ -459,6 +562,12 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 		SLADuration:   "-",
 		IPAddress:     "127.0.0.1",
 		UserAgent:     "Browser/Kopkara LMS",
+		BaseModel: models.BaseModel{
+			CreatedAt:   &now,
+			CreatedUser: &appUserStr,
+			UpdatedAt:   &now,
+			UpdatedUser: &appUserStr,
+		},
 	}
 	_ = u.appRepo.GetDB().Create(tracking).Error
 
@@ -491,8 +600,12 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 	return app, nil
 }
 
-func (u *applicationUseCase) ApproveApplication(applicationNo int64, approvedAmount float64, notes string) error {
-	return u.ProcessApproval(applicationNo, "APPROVED", notes, "10101")
+func (u *applicationUseCase) ApproveApplication(applicationNo int64, approvedAmount float64, notes string, updatedUser ...string) error {
+	userStr := "admin"
+	if len(updatedUser) > 0 && strings.TrimSpace(updatedUser[0]) != "" {
+		userStr = strings.TrimSpace(updatedUser[0])
+	}
+	return u.ProcessApproval(applicationNo, "APPROVED", notes, userStr)
 }
 
 func (u *applicationUseCase) ProcessApproval(applicationNo int64, action string, notes string, updatedUser string) error {
@@ -527,6 +640,7 @@ func (u *applicationUseCase) ProcessApproval(applicationNo int64, action string,
 		}
 		app.ApprovalNotes = notes
 
+		upUserStr := u.resolveUsername(updatedUser, app.MemberNo, 0)
 		// Create Loan Contract for APPROVED status
 		contract := models.LoanContract{
 			ApplicationNo:     app.ApplicationNo,
@@ -541,8 +655,21 @@ func (u *applicationUseCase) ProcessApproval(applicationNo int64, action string,
 			TotalLoanCost:     app.TotalLoanCost,
 			ContractDate:      time.Now(),
 			Status:            "ACTIVE",
+			BaseModel: models.BaseModel{
+				CreatedAt:   &now,
+				CreatedUser: &upUserStr,
+				UpdatedAt:   &now,
+				UpdatedUser: &upUserStr,
+			},
 		}
 		_ = u.appRepo.GetDB().Create(&contract).Error
+
+		var empIdVal int64 = app.MemberNo
+		var m models.Member
+		if errM := u.appRepo.GetDB().Where("member_no = ?", app.MemberNo).First(&m).Error; errM == nil && m.EmployeeID > 0 {
+			empIdVal = m.EmployeeID
+		}
+		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_SUCCESS", "00", empIdVal, app.ProductID, now, *app.ApprovedAmount, app.Tenor, "APPROVED", app.ApplicationNo, updatedUser)
 
 	case "REJECTED", "TOLAK":
 		app.Status = "REJECTED"
@@ -555,6 +682,10 @@ func (u *applicationUseCase) ProcessApproval(applicationNo int64, action string,
 	}
 
 	// Create LoanTracking record dynamically from lms_sch.employees
+	upUserStr := u.resolveUsername(updatedUser, app.MemberNo, 0)
+	app.UpdatedAt = &now
+	app.UpdatedUser = &upUserStr
+
 	appUserId, appUserName := u.resolveUserInfo(updatedUser)
 	tracking := &models.LoanTracking{
 		ApplicationNo: app.ApplicationNo,
@@ -566,6 +697,12 @@ func (u *applicationUseCase) ProcessApproval(applicationNo int64, action string,
 		SLADuration:   slaStr,
 		IPAddress:     "127.0.0.1",
 		UserAgent:     "Browser/Kopkara LMS",
+		BaseModel: models.BaseModel{
+			CreatedAt:   &now,
+			CreatedUser: &upUserStr,
+			UpdatedAt:   &now,
+			UpdatedUser: &upUserStr,
+		},
 	}
 	_ = u.appRepo.GetDB().Create(tracking).Error
 
@@ -590,6 +727,8 @@ func (u *applicationUseCase) DisburseApplication(applicationNo int64, req Disbur
 	if err != nil {
 		return errors.New("application not found")
 	}
+
+	disbUserStr := u.resolveUsername(updatedUser, app.MemberNo, 0)
 
 	if app.Status != "APPROVED" {
 		return fmt.Errorf("hanya pengajuan berstatus APPROVED yang dapat dicairkan (status saat ini: %s)", app.Status)
@@ -666,12 +805,21 @@ func (u *applicationUseCase) DisburseApplication(applicationNo int64, req Disbur
 
 	// 4. Update Application Status to DISBURSED
 	app.Status = "DISBURSED"
+	app.UpdatedAt = &now
+	app.UpdatedUser = &disbUserStr
 	if err := u.appRepo.Update(&app); err != nil {
 		return err
 	}
 
+	var empIdVal int64 = app.MemberNo
+	var m models.Member
+	if errM := u.appRepo.GetDB().Where("member_no = ?", app.MemberNo).First(&m).Error; errM == nil && m.EmployeeID > 0 {
+		empIdVal = m.EmployeeID
+	}
+	u.writeSubmitLoanLog("RC_SUBMIT_LOAN_SUCCESS", "00", empIdVal, app.ProductID, now, principalAmt, app.Tenor, "DISBURSED", app.ApplicationNo, updatedUser)
+
 	// 5. Update Contract Status to DISBURSED
-	u.appRepo.GetDB().Model(&models.LoanContract{}).Where("application_no = ?", applicationNo).Update("status", "DISBURSED")
+	u.appRepo.GetDB().Model(&models.LoanContract{}).Where("application_no = ?", applicationNo).Updates(map[string]interface{}{"status": "DISBURSED", "updated_user": disbUserStr, "updated_at": now})
 
 	// 6. Calculate SLA & Record LoanTracking
 	slaStr := "-"

@@ -1,0 +1,11 @@
+{
+  "appId": "com.kopkara.ewa.app",
+  "appName": "Kopkara Mobile EWA",
+  "webDir": "dist",
+  "server": {
+    "cleartext": true,
+    "allowNavigation": [
+      "*"
+    ]
+  }
+}

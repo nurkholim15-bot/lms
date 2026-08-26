@@ -5,7 +5,7 @@
 
 INSERT INTO lms_sch.global_parameters (key_name, key_value, description) VALUES
 ('LOAN_DUEMONTH', '0', 'Offset bulan jatuh tempo angsuran pertama (0 = bulan ini, 1 = bulan depan)'),
-('LOG_SUBMIT_LOAN_PATH', './logs/submit_loan.log', 'Lokasi path dan nama file log transaksi pengajuan pinjaman (submit loan)'),
+('LOG_LOAN_TRANSACTION_PATH', './logs/loans.log', 'Lokasi path dan nama file log transaksi pengajuan pinjaman (submit loan)'),
 ('RC_SUBMIT_LOAN_SUCCESS', '00', 'Response Code transaksi pengajuan pinjaman berhasil (SUCCESS)'),
 ('RC_SUBMIT_LOAN_NON_KOPKARA', '401', 'Response Code ditolak bukan anggota Kopkara'),
 ('RC_SUBMIT_LOAN_NON_ADIRA', '11', 'Response Code ditolak bukan karyawan Adira'),
@@ -23,7 +23,7 @@ SELECT id, key_name, key_value, description
 FROM lms_sch.global_parameters 
 WHERE key_name IN (
     'LOAN_DUEMONTH', 
-    'LOG_SUBMIT_LOAN_PATH', 
+    'LOG_LOAN_TRANSACTION_PATH', 
     'RC_SUBMIT_LOAN_SUCCESS', 
     'RC_SUBMIT_LOAN_NON_KOPKARA', 
     'RC_SUBMIT_LOAN_NON_ADIRA', 

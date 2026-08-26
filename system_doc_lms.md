@@ -18,6 +18,7 @@
 11. [Konfigurasi & Environment](#11-konfigurasi--environment)
 12. [Folder Billing](#12-folder-billing)
 13. [Global Parameters Kunci](#13-global-parameters-kunci)
+14. [Mobile Self-Service EWA & Autentikasi Security](#14-mobile-self-service-ewa--autentikasi-security)
 
 ---
 
@@ -1268,7 +1269,9 @@ Demi menjaga kerahasiaan data keuangan anggota, sistem LMS membedakan hak akses 
 | `AUTO_APPROVAL_MAX_AMOUNT` | `0` | Maksimum nominal pinjaman untuk auto-approve (`0` = tanpa batasan nominal) |
 | `DISBURSEMENT_MODE` | `MANUAL` | Mode pencairan dana (`MANUAL`: transfer Admin, `AUTO`: otomatis terbit kontrak & jadwal) |
 | `PAGINATION_LIMIT` | `5` | Jumlah baris data per halaman untuk query tabel master/transaksi |
-| `LOG_SUBMIT_LOAN_PATH` | `./logs/submit_loan.log` | Path dan nama file log transaksi pengajuan pinjaman |
+| `LOG_LOAN_TRANSACTION_PATH` | `./logs/loans.log` | Path dan nama file log transaksi seluruh siklus pinjaman |
+| `LOG_WARNING_HIGH_PRIV` | `HIGH_PRIVILEGE_ACTION` | Pesan peringatan aktivitas pengguna high privilege (Admin/HRD) pada log |
+| `HIGH_PRIVILEGE_ROLES` | `1,3,Admin,HRD,Administrator` | Daftar Role ID / Role Name yang dikategorikan sebagai High Privilege Users |
 | `RC_SUBMIT_LOAN_SUCCESS` | `00` | Response Code transaksi pengajuan pinjaman sukses (`SUBMITTED`) |
 | `RC_SUBMIT_LOAN_NON_KOPKARA` | `401` | Response Code ditolak bukan anggota Kopkara |
 | `RC_SUBMIT_LOAN_NON_ADIRA` | `11` | Response Code ditolak bukan karyawan Adira |
@@ -1279,24 +1282,30 @@ Demi menjaga kerahasiaan data keuangan anggota, sistem LMS membedakan hak akses 
 
 ---
 
-### 13.1 Spesifikasi Log Transaksi Submit Loan & Response Code (RC)
+### 13.1 Spesifikasi Log Transaksi Pinjaman (Unified Loans Log) & Response Code (RC)
 
-Setiap transaksi pengajuan pinjaman (`POST /api/applications`) secara otomatis dicatat ke file log yang ditentukan oleh parameter `LOG_SUBMIT_LOAN_PATH`.
+Seluruh siklus transaksi pinjaman (mulai dari **Submit**, **Approval**, **Pencairan/Disbursement**, **Import File HRD/Payroll**, **Pelunasan Manual**, hingga **Adjustment**) secara otomatis dicatat ke file log terpusat yang ditentukan oleh parameter `LOG_LOAN_TRANSACTION_PATH` (default: `./logs/loans.log`).
 
-**Format File Log:**
+**Format Baris File Log (`./logs/loans.log`):**
 ```text
-datetime, RC, employee_id, product_id, submission_date, requested_amount, tenor, status
+datetime, application_no, RC, employee_id, product_id, transaction_date, amount, tenor, status, created_user, role_name, high_priv_warning
 ```
 
-**Penjelasan Field Log:**
-- `datetime`: Timestamp transaksi sistem saat log ditulis (`YYYY-MM-DD HH:MM:SS`).
-- `RC`: Response Code sesuai tabel parameter `RC_SUBMIT_LOAN_*` yang dievaluasi sebelum dan saat submit.
-- `employee_id`: ID karyawan dari pemohon pinjaman.
-- `product_id`: ID produk pinjaman yang diajukan.
-- `submission_date`: Tanggal pengajuan pinjaman (`YYYY-MM-DD`).
-- `requested_amount`: Nominal pinjaman yang diajukan.
-- `tenor`: Tenor pinjaman dalam bulan.
-- `status`: Status hasil evaluasi pengajuan (`SUBMITTED`, `REJECTED_NON_KOPKARA`, `REJECTED_NON_ADIRA`, `REJECTED_PERIOD`, `REJECTED_TENOR`, `REJECTED_CREDIT_LIMIT`, `REJECTED_PRODUCT_NOT_FOUND`).
+**Penjelasan 12 Field Log:**
+1. `datetime`: Timestamp presisi saat log ditulis (`YYYY-MM-DD HH:MM:SS`).
+2. `application_no`: Nomor pengajuan pinjaman (`application_no`). Jika transaksi gagal (RC != `00`), bernilai `NULL`.
+3. `RC`: Response Code / Result Code transaksi (`00` Sukses, `401` Non-Kopkara, `11` Non-Adira, `12` Tenor Exceed, `13` Limit Exceed, `14` Out of Period, `99` Others).
+4. `employee_id`: ID karyawan / pemohon pinjaman.
+5. `product_id`: ID produk pinjaman (`0` untuk pelunasan manual/payroll).
+6. `transaction_date`: Tanggal efektif transaksi (`YYYY-MM-DD`).
+7. `amount`: Nominal transaksi (requested_amount / approved_amount / repayment_amount).
+8. `tenor`: Tenor pinjaman dalam bulan (`0` untuk pelunasan manual/payroll).
+9. `status`: Status siklus transaksi (`SUBMITTED`, `APPROVED`, `DISBURSED`, `PAYROLL_RECONCILED`, `MANUAL_REPAYMENT`, `LOAN_ADJUSTMENT`, `REJECTED_*`).
+10. `created_user`: Username/User ID pelaksana aksi. Khusus status `SUBMITTED` diisi user pemohon (`created_user`), sedangkan selain `SUBMITTED` diisi user pengubah/eksekutor (`updated_user`).
+11. `role_name`: Nama Role pengguna yang mengeksekusi transaksi (`Administrator`, `HRD`, `Anggota`, `System Automation`).
+12. `high_priv_warning`: Hanya diisi untuk status `SUBMITTED` jika role user terdaftar pada parameter `HIGH_PRIVILEGE_ROLES` (bernilai parameter `LOG_WARNING_HIGH_PRIV`). Selain `SUBMITTED` atau jika role bukan high privilege, diisi kosong (`""`).
+
+
 
 
 ---
@@ -1445,7 +1454,7 @@ curl -k -X POST https://localhost:8086/api/applications \
 
 ### 13.4 Daftar Lengkap Response Code (RC) Sistem LMS
 
-#### A. Response Code Log Transaksi Submit Loan (`LOG_SUBMIT_LOAN_PATH`)
+#### A. Response Code Log Transaksi Submit Loan (`LOG_LOAN_TRANSACTION_PATH`)
 | Kode RC | Parameter Global | Deskripsi Status |
 |---|---|---|
 | `00` | `RC_SUBMIT_LOAN_SUCCESS` | Transaksi pengajuan pinjaman berhasil (`SUBMITTED`) |
@@ -1466,3 +1475,204 @@ curl -k -X POST https://localhost:8086/api/applications \
 | `404` | **Not Found** | Endpoint API atau data record (user/loan/application) tidak ditemukan |
 | `429` | **Too Many Requests** | Laju request melebihi ambang batas Rate Limiter (`RATE_LIMIT_GENERAL_RPM`) |
 | `500` | **Internal Server Error** | Eror internal server atau kegagalan query database PostgreSQL |
+
+
+---
+
+## 14. Mobile Self-Service EWA & Autentikasi Security
+
+Sistem LMS telah dilengkapi dengan modul **Mobile Self-Service Registration**, **Autentikasi PIN 6-Digit**, **Dynamic Global Parameters Security**, dan **Integrasi WhatsApp OTP**.
+
+---
+
+### 14.1 Arsitektur Pendaftaran Self-Service (4-Factor Matching)
+
+```
+[ Pendaftaran Self-Service Mobile ]
+               │
+               ▼
+ [ 1. Input 4-Factor Matching ]
+ ├── No. KTP (16-Digit NIK)
+ ├── Employee ID (NIP)
+ ├── Nama Karyawan
+ └── No. Handphone / Email
+               │
+               ▼
+ [ 2. Validasi Match ke lms_sch.employees ]
+ ├── Valid? -> Lanjut ke OTP
+ └── Tidak Valid? -> Return MATCH_FAILED
+               │
+               ▼
+ [ 3. Verifikasi WhatsApp OTP ]
+ ├── Mode Mocking ($0) -> Static Code '123456'
+ └── Mode Production   -> Meta WA Cloud API / Fonnte Gateway
+               │
+               ▼
+ [ 4. Setup PIN 6-Digit ]
+ ├── Validasi Larangan (Bukan 111111, 123456, 6-Digit NIK)
+ └── Enkripsi Bcrypt Hash -> Save to lms_sch.users
+               │
+               ▼
+ [ 5. Mobile Login (No. HP + PIN 6-Digit) ]
+ ├── Lockout Counter (PIN_MAX_FAILED_ATTEMPTS = 3x)
+ ├── Lockout Timeout (PIN_LOCKOUT_DURATION_MINUTES = 15m)
+ └── Idle Timeout    (PIN_IDLE_TIMEOUT_MINUTES = 3m)
+```
+
+---
+
+### 14.2 Parameter Keamanan Dinamis (`lms_sch.global_parameters`)
+
+Seluruh parameter keamanan dibaca langsung melalui RAM Cache (`cache.ParameterCache`) dengan **0 SQL Query** pada runtime:
+
+| Parameter Key | Default Value | Deskripsi Fungsi Keamanan |
+|---|---|---|
+| `PIN_MAX_FAILED_ATTEMPTS` | `3` | Batas maksimum salah PIN sebelum akun terkunci |
+| `PIN_LOCKOUT_DURATION_MINUTES` | `15` | Durasi kuncian akun (menit) jika salah PIN 3x |
+| `PIN_IDLE_TIMEOUT_MINUTES` | `3` | Waktu idle (menit) sebelum Mobile App terkunci otomatis |
+| `PASSWORD_MAX_FAILED_ATTEMPTS` | `3` | Batas maksimum salah password Web App |
+| `PASSWORD_ROTATION_DAYS` | `90` | Batas usia wajib rotasi password (hari) |
+| `PASSWORD_MIN_LENGTH` | `9` | Panjang minimum password Web App |
+
+---
+
+### 14.3 Script DDL SQL Standalone (`alter_table_employees_and_users.sql`)
+
+Eksekusi manual via PgAdmin:
+
+```sql
+-- 1. Penambahan Kolom pada Tabel lms_sch.employees
+ALTER TABLE lms_sch.employees 
+  ADD COLUMN IF NOT EXISTS no_ktp VARCHAR(20),
+  ADD COLUMN IF NOT EXISTS phone_number VARCHAR(30),
+  ADD COLUMN IF NOT EXISTS email VARCHAR(100);
+
+-- 2. Penambahan Kolom pada Tabel lms_sch.users
+ALTER TABLE lms_sch.users 
+  ADD COLUMN IF NOT EXISTS no_ktp VARCHAR(20),
+  ADD COLUMN IF NOT EXISTS phone_number VARCHAR(30),
+  ADD COLUMN IF NOT EXISTS pin VARCHAR(255),
+  ADD COLUMN IF NOT EXISTS failed_pin_attempts INT DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS pin_locked_until TIMESTAMP;
+
+-- 3. Inserksi Parameter Keamanan Dinamis
+INSERT INTO lms_sch.global_parameters (param_key, param_value, description, created_user, updated_user, created_at, updated_at)
+VALUES 
+  ('PIN_MAX_FAILED_ATTEMPTS', '3', 'Batas maksimum salah PIN sebelum akun terkunci', 'SYSTEM_AUTO', 'SYSTEM_AUTO', NOW(), NOW()),
+  ('PIN_LOCKOUT_DURATION_MINUTES', '15', 'Durasi kuncian akun (menit) jika salah PIN 3x', 'SYSTEM_AUTO', 'SYSTEM_AUTO', NOW(), NOW()),
+  ('PIN_IDLE_TIMEOUT_MINUTES', '3', 'Waktu idle (menit) sebelum Mobile App auto-lock', 'SYSTEM_AUTO', 'SYSTEM_AUTO', NOW(), NOW()),
+  ('PASSWORD_MAX_FAILED_ATTEMPTS', '3', 'Batas maksimum salah password web app', 'SYSTEM_AUTO', 'SYSTEM_AUTO', NOW(), NOW()),
+  ('PASSWORD_ROTATION_DAYS', '90', 'Batas rotasi password web (hari)', 'SYSTEM_AUTO', 'SYSTEM_AUTO', NOW(), NOW()),
+  ('PASSWORD_MIN_LENGTH', '9', 'Panjang minimum password web app', 'SYSTEM_AUTO', 'SYSTEM_AUTO', NOW(), NOW())
+ON CONFLICT (param_key) DO UPDATE 
+SET param_value = EXCLUDED.param_value,
+    description = EXCLUDED.description,
+    updated_at = NOW();
+```
+
+---
+
+### 14.4 End-to-End Verification Test Cases & Results
+
+Berikut adalah hasil pengujian riil yang telah terverifikasi sukses (Verified Case Results):
+
+#### 🟢 Test #1: Mobile Register Check (4-Factor Matching)
+- **Endpoint**: `POST /api/v1/auth/mobile-register-check`
+- **Request Payload**:
+  ```json
+  {
+    "no_ktp": "234567",
+    "employee_id": 100001,
+    "name": "Nur Kholim",
+    "phone_number": "085882500073"
+  }
+  ```
+- **Response Server (Status 200 OK)**:
+  ```json
+  {
+    "status": "MATCH_SUCCESS",
+    "message": "Data karyawan terverifikasi valid dengan record HRD.",
+    "is_registered": false,
+    "has_pin": false,
+    "employee": {
+      "employee_id": 100001,
+      "name": "Nur Kholim",
+      "deptno": "DEPT01",
+      "category_code": "PERM",
+      "salary": 12500000,
+      "employee_status": "ACTIVE"
+    }
+  }
+  ```
+
+#### 🟢 Test #2: Request & Verifikasi OTP
+- **Endpoint Request OTP**: `POST /api/v1/auth/request-otp`
+- **Endpoint Verify OTP**: `POST /api/v1/auth/verify-otp`
+- **Request Payload**:
+  ```json
+  {
+    "phone_number": "085882500073",
+    "otp_code": "123456"
+  }
+  ```
+- **Response Server (Status 200 OK)**:
+  ```json
+  {
+    "status": "SUCCESS",
+    "message": "Verifikasi OTP Berhasil!"
+  }
+  ```
+
+#### 🟢 Test #3: Setup PIN 6-Digit
+- **Endpoint**: `POST /api/v1/auth/setup-pin`
+- **Request Payload**:
+  ```json
+  {
+    "employee_id": 100001,
+    "no_ktp": "234567",
+    "phone_number": "085882500073",
+    "pin": "859204"
+  }
+  ```
+- **Response Server (Status 200 OK)**:
+  ```json
+  {
+    "status": "SUCCESS",
+    "message": "PIN 6-Digit berhasil didaftarkan! Anda kini dapat login menggunakan No. HP & PIN."
+  }
+  ```
+
+#### 🟢 Test #4: Mobile Login (No. HP + PIN 6-Digit)
+- **Endpoint**: `POST /api/v1/auth/mobile-login`
+- **Request Payload**:
+  ```json
+  {
+    "phone_number": "085882500073",
+    "pin": "859204"
+  }
+  ```
+- **Response Server (Status 200 OK)**:
+  ```json
+  {
+    "status": "SUCCESS",
+    "message": "Login Berhasil!",
+    "idle_timeout_minutes": 3,
+    "user": {
+      "id": 50015,
+      "username": "085882500073",
+      "name": "Nur Kholim",
+      "role_id": 2,
+      "member_no": 200001,
+      "phone_number": "085882500073"
+    },
+    "employee": {
+      "employee_id": 100001,
+      "name": "Nur Kholim",
+      "deptno": "DEPT01",
+      "category_code": "PERM",
+      "salary": 12500000,
+      "total_loan": 4603125,
+      "employee_status": "ACTIVE"
+    }
+  }
+  ```

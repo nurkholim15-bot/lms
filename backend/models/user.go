@@ -12,6 +12,11 @@ type User struct {
 	Name                string     `gorm:"column:name" json:"name"`
 	RoleID              int64      `gorm:"column:role_id" json:"role_id"`
 	MemberNo            *int64     `gorm:"column:member_no;uniqueIndex" json:"member_no"`
+	NoKTP               *string    `gorm:"column:no_ktp" json:"no_ktp,omitempty"`
+	PhoneNumber         *string    `gorm:"column:phone_number" json:"phone_number,omitempty"`
+	PIN                 *string    `gorm:"column:pin" json:"-"`
+	FailedPINAttempts   int        `gorm:"column:failed_pin_attempts;default:0" json:"failed_pin_attempts"`
+	PINLockedUntil      *time.Time `gorm:"column:pin_locked_until" json:"pin_locked_until,omitempty"`
 	FailedLoginAttempts int        `gorm:"column:failed_login_attempts;default:0" json:"failed_login_attempts"`
 	LockedUntil         *time.Time `gorm:"column:locked_until" json:"locked_until"`
 	PasswordChangedAt   time.Time  `gorm:"column:password_changed_at;autoCreateTime" json:"password_changed_at"`

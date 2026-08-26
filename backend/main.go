@@ -162,7 +162,7 @@ func calculateLMSCreditLimitFromCache(db *gorm.DB, paramRepo repositories.Parame
 	return limitVal
 }
 
-// CORSMiddleware enables cross-origin resource sharing for allowed origins
+// CORSMiddleware enables cross-origin resource sharing for allowed origins and local Wi-Fi testing
 func CORSMiddleware() gin.HandlerFunc {
 	rawOrigins := os.Getenv("ALLOWED_ORIGINS")
 	var allowedOrigins []string
@@ -175,31 +175,44 @@ func CORSMiddleware() gin.HandlerFunc {
 	}
 
 	return func(c *gin.Context) {
+		log.Printf("🔥 [INCOMING REQUEST] %s %s from ClientIP: %s | UserAgent: %s", c.Request.Method, c.Request.URL.Path, c.ClientIP(), c.Request.UserAgent())
 		origin := c.Request.Header.Get("Origin")
 
 		if origin != "" {
+			isAllowed := false
 			if len(allowedOrigins) == 0 {
-				c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+				isAllowed = true
 			} else {
-				isAllowed := false
 				for _, allowed := range allowedOrigins {
-					if allowed == "*" || origin == allowed || strings.HasPrefix(origin, allowed+":") {
+					if allowed == "*" || 
+					   origin == allowed || 
+					   strings.HasPrefix(origin, allowed+":") || 
+					   strings.HasPrefix(origin, "http://192.168.") || 
+					   strings.HasPrefix(origin, "https://192.168.") || 
+					   strings.HasPrefix(origin, "http://10.") || 
+					   strings.HasPrefix(origin, "https://10.") || 
+					   strings.HasPrefix(origin, "capacitor://") ||
+					   strings.HasPrefix(origin, "http://localhost") ||
+					   strings.HasPrefix(origin, "https://localhost") ||
+					   strings.Contains(origin, ".ngrok-free.") ||
+					   strings.Contains(origin, ".ngrok.io") {
 						isAllowed = true
 						break
 					}
 				}
-				if isAllowed {
-					c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
-					c.Writer.Header().Set("Vary", "Origin")
-				}
+			}
+
+			if isAllowed {
+				c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+				c.Writer.Header().Set("Vary", "Origin")
 			}
 		} else {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		}
 
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-App-Token, ngrok-skip-browser-warning")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
@@ -345,6 +358,7 @@ func AuthMiddleware() gin.HandlerFunc {
 		path := c.Request.URL.Path
 		// Skip public authentication, health check, and read-only GET master/user-info endpoints
 		if strings.HasPrefix(path, "/api/karisma/login") || 
+		   strings.HasPrefix(path, "/api/karisma/register") || 
 		   strings.HasPrefix(path, "/api/karisma/verify") || 
 		   strings.HasPrefix(path, "/api/karisma/change-password") || 
 		   strings.HasPrefix(path, "/api/products") || 
@@ -597,6 +611,188 @@ func main() {
 		// Built-in Karisma Authentication Routes with detailed investigation logs
 		karisma := api.Group("/karisma")
 		{
+			karisma.POST("/register", func(c *gin.Context) {
+				var req struct {
+					Nik      string `json:"nik"`       // NIK (Nomor Induk Karyawan)
+					MemberNo string `json:"member_no"` // Fallback alias
+					PhoneNo  string `json:"phone_no"`  // No. HP / WhatsApp
+					KtpNo    string `json:"ktp_no"`    // NIK KTP
+					Name     string `json:"name"`      // Nama Lengkap Karyawan
+				}
+				if err := c.ShouldBindJSON(&req); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Payload registrasi tidak valid"})
+					return
+				}
+
+				nikStr := strings.TrimSpace(req.Nik)
+				if nikStr == "" {
+					nikStr = strings.TrimSpace(req.MemberNo)
+				}
+				phone := strings.TrimSpace(req.PhoneNo)
+				ktpStr := strings.TrimSpace(req.KtpNo)
+				nameStr := strings.TrimSpace(req.Name)
+
+				if phone == "" || nikStr == "" {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Nomor Handphone dan NIK Karyawan wajib diisi!"})
+					return
+				}
+
+				var nikParsed int64
+				if parsed, errP := strconv.ParseInt(nikStr, 10, 64); errP == nil && parsed > 0 {
+					nikParsed = parsed
+				} else {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Karyawan dengan NIK : %s tidak ditemukan", nikStr)})
+					return
+				}
+
+				if config.DB == nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Koneksi database tidak tersedia"})
+					return
+				}
+
+				// STEP 1: Cek employees: select * from lms_sch.employees where employee_id = <NIK>
+				var emp models.Employee
+				if errEmp := config.DB.Where("employee_id = ? AND deleted_at IS NULL", nikParsed).First(&emp).Error; errEmp != nil {
+					// STEP 2: Jika #1 tidak ketemu, kirim notifikasi "Karyawan dengan NIK : <NIK> tidak ditemukan"
+					log.Printf("[REGISTER-FAIL] Employee not found for NIK %d (%s)", nikParsed, nikStr)
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Karyawan dengan NIK : %s tidak ditemukan", nikStr)})
+					return
+				}
+
+				// STEP 3: Jika #1 ketemu, cek 4 factor (Phone, NIK, KTP, Name)
+				phone08 := phone
+				phone62 := phone
+				if strings.HasPrefix(phone, "0") {
+					phone62 = "62" + phone[1:]
+				} else if strings.HasPrefix(phone, "62") {
+					phone08 = "0" + phone[2:]
+				}
+
+				cleanEmpPhone := strings.TrimSpace(emp.PhoneNumber)
+				cleanEmpKtp := strings.TrimSpace(emp.NoKTP)
+				cleanEmpName := strings.TrimSpace(emp.Name)
+
+				phoneMatch := cleanEmpPhone == "" || cleanEmpPhone == phone08 || cleanEmpPhone == phone62 || strings.HasSuffix(phone, strings.TrimPrefix(cleanEmpPhone, "0"))
+				ktpMatch := cleanEmpKtp == "" || ktpStr == "" || cleanEmpKtp == ktpStr
+				nameMatch := cleanEmpName == "" || nameStr == "" || strings.EqualFold(cleanEmpName, nameStr) || strings.Contains(strings.ToLower(cleanEmpName), strings.ToLower(nameStr)) || strings.Contains(strings.ToLower(nameStr), strings.ToLower(cleanEmpName))
+
+				if !phoneMatch || !ktpMatch || !nameMatch {
+					// STEP 4: Jika #3 tidak match, kirim notifikasi "Data tidak sama dengan HRD"
+					log.Printf("[REGISTER-FAIL] 4-Factor mismatch for NIK %d. Req (Phone: %s, KTP: %s, Name: %s) vs HRD (Phone: %s, KTP: %s, Name: %s)",
+						nikParsed, phone, ktpStr, nameStr, cleanEmpPhone, cleanEmpKtp, cleanEmpName)
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Data tidak sama dengan HRD"})
+					return
+				}
+
+				// STEP 5: Jika #3 ketemu --> cari member_no --> select member_no from lms_sch.members where employee_id = <NIK>
+				var mem models.Member
+				var memberNoToUse int64
+				if errMem := config.DB.Where("employee_id = ? AND deleted_at IS NULL", nikParsed).First(&mem).Error; errMem == nil {
+					memberNoToUse = mem.MemberNo
+				} else {
+					// Auto-create member record if missing to satisfy FK constraint
+					memberNoToUse = nikParsed
+					mem = models.Member{
+						MemberNo:      memberNoToUse,
+						EmployeeID:    nikParsed,
+						KopkaraStatus: "ACTIVE",
+						JoinDate:      time.Now().Format("2006-01-02"),
+					}
+					config.DB.Create(&mem)
+				}
+
+				// STEP 6: Insert ke table users dengan random PIN, lalu kirim WA dan notifikasi
+				b := make([]byte, 3)
+				var randomPin string
+				if _, errR := rand.Read(b); errR == nil {
+					num := (int(b[0])<<16 | int(b[1])<<8 | int(b[2]))%900000 + 100000
+					randomPin = fmt.Sprintf("%06d", num)
+				} else {
+					randomPin = fmt.Sprintf("%06d", time.Now().UnixNano()%899999+100000)
+				}
+
+				hash, _ := bcrypt.GenerateFromPassword([]byte(randomPin), bcrypt.DefaultCost)
+				hashStr := string(hash)
+				phoneStr := phone
+
+				var existingUser models.User
+				if err := config.DB.Where("username = ? OR username = ? OR phone_number = ? OR phone_number = ? OR (member_no IS NOT NULL AND member_no = ?)", phone08, phone62, phone08, phone62, memberNoToUse).First(&existingUser).Error; err == nil {
+					updates := map[string]interface{}{
+						"password":     hashStr,
+						"pin":          hashStr,
+						"phone_number": phoneStr,
+						"name":         emp.Name,
+						"member_no":    memberNoToUse,
+					}
+					if ktpStr != "" {
+						updates["no_ktp"] = ktpStr
+					}
+					if errUpd := config.DB.Model(&existingUser).Updates(updates).Error; errUpd != nil {
+						log.Printf("[REGISTER-UPDATE-ERROR] %v", errUpd)
+						c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal memperbarui user: " + errUpd.Error()})
+						return
+					}
+					log.Printf("🟢 [REGISTER-SUCCESS] Updated user ID %d for phone %s with Random PIN: %s", existingUser.ID, phone, randomPin)
+				} else {
+					newUser := models.User{
+						Username:    phone,
+						Password:    hashStr,
+						PhoneNumber: &phoneStr,
+						Name:        emp.Name,
+						PIN:         &hashStr,
+						RoleID:      2,
+						MemberNo:    &memberNoToUse,
+					}
+					if ktpStr != "" {
+						newUser.NoKTP = &ktpStr
+					}
+					if err := config.DB.Create(&newUser).Error; err != nil {
+						log.Printf("[REGISTER-CREATE-ERROR] %v", err)
+						c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal meregistrasi user: " + err.Error()})
+						return
+					}
+					log.Printf("🟢 [REGISTER-SUCCESS] Inserted NEW user ID %d for phone %s (member_no: %d) with Random PIN: %s", newUser.ID, phone, memberNoToUse, randomPin)
+				}
+
+				// Dispatch WA Notification
+				waTemplate := "Halo {name}, Selamat! Registrasi & Aktivasi PIN EWA Mobile Kopkara Anda (HP: {phone}) telah BERHASIL. Silakan login ke aplikasi EWA Mobile menggunakan PIN {pin}."
+				if paramRepo != nil {
+					if p, errP := paramRepo.FindByKey("WA_DAFTAR_NOTIFICATION"); errP == nil && strings.TrimSpace(p.KeyValue) != "" {
+						waTemplate = strings.TrimSpace(p.KeyValue)
+					}
+				}
+
+				// Guarantee {pin} placeholder exists so the generated PIN is ALWAYS sent to the user
+				if !strings.Contains(waTemplate, "{pin}") && !strings.Contains(waTemplate, "{PIN}") {
+					if strings.Contains(waTemplate, "PIN 6-Digit Anda") {
+						waTemplate = strings.ReplaceAll(waTemplate, "PIN 6-Digit Anda", "PIN {pin}")
+					} else {
+						waTemplate = waTemplate + " PIN: {pin}"
+					}
+				}
+
+				waMsg := strings.ReplaceAll(waTemplate, "{name}", emp.Name)
+				waMsg = strings.ReplaceAll(waMsg, "{phone}", phone)
+				waMsg = strings.ReplaceAll(waMsg, "{nik}", nikStr)
+				waMsg = strings.ReplaceAll(waMsg, "{member_no}", fmt.Sprintf("%d", memberNoToUse))
+				waMsg = strings.ReplaceAll(waMsg, "{pin}", randomPin)
+				waMsg = strings.ReplaceAll(waMsg, "{PIN}", randomPin)
+
+				go func() {
+					errWA := handlers.SendWhatsAppNotification(phone, waMsg)
+					if errWA != nil {
+						log.Printf("[WA-NOTIFICATION-ERROR] Failed sending WA to %s: %v", phone, errWA)
+					} else {
+						log.Printf("🟢 [WA-NOTIFICATION-SUCCESS] WA Notification with Random PIN dispatched to %s", phone)
+					}
+				}()
+
+				c.JSON(http.StatusOK, gin.H{
+					"status":  "success",
+					"message": fmt.Sprintf("✅ Registrasi Berhasil! Karyawan NIK %s terverifikasi. PIN 6-Digit Rahasia telah dikirimkan via WhatsApp ke %s.", nikStr, phone),
+				})
+			})
+
 			karisma.POST("/login", func(c *gin.Context) {
 				var creds struct {
 					Username string `json:"username"`
@@ -617,11 +813,28 @@ func main() {
 					return
 				}
 
+				// Build phone number variants (08..., 62..., +62...)
+				phone08 := username
+				phone62 := username
+				if strings.HasPrefix(username, "0") {
+					phone62 = "62" + username[1:]
+				} else if strings.HasPrefix(username, "62") {
+					phone08 = "0" + username[2:]
+				} else if strings.HasPrefix(username, "+62") {
+					phone08 = "0" + username[3:]
+					phone62 = username[1:]
+				}
+
+				var memNoParsed int64
+				if parsed, errP := strconv.ParseInt(username, 10, 64); errP == nil {
+					memNoParsed = parsed
+				}
+
 				// 1. Fetch user from lms_sch.users table if DB is available
 				var user models.User
 				userFound := false
 				if config.DB != nil {
-					err := config.DB.Where("username = ? AND deleted_at IS NULL", username).First(&user).Error
+					err := config.DB.Where("(username = ? OR username = ? OR phone_number = ? OR phone_number = ? OR (member_no IS NOT NULL AND member_no = ?)) AND deleted_at IS NULL", username, phone08, phone08, phone62, memNoParsed).First(&user).Error
 					if err == nil {
 						userFound = true
 					}
@@ -645,15 +858,21 @@ func main() {
 						return
 					}
 
-					// Verify password using Bcrypt with fallback to plain text comparison
+					// Verify password using Bcrypt with fallback to plain text comparison & PIN 6-Digit fallback
 					pwdMatch := false
 					if errPwd := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); errPwd == nil {
 						pwdMatch = true
-					} else if user.Password == password {
+					} else if user.Password == password && user.Password != "" {
 						pwdMatch = true
 						// Auto upgrade plain text to bcrypt hash in DB
 						if hashed, errH := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost); errH == nil {
 							user.Password = string(hashed)
+						}
+					} else if user.PIN != nil && *user.PIN != "" {
+						// Allow employee to log in to Web Portal using their Mobile PIN!
+						if errPin := bcrypt.CompareHashAndPassword([]byte(*user.PIN), []byte(password)); errPin == nil {
+							pwdMatch = true
+							log.Printf("[KARISMA-AUTH-TRACE] Password match success via Mobile PIN 6-Digit Bcrypt Hash!")
 						}
 					}
 
@@ -2339,6 +2558,17 @@ func main() {
 		})
 	}
 
+	// Root Ping Handler for Mobile APK & Browser Connection Testing
+	r.GET("/", func(c *gin.Context) {
+		log.Printf("🟢 [PING TEST SUCCESS] Request received from Client IP: %s", c.ClientIP())
+		c.JSON(http.StatusOK, gin.H{
+			"status": "online",
+			"message": "LMS Backend Go Server Active",
+			"client_ip": c.ClientIP(),
+			"timestamp": time.Now().Format(time.RFC3339),
+		})
+	})
+
 	// Profiling Go pprof Listener (Active when ENABLE_PPROF=true or APP_ENV=development)
 	if os.Getenv("ENABLE_PPROF") == "true" || os.Getenv("APP_ENV") == "development" {
 		go func() {
@@ -2354,16 +2584,16 @@ func main() {
 		port = "8080"
 	}
 
-	certPath := os.Getenv("SSL_CERT_PATH")
-	keyPath := os.Getenv("SSL_KEY_PATH")
+	certPath := strings.TrimSpace(os.Getenv("SSL_CERT_PATH"))
+	keyPath := strings.TrimSpace(os.Getenv("SSL_KEY_PATH"))
 
-	if certPath != "" && keyPath != "" {
+	if certPath != "" && strings.ToUpper(certPath) != "OFF" && keyPath != "" && strings.ToUpper(keyPath) != "OFF" {
 		log.Printf("Starting HTTPS server on port %s using cert %s and key %s", port, certPath, keyPath)
 		if err := r.RunTLS(":"+port, certPath, keyPath); err != nil {
 			log.Fatalf("Failed to start HTTPS server: %v", err)
 		}
 	} else {
-		log.Printf("SSL_CERT_PATH or SSL_KEY_PATH not set, falling back to HTTP on port %s", port)
+		log.Printf("Starting HTTP server on port %s (SSL is OFF)", port)
 		if err := r.Run(":" + port); err != nil {
 			log.Fatalf("Failed to start HTTP server: %v", err)
 		}

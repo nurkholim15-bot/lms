@@ -35,6 +35,9 @@ type Employee struct {
 	CategoryCode   string  `gorm:"column:category_code" json:"category_code"`
 	Salary         float64 `gorm:"column:salary" json:"salary"`
 	TotalLoan      float64 `gorm:"column:total_loan" json:"total_loan"`
+	NoKTP          string  `gorm:"column:no_ktp" json:"no_ktp,omitempty"`
+	PhoneNumber    string  `gorm:"column:phone_number" json:"phone_number,omitempty"`
+	Email          string  `gorm:"column:email" json:"email,omitempty"`
 	MasterBaseModel
 }
 

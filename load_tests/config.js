@@ -1,6 +1,6 @@
 // Config File for Grafana k6 LMS Load Test
 
-export const BASE_URL = __ENV.BASE_URL || "https://localhost:8086";
+export const BASE_URL = __ENV.BASE_URL || "http://localhost:8086";
 
 // Konfigurasi Range Data Master (Dapat disesuaikan sesuai isi Database untuk analisis)
 export const MEMBER_NO_START = parseInt(__ENV.MEMBER_NO_START || "200001");
@@ -9,9 +9,9 @@ export const PRODUCT_ID = parseInt(__ENV.PRODUCT_ID || "1");
 
 // Konfigurasi Target SLA Response Time (dalam milidetik / ms)
 export const SIMULATION_LATENCY_SLA = parseInt(__ENV.SIMULATION_LATENCY_SLA || "300"); // Target SLA Simulasi (ms)
-export const SUBMIT_LATENCY_SLA = parseInt(__ENV.SUBMIT_LATENCY_SLA || "500");       // Target SLA Submit (ms)
-export const APPROVE_LATENCY_SLA = parseInt(__ENV.APPROVE_LATENCY_SLA || "500");     // Target SLA Approve (ms)
-export const DISBURSE_LATENCY_SLA = parseInt(__ENV.DISBURSE_LATENCY_SLA || "1000");   // Target SLA Disburse (ms)
+export const SUBMIT_LATENCY_SLA = parseInt(__ENV.SUBMIT_LATENCY_SLA || "500"); // Target SLA Submit (ms)
+export const APPROVE_LATENCY_SLA = parseInt(__ENV.APPROVE_LATENCY_SLA || "500"); // Target SLA Approve (ms)
+export const DISBURSE_LATENCY_SLA = parseInt(__ENV.DISBURSE_LATENCY_SLA || "1000"); // Target SLA Disburse (ms)
 
 export const TEST_THRESHOLDS = {
   checks: ["rate>0.95"], // 95% check pass rate SLA requirement

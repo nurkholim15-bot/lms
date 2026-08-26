@@ -1,15 +1,25 @@
 import React, { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
+import MobileEwaEnterpriseApp from './MobileEwaEnterpriseApp'
 
-const API_PROTOCOL = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'https:' : 'http:';
-const API_BASE_URL = import.meta.env.VITE_API_URL || `${API_PROTOCOL}//localhost:8086`;
+const getApiBaseUrl = () => {
+  if (typeof localStorage !== 'undefined') {
+    const custom = localStorage.getItem('ewa_custom_api_url');
+    if (custom && custom.trim()) {
+      return custom.trim().replace(/\/+$/, '');
+    }
+  }
+  const API_PROTOCOL = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'https:' : 'http:';
+  return import.meta.env.VITE_API_URL || `${API_PROTOCOL}//localhost:8086`;
+};
 
 // Enable credentials (HttpOnly Cookie Transmission) across all Axios requests
 axios.defaults.withCredentials = true;
 
-// Axios Request Interceptor: Automatically attach Authorization Bearer Token to all API requests
+// Axios Request Interceptor: Automatically attach Authorization Bearer Token and Ngrok warning bypass header
 axios.interceptors.request.use((config) => {
   config.withCredentials = true;
+  config.headers['ngrok-skip-browser-warning'] = '69420';
   const token = sessionStorage.getItem('lms_auth_token') || localStorage.getItem('lms_auth_token') || '';
   if (token && !config.headers['Authorization']) {
     config.headers['Authorization'] = `Bearer ${token}`;
@@ -30,7 +40,406 @@ const MENU_CONFIG = [
   { id: 'master', label: 'Data Master', icon: '🗃️', roles: ['admin'] },
 ];
 
+// Independent Server Configuration Modal Component with Real-time Screen Tracing Console
+function ServerConfigModal({ isOpen, onClose, serverApiIp, setServerApiIp, serverApiPort, setServerApiPort }) {
+  if (!isOpen) return null;
+
+  const [testStatus, setTestStatus] = useState('Belum Diuji');
+  const [traceLogs, setTraceLogs] = useState([]);
+
+  const addLog = (msg) => setTraceLogs(prev => [...prev, `[${new Date().toLocaleTimeString('id-ID')}] ${msg}`]);
+
+  const formatTargetUrl = (inputIp, inputPort) => {
+    let raw = (inputIp || '').trim();
+    if (!raw) raw = '192.168.0.104';
+    if (raw.startsWith('http://') || raw.startsWith('https://')) {
+      return raw.replace(/\/+$/, '');
+    }
+    const port = (inputPort || '8086').trim();
+    return `http://${raw}:${port}`;
+  };
+
+  const handleTest = async () => {
+    setTestStatus('Testing...');
+    setTraceLogs([]);
+
+    const targetUrl = formatTargetUrl(serverApiIp, serverApiPort);
+
+    addLog(`Target API URL: ${targetUrl}`);
+    addLog(`Mencoba native fetch ${targetUrl}/ ...`);
+
+    try {
+      const fRes = await fetch(`${targetUrl}/`, {
+        method: 'GET',
+        mode: 'cors',
+        headers: { 'ngrok-skip-browser-warning': '69420' }
+      });
+      if (fRes.ok || fRes.status === 200) {
+        const fData = await fRes.json();
+        setTestStatus('Sukses');
+        addLog(`🟢 NATIVE FETCH SUCCESS (200 OK): ${JSON.stringify(fData)}`);
+        return;
+      }
+    } catch (fErr) {
+      addLog(`FETCH FAIL: ${fErr.message}`);
+    }
+
+    addLog(`Mencoba Axios GET ${targetUrl}/ ...`);
+
+    try {
+      const res = await axios.get(`${targetUrl}/`, { timeout: 4000 });
+      setTestStatus('Sukses');
+      addLog(`SUCCESS: Response Data => ${JSON.stringify(res.data)}`);
+    } catch (errHttp) {
+      addLog(`HTTP FAIL (${targetUrl}): ${errHttp.message} (${errHttp.code || 'NO_CODE'})`);
+      setTestStatus('Gagal');
+    }
+  };
+
+  const handleSave = () => {
+    const targetUrl = formatTargetUrl(serverApiIp, serverApiPort);
+    localStorage.setItem('ewa_custom_api_url', targetUrl);
+    localStorage.setItem('ewa_mobile_api_ip', serverApiIp);
+    onClose();
+    alert(`✅ URL Server API Diterapkan: ${targetUrl}`);
+  };
+
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+      backgroundColor: 'rgba(15, 23, 42, 0.8)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      zIndex: 999999, backdropFilter: 'blur(4px)', padding: '16px'
+    }}>
+      <div style={{
+        backgroundColor: 'white', borderRadius: '24px', padding: '24px',
+        width: '100%', maxWidth: '380px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
+      }}>
+        <div style={{ textAlign: 'center', marginBottom: '16px' }}>
+          <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: '#eff6ff', color: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.6rem', margin: '0 auto 10px' }}>
+            🌐
+          </div>
+          <h3 style={{ margin: 0, fontSize: '1.2rem', color: '#0f172a', fontWeight: 800 }}>
+            Pengaturan Server API
+          </h3>
+          <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+            Atur alamat koneksi untuk HP Mobile Anda
+          </p>
+        </div>
+
+        <div style={{ marginBottom: '16px' }}>
+          <label style={{ fontSize: '0.75rem', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '4px' }}>ALAMAT & PORT SERVER LOKAL</label>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input
+              type="text"
+              value={serverApiIp}
+              onChange={(e) => setServerApiIp(e.target.value)}
+              placeholder="192.168.0.104"
+              style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '0.85rem', fontWeight: 700 }}
+            />
+            <span style={{ alignSelf: 'center', fontWeight: 'bold' }}>:</span>
+            <input
+              type="text"
+              value={serverApiPort}
+              onChange={(e) => setServerApiPort(e.target.value)}
+              placeholder="8086"
+              style={{ width: '70px', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '0.85rem', fontWeight: 700 }}
+            />
+          </div>
+          <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '6px', fontStyle: 'italic' }}>
+            * Masukkan IP laptop Anda di jaringan Wi-Fi lokal.
+          </div>
+        </div>
+
+        <div style={{ background: '#f8fafc', padding: '10px 14px', borderRadius: '10px', marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.8rem', color: '#475569', fontWeight: 600 }}>Status Koneksi:</span>
+          <span style={{
+            fontSize: '0.8rem', fontWeight: 800,
+            color: testStatus === 'Sukses' ? '#16a34a' : (testStatus === 'Gagal' ? '#dc2626' : '#2563eb')
+          }}>
+            {testStatus}
+          </span>
+        </div>
+
+        {/* Real-time Tracing Log Console Box */}
+        {traceLogs.length > 0 && (
+          <div style={{
+            background: '#0f172a', color: '#38bdf8', padding: '10px',
+            borderRadius: '8px', fontSize: '0.7rem', fontFamily: 'monospace',
+            maxHeight: '130px', overflowY: 'auto', marginBottom: '14px',
+            border: '1px solid #334155'
+          }}>
+            <div style={{ fontWeight: 'bold', color: '#fef08a', marginBottom: '4px' }}>📋 Log Tracing Real-time (HP):</div>
+            {traceLogs.map((logLine, idx) => (
+              <div key={idx} style={{ marginBottom: '2px', wordBreak: 'break-all' }}>{logLine}</div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+          <button
+            type="button"
+            onClick={handleTest}
+            style={{ padding: '10px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '10px', fontWeight: 800, fontSize: '0.8rem', cursor: 'pointer' }}
+          >
+            Tes Koneksi
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            style={{ padding: '10px', background: '#10b981', color: 'white', border: 'none', borderRadius: '10px', fontWeight: 800, fontSize: '0.8rem', cursor: 'pointer' }}
+          >
+            Simpan & Terapkan
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setServerApiIp('192.168.0.104');
+              setServerApiPort('8086');
+              setTestStatus('Belum Diuji');
+              setTraceLogs([]);
+            }}
+            style={{ padding: '10px', background: '#94a3b8', color: 'white', border: 'none', borderRadius: '10px', fontWeight: 800, fontSize: '0.8rem', cursor: 'pointer' }}
+          >
+            Reset Default
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ padding: '10px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '10px', fontWeight: 800, fontSize: '0.8rem', cursor: 'pointer' }}
+          >
+            Tutup
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Independent Registration & Activation Component for Mobile EWA Kopkara (PIN 6-Digit)
+function RegisterEwaModal({ isOpen, onClose, onSuccessLogin }) {
+  if (!isOpen) return null;
+
+  const [regForm, setRegForm] = useState({
+    nik: '',
+    phone_no: '',
+    ktp_no: '',
+    name: '',
+    agree: true
+  });
+  const [regError, setRegError] = useState('');
+  const [regSuccess, setRegSuccess] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setRegError('');
+    setRegSuccess('');
+
+    const cleanPhone = regForm.phone_no.trim();
+    const cleanNik = regForm.nik.trim();
+    const cleanKtp = regForm.ktp_no.trim();
+    const cleanName = regForm.name.trim();
+
+    if (!cleanPhone) {
+      const msg = '⚠️ Nomor Handphone (WhatsApp) wajib diisi!';
+      setRegError(msg);
+      alert(msg);
+      return;
+    }
+    if (!cleanNik) {
+      const msg = '⚠️ NIK (Nomor Induk Karyawan) wajib diisi!';
+      setRegError(msg);
+      alert(msg);
+      return;
+    }
+    if (!cleanKtp) {
+      const msg = '⚠️ NIK KTP (16-Digit) wajib diisi!';
+      setRegError(msg);
+      alert(msg);
+      return;
+    }
+    if (!cleanName) {
+      const msg = '⚠️ Nama Lengkap Karyawan wajib diisi!';
+      setRegError(msg);
+      alert(msg);
+      return;
+    }
+    if (!regForm.agree) {
+      const msg = '⚠️ Anda wajib menyetujui Syarat & Ketentuan Keanggotaan Mobile EWA Kopkara!';
+      setRegError(msg);
+      alert(msg);
+      return;
+    }
+
+    setSubmitting(true);
+    setRegSuccess('⏳ Memverifikasi 4 faktor data & menggenerasi PIN Rahasia via WhatsApp...');
+    try {
+      const apiUrl = `${getApiBaseUrl()}/api/karisma/register`;
+      console.log(`[REGISTER-SUBMIT] Sending 4-Factor POST to ${apiUrl}`, regForm);
+
+      const res = await axios.post(apiUrl, {
+        nik: cleanNik,
+        member_no: cleanNik,
+        phone_no: cleanPhone,
+        ktp_no: cleanKtp,
+        name: cleanName
+      });
+
+      const successMsg = res.data?.message || '✅ Registrasi Berhasil! Data 4-Faktor Terverifikasi.';
+      setRegSuccess(successMsg);
+
+      alert(`🟢 REGISTRASI & AKTIVASI EWA BERHASIL!\n\n1. Data 4-Faktor (No. HP, NIK, KTP, Nama) telah terverifikasi & ter-insert di database (lms_sch.users).\n2. PIN 6-Digit Rahasia telah dikirimkan secara otomatis ke nomor WhatsApp: ${cleanPhone}.\n\nSilakan cek pesan WhatsApp Anda untuk mendapatkan PIN dan melakukan Login!`);
+
+      setTimeout(() => {
+        onClose();
+        if (onSuccessLogin) {
+          onSuccessLogin(cleanPhone, '');
+        }
+      }, 1500);
+    } catch (err) {
+      setRegSuccess('');
+      const errDetail = err.response?.data?.error || err.message || 'Gagal meregistrasi akun EWA Mobile';
+      setRegError(errDetail);
+      alert(`❌ REGISTRASI GAGAL: ${errDetail}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+      backgroundColor: 'rgba(15, 23, 42, 0.85)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      zIndex: 999999, backdropFilter: 'blur(6px)', padding: '16px'
+    }}>
+      <div style={{
+        backgroundColor: 'white', borderRadius: '24px', padding: '28px',
+        width: '100%', maxWidth: '440px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.3)',
+        maxHeight: '92vh', overflowY: 'auto'
+      }}>
+        <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+          <div style={{ width: '60px', height: '60px', borderRadius: '50%', background: '#f0fdf4', color: '#16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.8rem', margin: '0 auto 12px', boxShadow: '0 4px 12px rgba(22, 163, 74, 0.15)' }}>
+            📱
+          </div>
+          <h3 style={{ margin: 0, fontSize: '1.3rem', color: '#0f172a', fontWeight: 800 }}>
+            Registrasi Mobile EWA Kopkara
+          </h3>
+          <p style={{ margin: '4px 0 0 0', fontSize: '0.825rem', color: '#64748b' }}>
+            Verifikasi 4 Faktor Karyawan & Generasi PIN Otomatis
+          </p>
+        </div>
+
+        {regError && (
+          <div style={{ padding: '12px', background: '#fee2e2', color: '#991b1b', borderRadius: '10px', fontSize: '0.85rem', marginBottom: '16px', fontWeight: 600 }}>
+            {regError}
+          </div>
+        )}
+        {regSuccess && (
+          <div style={{ padding: '12px', background: '#dcfce7', color: '#166534', borderRadius: '10px', fontSize: '0.85rem', marginBottom: '16px', fontWeight: 700, textAlign: 'center' }}>
+            {regSuccess}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '4px' }}>NO. HANDPHONE / WHATSAPP *</label>
+            <input
+              type="text" required
+              value={regForm.phone_no}
+              onChange={e => setRegForm({ ...regForm, phone_no: e.target.value })}
+              placeholder="Contoh: 085882500073"
+              style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '0.9rem', outline: 'none' }}
+            />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <div>
+              <label style={{ fontSize: '0.75rem', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '4px' }}>NIK (NOMOR INDUK KARYAWAN) *</label>
+              <input
+                type="text" required
+                value={regForm.nik}
+                onChange={e => setRegForm({ ...regForm, nik: e.target.value })}
+                placeholder="Contoh: 10101"
+                style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '0.9rem', outline: 'none' }}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: '0.75rem', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '4px' }}>NIK KTP (16-DIGIT) *</label>
+              <input
+                type="text" required
+                value={regForm.ktp_no}
+                onChange={e => setRegForm({ ...regForm, ktp_no: e.target.value })}
+                placeholder="Contoh: 320101..."
+                style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '0.9rem', outline: 'none' }}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '4px' }}>NAMA LENGKAP KARYAWAN *</label>
+            <input
+              type="text" required
+              value={regForm.name}
+              onChange={e => setRegForm({ ...regForm, name: e.target.value })}
+              placeholder="Masukkan nama sesuai KTP"
+              style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '0.9rem', outline: 'none' }}
+            />
+          </div>
+
+          <div style={{ padding: '12px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '12px', color: '#1e40af', fontSize: '0.78rem', display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+            <span>🔐</span>
+            <span>PIN 6-Digit Rahasia akan digenerate otomatis oleh LMS & dikirimkan langsung ke nomor WhatsApp Anda untuk keamanan maksimal.</span>
+          </div>
+
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '0.75rem', color: '#475569', cursor: 'pointer', marginTop: '4px' }}>
+            <input
+              type="checkbox"
+              checked={regForm.agree}
+              onChange={e => setRegForm({ ...regForm, agree: e.target.checked })}
+              style={{ marginTop: '2px' }}
+            />
+            <span>Saya menyetujui Syarat & Ketentuan Keanggotaan Mobile EWA Koperasi Kopkara.</span>
+          </label>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '10px' }}>
+            <button
+              type="button"
+              onClick={onClose}
+              style={{ padding: '12px', background: '#94a3b8', color: 'white', border: 'none', borderRadius: '12px', fontWeight: 800, fontSize: '0.85rem', cursor: 'pointer' }}
+            >
+              Batal
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              style={{ padding: '12px', background: submitting ? '#94a3b8' : '#16a34a', color: 'white', border: 'none', borderRadius: '12px', fontWeight: 800, fontSize: '0.85rem', cursor: submitting ? 'not-allowed' : 'pointer' }}
+            >
+              {submitting ? 'Memproses...' : 'Daftar & Aktifkan'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function App() {
+  const [registerModalOpen, setRegisterModalOpen] = useState(false);
+  const [serverModalOpen, setServerModalOpen] = useState(false);
+  const [serverApiPort, setServerApiPort] = useState('8086');
+  const [serverApiIp, setServerApiIp] = useState(() => {
+    if (typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem('ewa_mobile_api_ip');
+      if (saved && saved.trim()) return saved.trim();
+    }
+    const host = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : '';
+    if (!host || host === 'localhost' || host === '127.0.0.1') {
+      return '192.168.0.104';
+    }
+    return host;
+  });
   const fileInputRef = useRef(null);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -105,7 +514,7 @@ function App() {
     memberLoadingRef.current = true;
     try {
       const pageSize = parseInt(getParamVal('DEFAULT_PAGE_SIZE', '10')) || 10;
-      const res = await axios.get(`${API_BASE_URL}/api/members?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
+      const res = await axios.get(`${getApiBaseUrl()}/api/members?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
       setPaginatedMemberList(res.data.data || []);
       setMemberTotalRecords(res.data.total_records || 0);
       setMemberTotalPages(res.data.total_pages || 1);
@@ -134,7 +543,7 @@ function App() {
     setEmpSelectLoading(true);
     try {
       const pageSize = parseInt(getParamVal('PAGINATION_LIMIT', getParamVal('DEFAULT_PAGE_SIZE', '5'))) || 5;
-      const res = await axios.get(`${API_BASE_URL}/api/master/employees?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
+      const res = await axios.get(`${getApiBaseUrl()}/api/master/employees?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
       setEmpSelectList(res.data.data || []);
       setEmpSelectTotalRecords(res.data.total_records || (res.data.data ? res.data.data.length : 0));
       setEmpSelectTotalPages(res.data.total_pages || 1);
@@ -157,7 +566,7 @@ function App() {
     setMemberSelectLoading(true);
     try {
       const pageSize = parseInt(getParamVal('PAGINATION_LIMIT', getParamVal('DEFAULT_PAGE_SIZE', '5'))) || 5;
-      const res = await axios.get(`${API_BASE_URL}/api/master/members?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
+      const res = await axios.get(`${getApiBaseUrl()}/api/master/members?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
       setMemberSelectList(res.data.data || []);
       setMemberSelectTotalRecords(res.data.total_records || (res.data.data ? res.data.data.length : 0));
       setMemberSelectTotalPages(res.data.total_pages || 1);
@@ -206,7 +615,7 @@ function App() {
 
   const fetchReconciliationStatus = async () => {
     try {
-      const res = await axios.get(`${API_BASE_URL}/api/payroll/reconciliation-status?period=2026-08`);
+      const res = await axios.get(`${getApiBaseUrl()}/api/payroll/reconciliation-status?period=2026-08`);
       if (res.data && res.data.data) {
         setReconcileClosingInfo(res.data.data);
       }
@@ -221,7 +630,7 @@ function App() {
 
   const fetchAdjustments = async () => {
     try {
-      const res = await axios.get(`${API_BASE_URL}/api/payroll/adjustments?period=2026-08`);
+      const res = await axios.get(`${getApiBaseUrl()}/api/payroll/adjustments?period=2026-08`);
       if (res.data && res.data.adjustments) {
         setAdjustmentsList(res.data.adjustments || []);
       }
@@ -253,7 +662,7 @@ function App() {
         created_user: activeUserName
       };
 
-      const res = await axios.post(`${API_BASE_URL}/api/payroll/adjust`, payload);
+      const res = await axios.post(`${getApiBaseUrl()}/api/payroll/adjust`, payload);
       alert(`✅ ${res.data.message}`);
       setAdjustModalOpen(false);
       setAdjustTargetItem(null);
@@ -276,7 +685,7 @@ function App() {
         closed_user: activeUserName
       };
 
-      const res = await axios.post(`${API_BASE_URL}/api/payroll/close-reconciliation`, payload);
+      const res = await axios.post(`${getApiBaseUrl()}/api/payroll/close-reconciliation`, payload);
       alert(`🔒 ${res.data.message}`);
       setCloseModalOpen(false);
       fetchReconciliationStatus();
@@ -289,7 +698,7 @@ function App() {
   const handleOpenTracking = async (applicationNo) => {
     setTrackingAppNo(applicationNo);
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/applications/${applicationNo}/trackings`);
+      const response = await axios.get(`${getApiBaseUrl()}/api/applications/${applicationNo}/trackings`);
       setTrackingList(response.data.data || []);
       setTrackingModalOpen(true);
     } catch (err) {
@@ -341,7 +750,7 @@ function App() {
     try {
       const empId = currentUser?.employee_id || '';
       const currentRole = roleId || userInfo?.role_id || userInfo?.role_name || realRoleName || '';
-      const res = await axios.get(`${API_BASE_URL}/api/dashboard/summary?employee_id=${encodeURIComponent(empId)}&role_id=${encodeURIComponent(currentRole)}`);
+      const res = await axios.get(`${getApiBaseUrl()}/api/dashboard/summary?employee_id=${encodeURIComponent(empId)}&role_id=${encodeURIComponent(currentRole)}`);
       if (res.data) {
         setDashboardSummary(res.data);
       }
@@ -354,7 +763,7 @@ function App() {
   useEffect(() => {
     const userKey = currentUser?.username || currentUser?.employee_id;
     if (userKey) {
-      axios.get(`${API_BASE_URL}/api/user-info/${encodeURIComponent(userKey)}`)
+      axios.get(`${getApiBaseUrl()}/api/user-info/${encodeURIComponent(userKey)}`)
         .then(res => {
           const info = res.data;
           setUserInfo(info);
@@ -451,7 +860,7 @@ function App() {
   const fetchProducts = async () => {
     setLoading(true);
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/products`);
+      const response = await axios.get(`${getApiBaseUrl()}/api/products`);
       setProducts(response.data.data || []);
     } catch (error) {
       console.error("Error fetching products:", error);
@@ -543,7 +952,7 @@ function App() {
       const yr = targetYear || (activeTab === 'disbursement' ? disbursementMonthFilter.year : (activeTab === 'pinjaman' ? loanMonthFilter.year : (isReport ? reportMonthFilter.year : approvalMonthFilter.year))) || '2026';
       const mo = targetMonth || (activeTab === 'disbursement' ? disbursementMonthFilter.month : (activeTab === 'pinjaman' ? loanMonthFilter.month : (isReport ? reportMonthFilter.month : approvalMonthFilter.month))) || '08';
       const period = `${yr}${mo}`;
-      let url = `${API_BASE_URL}/api/applications?period=${period}`;
+      let url = `${getApiBaseUrl()}/api/applications?period=${period}`;
       if (activeTab === 'approval') {
         url += `&status=SUBMITTED`;
       } else if (activeTab === 'disbursement') {
@@ -579,7 +988,7 @@ function App() {
 
   const fetchPayrollSchedules = async (targetMemberNo) => {
     try {
-      let url = `${API_BASE_URL}/api/payroll/schedules?period=2026-08`;
+      let url = `${getApiBaseUrl()}/api/payroll/schedules?period=2026-08`;
       if (targetMemberNo) {
         url += `&member_no=${encodeURIComponent(targetMemberNo)}`;
       }
@@ -616,7 +1025,7 @@ function App() {
 
     if (activeTab === 'pengajuan' || activeTab === 'master') {
       fetchProducts();
-      axios.get(`${API_BASE_URL}/api/members/all`)
+      axios.get(`${getApiBaseUrl()}/api/members/all`)
         .then(res => setAllMembers(res.data.data || []))
         .catch(err => console.error("Error fetching all members:", err));
     }
@@ -639,7 +1048,7 @@ function App() {
 
     try {
       const activeUserId = currentUser ? String(currentUser.employee_id || '10101') : '10101';
-      await axios.post(`${API_BASE_URL}/api/applications/${applicationNo}/approve`, {
+      await axios.post(`${getApiBaseUrl()}/api/applications/${applicationNo}/approve`, {
         action: action,
         notes: notes.trim(),
         updated_user: activeUserId
@@ -705,7 +1114,7 @@ function App() {
       console.log(`Submitting disbursement POST to /api/applications/${appNo}/disburse...`, disburseForm);
 
       const response = await axios.post(
-        `${API_BASE_URL}/api/applications/${appNo}/disburse`,
+        `${getApiBaseUrl()}/api/applications/${appNo}/disburse`,
         {
           bank_name: finalBank,
           bank_account_no: disburseForm.bank_account_no,
@@ -822,7 +1231,7 @@ function App() {
       // Call Backend to update lms_sch.loan_schedules & insert lms_sch.payroll_deductions!
       try {
         const activeUserName = currentUser ? String(currentUser.employee_id || '10101') : '10101';
-        const res = await axios.post(`${API_BASE_URL}/api/payroll/import`, {
+        const res = await axios.post(`${getApiBaseUrl()}/api/payroll/import`, {
           file_name: file.name,
           updated_user: activeUserName,
           rows: importPayload
@@ -849,7 +1258,7 @@ function App() {
   const handlePrintReconciliationReport = async (displayList, totalAmount, totalDeducted, totalShortage) => {
     let adjList = [];
     try {
-      const res = await axios.get(`${API_BASE_URL}/api/payroll/adjustments?period=2026-08`);
+      const res = await axios.get(`${getApiBaseUrl()}/api/payroll/adjustments?period=2026-08`);
       adjList = res.data.adjustments || [];
     } catch (e) {
       console.error("Error fetching adjustments for print report:", e);
@@ -1172,7 +1581,7 @@ function App() {
                 onClick={async () => {
                   if (window.confirm('Apakah Anda yakin ingin RESET & BUKA KEMBALI status rekonsiliasi agar bisa meng-import ulang file CSV HRD-Adira?')) {
                     try {
-                      await axios.post(`${API_BASE_URL}/api/payroll/reset-reconciliation?period=2026-08`);
+                      await axios.post(`${getApiBaseUrl()}/api/payroll/reset-reconciliation?period=2026-08`);
                       setImportedRows([]);
                       setReconcileClosingInfo({ status: 'OPEN' });
                       fetchPayrollSchedules();
@@ -1638,7 +2047,7 @@ function App() {
 
   const fetchParameters = async () => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/parameters?limit=1000`);
+      const response = await axios.get(`${getApiBaseUrl()}/api/parameters?limit=1000`);
       setParameters(response.data.data || []);
     } catch (error) {
       console.error("Error fetching parameters:", error);
@@ -1649,14 +2058,14 @@ function App() {
     try {
       if (isGranted) {
         // Revoke access
-        await axios.delete(`${API_BASE_URL}/api/master/role-menus/0?role_id=${roleId}&menu_id=${menuId}`);
+        await axios.delete(`${getApiBaseUrl()}/api/master/role-menus/0?role_id=${roleId}&menu_id=${menuId}`);
         setReferenceData(prev => ({
           ...prev,
           role_menus: prev.role_menus.filter(rm => !(String(rm.role_id) === String(roleId) && String(rm.menu_id) === String(menuId)))
         }));
       } else {
         // Grant access
-        await axios.post(`${API_BASE_URL}/api/master/role-menus`, {
+        await axios.post(`${getApiBaseUrl()}/api/master/role-menus`, {
           role_id: parseInt(roleId),
           menu_id: parseInt(menuId)
         });
@@ -1677,7 +2086,7 @@ function App() {
     try {
       const targetTable = table || masterTab;
       const pageSize = parseInt(getParamVal('PAGINATION_LIMIT', getParamVal('DEFAULT_PAGE_SIZE', '5'))) || 5;
-      const response = await axios.get(`${API_BASE_URL}/api/master/${targetTable}?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
+      const response = await axios.get(`${getApiBaseUrl()}/api/master/${targetTable}?q=${encodeURIComponent(q || '')}&page=${page || 1}&limit=${pageSize}`);
       setMasterDataList(response.data.data || []);
       setMasterTotalRecords(response.data.total_records || (response.data.data ? response.data.data.length : 0));
       setMasterTotalPages(response.data.total_pages || 1);
@@ -1689,15 +2098,15 @@ function App() {
   const fetchReferenceData = async () => {
     try {
       const [deptRes, empStatusRes, kopkaraStatusRes, empCatRes, empRes, memRes, roleRes, menuRes, roleMenuRes] = await Promise.all([
-        axios.get(`${API_BASE_URL}/api/master/departments?limit=1000`),
-        axios.get(`${API_BASE_URL}/api/master/employee-statuses?limit=1000`),
-        axios.get(`${API_BASE_URL}/api/master/kopkara-statuses?limit=1000`),
-        axios.get(`${API_BASE_URL}/api/master/employee-categories?limit=1000`),
-        axios.get(`${API_BASE_URL}/api/master/employees?limit=1000`),
-        axios.get(`${API_BASE_URL}/api/master/members?limit=1000`),
-        axios.get(`${API_BASE_URL}/api/master/roles?limit=1000`),
-        axios.get(`${API_BASE_URL}/api/master/menus?limit=1000`),
-        axios.get(`${API_BASE_URL}/api/master/role-menus?limit=1000`)
+        axios.get(`${getApiBaseUrl()}/api/master/departments?limit=1000`),
+        axios.get(`${getApiBaseUrl()}/api/master/employee-statuses?limit=1000`),
+        axios.get(`${getApiBaseUrl()}/api/master/kopkara-statuses?limit=1000`),
+        axios.get(`${getApiBaseUrl()}/api/master/employee-categories?limit=1000`),
+        axios.get(`${getApiBaseUrl()}/api/master/employees?limit=1000`),
+        axios.get(`${getApiBaseUrl()}/api/master/members?limit=1000`),
+        axios.get(`${getApiBaseUrl()}/api/master/roles?limit=1000`),
+        axios.get(`${getApiBaseUrl()}/api/master/menus?limit=1000`),
+        axios.get(`${getApiBaseUrl()}/api/master/role-menus?limit=1000`)
       ]);
       setReferenceData({
         departments: deptRes.data.data || [],
@@ -1761,7 +2170,7 @@ function App() {
   const submitApplication = async (e) => {
     e.preventDefault();
     try {
-      await axios.post(`${API_BASE_URL}/api/applications`, {
+      await axios.post(`${getApiBaseUrl()}/api/applications`, {
         member_no: parseInt(form.member_no),
         product_id: parseInt(form.product_id),
         requested_amount: parseFloat(form.requested_amount),
@@ -1797,7 +2206,7 @@ function App() {
     if (form.product_id && form.requested_amount > 0 && form.tenor > 0) {
       const fetchSimulation = async () => {
         try {
-          const response = await axios.post(`${API_BASE_URL}/api/applications/simulate`, {
+          const response = await axios.post(`${getApiBaseUrl()}/api/applications/simulate`, {
             member_no: parseInt(form.member_no),
             product_id: parseInt(form.product_id),
             requested_amount: parseFloat(form.requested_amount),
@@ -1830,7 +2239,7 @@ function App() {
       if (overrideToken) {
         headers['Authorization'] = `Bearer ${overrideToken}`;
       }
-      const res = await axios.post(`${API_BASE_URL}/api/karisma/verify`, {}, { 
+      const res = await axios.post(`${getApiBaseUrl()}/api/karisma/verify`, {}, { 
         withCredentials: true,
         headers
       });
@@ -1867,7 +2276,7 @@ function App() {
     e.preventDefault();
     setLoginError('');
     try {
-      const res = await axios.post(`${API_BASE_URL}/api/karisma/login`, loginForm, { withCredentials: true });
+      const res = await axios.post(`${getApiBaseUrl()}/api/karisma/login`, loginForm, { withCredentials: true });
       const receivedToken = res.data?.token || '';
       if (receivedToken) {
         sessionStorage.setItem('lms_auth_token', receivedToken);
@@ -1880,7 +2289,7 @@ function App() {
 
   const handleLogout = async (reason = '') => {
     try {
-      await axios.post(`${API_BASE_URL}/api/karisma/logout`, {}, { withCredentials: true });
+      await axios.post(`${getApiBaseUrl()}/api/karisma/logout`, {}, { withCredentials: true });
     } catch (err) {
       console.warn("Error calling logout endpoint:", err);
     }
@@ -1975,7 +2384,7 @@ function App() {
         if (payload.DeptNo !== undefined && payload.DeptNo !== null) { payload.deptno = String(payload.DeptNo).trim(); delete payload.DeptNo; }
       }
 
-      await axios.post(`${API_BASE_URL}/api/master/${masterTab}`, payload, { withCredentials: true });
+      await axios.post(`${getApiBaseUrl()}/api/master/${masterTab}`, payload, { withCredentials: true });
       setIsMasterModalOpen(false);
       setIsEditMasterMode(false);
       setMasterForm({});
@@ -1989,7 +2398,7 @@ function App() {
   const deleteMasterData = async (pkField, pkValue) => {
     if (window.confirm(`Yakin ingin menghapus data dengan ${pkField} = ${pkValue}?`)) {
       try {
-        await axios.delete(`${API_BASE_URL}/api/master/${masterTab}/${pkValue}`, { withCredentials: true });
+        await axios.delete(`${getApiBaseUrl()}/api/master/${masterTab}/${pkValue}`, { withCredentials: true });
         alert('Data berhasil dihapus!');
         fetchMasterData(masterTab);
         fetchReferenceData();
@@ -2002,7 +2411,7 @@ function App() {
   const handleCleanupSessions = async () => {
     if (!window.confirm('Apakah Anda yakin ingin membersihkan semua session yang sudah expired / tidak aktif?')) return;
     try {
-      const res = await axios.post(`${API_BASE_URL}/api/master/sessions/cleanup`);
+      const res = await axios.post(`${getApiBaseUrl()}/api/master/sessions/cleanup`);
       alert(res.data?.message || 'Berhasil membersihkan session expired!');
       fetchMasterData('sessions', masterSearchQuery, 1);
     } catch (err) {
@@ -2025,7 +2434,7 @@ function App() {
       const kDesc = paramForm.description || masterForm.description || '';
       const pId = paramForm.id || masterForm.id || 0;
 
-      await axios.post(`${API_BASE_URL}/api/parameters`, {
+      await axios.post(`${getApiBaseUrl()}/api/parameters`, {
         id: pId,
         key_name: kName,
         key_value: kVal,
@@ -2046,7 +2455,7 @@ function App() {
   const deleteParameter = async (id) => {
     if(window.confirm('Yakin ingin menghapus parameter ini?')) {
       try {
-        await axios.delete(`${API_BASE_URL}/api/parameters/${id}`);
+        await axios.delete(`${getApiBaseUrl()}/api/parameters/${id}`);
         fetchParameters();
       } catch (error) {
         alert('Gagal menghapus parameter');
@@ -2064,7 +2473,29 @@ function App() {
 
     return (
       <div style={{ display: 'flex', height: '100vh', width: '100vw', alignItems: 'center', justifyContent: 'center', backgroundColor: loginHeaderBg, position: 'fixed', top: 0, left: 0, zIndex: 99999 }}>
-        <div style={{ width: '420px', padding: '36px', background: '#f8fafc', borderRadius: '24px', boxShadow: '0 8px 32px rgba(0, 0, 0, 0.25)' }}>
+        <ServerConfigModal 
+          isOpen={serverModalOpen} 
+          onClose={() => setServerModalOpen(false)}
+          serverApiIp={serverApiIp}
+          setServerApiIp={setServerApiIp}
+          serverApiPort={serverApiPort}
+          setServerApiPort={setServerApiPort}
+        />
+        <div style={{ width: '420px', padding: '36px', background: '#f8fafc', borderRadius: '24px', boxShadow: '0 8px 32px rgba(0, 0, 0, 0.25)', position: 'relative' }}>
+          <button
+            type="button"
+            onClick={() => setServerModalOpen(true)}
+            title="Pengaturan Server API (IP & Port HP Mobile)"
+            style={{
+              position: 'absolute', top: '16px', right: '16px',
+              background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '50%',
+              cursor: 'pointer', fontSize: '1.2rem', width: '36px', height: '36px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+            }}
+          >
+            ⚙️
+          </button>
           <div style={{ textAlign: 'center', marginBottom: '24px' }}>
             <img 
               src="/kopkara.jfif" 
@@ -2127,6 +2558,14 @@ function App() {
               </button>
             </div>
 
+            <button 
+              type="button" 
+              onClick={() => setRegisterModalOpen(true)}
+              style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#ffffff', border: 'none', borderRadius: '12px', fontSize: '0.9rem', fontWeight: 800, cursor: 'pointer', marginTop: '4px' }}
+            >
+              📱 Register / Login Mobile EWA (PIN 6-Digit)
+            </button>
+
             <div style={{ textAlign: 'center', marginTop: '4px' }}>
               <button 
                 type="button" 
@@ -2137,6 +2576,15 @@ function App() {
               </button>
             </div>
           </form>
+
+          <RegisterEwaModal 
+            isOpen={registerModalOpen} 
+            onClose={() => setRegisterModalOpen(false)}
+            onSuccessLogin={(phone, pin) => {
+              setLoginForm({ username: phone, password: pin });
+              alert(`✅ Registrasi berhasil! Silakan klik tombol Login untuk masuk dengan username: ${phone}`);
+            }}
+          />
         </div>
       </div>
     );
@@ -2273,6 +2721,34 @@ function App() {
                   <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'var(--accent-blue)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' }}>
                     {displayName ? displayName.substring(0, 2).toUpperCase() : ''}
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => handleLogout()}
+                    title="Keluar / Logout dari Aplikasi"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '8px 14px',
+                      background: '#ef4444',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: '10px',
+                      fontWeight: 700,
+                      fontSize: '0.85rem',
+                      cursor: 'pointer',
+                      boxShadow: '0 2px 6px rgba(239, 68, 68, 0.3)',
+                      marginLeft: '8px',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                      <polyline points="16 17 21 12 16 7"></polyline>
+                      <line x1="21" y1="12" x2="9" y2="12"></line>
+                    </svg>
+                    <span>Logout</span>
+                  </button>
                 </>
               );
             })()}
@@ -3185,7 +3661,7 @@ function App() {
                       try {
                         const scanMode = getParamVal('SCAN_DUEDATE_BILLING', 'PERIOD').toUpperCase();
                         const effectiveCutoffDate = scanMode === 'DUEDATE' ? exportCutoffDate : `${exportPeriodYear}-${exportPeriodMonth}-31`;
-                        const res = await axios.post(`${API_BASE_URL}/api/payroll/export`, {
+                        const res = await axios.post(`${getApiBaseUrl()}/api/payroll/export`, {
                           custom_folder: exportCustomFolder,
                           cutoff_date: effectiveCutoffDate
                         });
@@ -4476,7 +4952,7 @@ function App() {
                       }
                       try {
                         const activeUserName = currentUser ? String(currentUser.employee_id || '10101') : '10101';
-                        const res = await axios.post(`${API_BASE_URL}/api/payroll/manual-repayment`, {
+                        const res = await axios.post(`${getApiBaseUrl()}/api/payroll/manual-repayment`, {
                           ...manualForm,
                           period: `${manualYear}-${manualMonth}`,
                           loan_no: parseInt(manualForm.loan_no) || 0,
@@ -5053,7 +5529,7 @@ function App() {
                                 onClick={async () => {
                                   if (window.confirm(`Hapus produk pinjaman "${p.name}"?`)) {
                                     try {
-                                      await axios.delete(`${API_BASE_URL}/api/products/${p.id}`);
+                                      await axios.delete(`${getApiBaseUrl()}/api/products/${p.id}`);
                                       alert("✅ Produk pinjaman berhasil dihapus!");
                                       fetchProducts();
                                     } catch (err) {
@@ -5100,10 +5576,10 @@ function App() {
                       };
 
                       if (editingProduct) {
-                        await axios.put(`${API_BASE_URL}/api/products/${editingProduct.id}`, payload);
+                        await axios.put(`${getApiBaseUrl()}/api/products/${editingProduct.id}`, payload);
                         alert("✅ Produk pinjaman berhasil diperbarui!");
                       } else {
-                        await axios.post(`${API_BASE_URL}/api/products`, payload);
+                        await axios.post(`${getApiBaseUrl()}/api/products`, payload);
                         alert("✅ Produk pinjaman baru berhasil ditambahkan!");
                       }
                       setProductModalOpen(false);
@@ -5611,7 +6087,11 @@ function App() {
           );
         })()}
 
-          {!isReportTab() && activeTab !== 'dashboard' && activeTab !== 'pengajuan' && activeTab !== 'pinjaman' && activeTab !== 'parameters' && activeTab !== 'master' && activeTab !== 'approval' && activeTab !== 'disbursement' && activeTab !== 'payroll' && activeTab !== 'payroll-reconciliation' && activeTab !== 'manual-repayment' && activeTab !== 'products' && activeTab !== 'report-loan-applications' && !activeTab.startsWith('master-') && (
+          {activeTab === 'mobile-app-enterprise' && (
+            <MobileEwaEnterpriseApp currentUser={currentUser} onLogout={handleLogout} />
+          )}
+
+          {!isReportTab() && activeTab !== 'dashboard' && activeTab !== 'pengajuan' && activeTab !== 'pinjaman' && activeTab !== 'parameters' && activeTab !== 'master' && activeTab !== 'approval' && activeTab !== 'disbursement' && activeTab !== 'payroll' && activeTab !== 'payroll-reconciliation' && activeTab !== 'manual-repayment' && activeTab !== 'products' && activeTab !== 'report-loan-applications' && activeTab !== 'mobile-app-enterprise' && !activeTab.startsWith('master-') && (
             <div className="card">
               <h2>Module: {visibleMenus.find(m => m.path === activeTab)?.title || activeTab}</h2>
               <p style={{ marginTop: '16px', color: '#64748B' }}>

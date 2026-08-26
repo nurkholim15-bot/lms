@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"lms-backend/cache"
 	"lms-backend/models"
 	"lms-backend/repositories"
 	"net/http"
@@ -554,6 +555,7 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 				return
 			}
 		}
+		cache.ParameterCache.Set(data.KeyName, data.KeyValue)
 		c.JSON(http.StatusOK, gin.H{"data": data})
 
 	case "users":
@@ -575,6 +577,23 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 				h.db.Where("id = ?", idNum).First(&user)
 			}
 		}
+		if memberNoVal, ok := req["member_no"]; ok && memberNoVal != nil {
+			var mNum int64 = 0
+			switch v := memberNoVal.(type) {
+			case float64:
+				mNum = int64(v)
+			case int64:
+				mNum = v
+			case string:
+				if parsedM, errM := strconv.ParseInt(v, 10, 64); errM == nil {
+					mNum = parsedM
+				}
+			}
+			if mNum > 0 {
+				user.MemberNo = &mNum
+			}
+		}
+
 		if username, ok := req["username"].(string); ok && username != "" {
 			user.Username = username
 		}
@@ -608,6 +627,20 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 				user.Password = string(hashed)
 			}
 		}
+		if user.MemberNo != nil && *user.MemberNo > 0 {
+			var existingUser models.User
+			query := h.db.Where("member_no = ? AND deleted_at IS NULL", *user.MemberNo)
+			if user.ID > 0 {
+				query = query.Where("id != ?", user.ID)
+			}
+			if errM := query.First(&existingUser).Error; errM == nil && existingUser.ID > 0 {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": fmt.Sprintf("Member tsb sudah punya username %s", existingUser.Username),
+				})
+				return
+			}
+		}
+
 		currentUser := c.GetString("username")
 		if currentUser == "" {
 			currentUser = "admin"

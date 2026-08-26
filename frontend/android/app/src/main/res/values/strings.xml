@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Kopkara Mobile EWA</string>
+    <string name="title_activity_main">Kopkara Mobile EWA</string>
+    <string name="package_name">com.kopkara.ewa.app</string>
+    <string name="custom_url_scheme">com.kopkara.ewa.app</string>
+</resources>

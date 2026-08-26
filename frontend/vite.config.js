@@ -5,7 +5,7 @@ import path from 'path'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const port = parseInt(env.VITE_PORT || 3000)
+  const port = parseInt(env.VITE_PORT || 3005)
   
   const rawCert = env.SSL_CERT_PATH || process.env.SSL_CERT_PATH || ''
   const rawKey = env.SSL_KEY_PATH || process.env.SSL_KEY_PATH || ''
@@ -41,6 +41,8 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
+      host: true,
+      allowedHosts: true,
       port,
       strictPort: true,
       https: httpsOptions,
