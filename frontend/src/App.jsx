@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
+import * as XLSX from 'xlsx'
 import MobileEwaEnterpriseApp from './MobileEwaEnterpriseApp'
 
 const getApiBaseUrl = () => {
@@ -315,18 +316,23 @@ function RegisterEwaModal({ isOpen, onClose, onSuccessLogin }) {
       zIndex: 999999, backdropFilter: 'blur(6px)', padding: '16px'
     }}>
       <div style={{
-        backgroundColor: 'white', borderRadius: '24px', padding: '28px',
+        backgroundColor: 'white', borderRadius: '24px', padding: '24px',
         width: '100%', maxWidth: '440px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.3)',
-        maxHeight: '92vh', overflowY: 'auto'
+        maxHeight: '92vh', overflowY: 'auto', overflowX: 'hidden'
       }}>
-        <div style={{ textAlign: 'center', marginBottom: '20px' }}>
-          <div style={{ width: '60px', height: '60px', borderRadius: '50%', background: '#f0fdf4', color: '#16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.8rem', margin: '0 auto 12px', boxShadow: '0 4px 12px rgba(22, 163, 74, 0.15)' }}>
-            📱
-          </div>
-          <h3 style={{ margin: 0, fontSize: '1.3rem', color: '#0f172a', fontWeight: 800 }}>
+        {/* Header dengan background HEADER_BG tanpa gambar HP */}
+        <div style={{
+          background: 'var(--header-bg, #0B2545)',
+          color: '#ffffff',
+          padding: '16px 20px',
+          borderRadius: '20px 20px 14px 14px',
+          margin: '-24px -24px 20px -24px',
+          textAlign: 'center'
+        }}>
+          <h3 style={{ margin: 0, fontSize: '1.2rem', color: '#ffffff', fontWeight: 800 }}>
             Registrasi Mobile EWA Kopkara
           </h3>
-          <p style={{ margin: '4px 0 0 0', fontSize: '0.825rem', color: '#64748b' }}>
+          <p style={{ margin: '4px 0 0 0', fontSize: '0.78rem', color: 'rgba(255, 255, 255, 0.85)' }}>
             Verifikasi 4 Faktor Karyawan & Generasi PIN Otomatis
           </p>
         </div>
@@ -349,29 +355,33 @@ function RegisterEwaModal({ isOpen, onClose, onSuccessLogin }) {
               type="text" required
               value={regForm.phone_no}
               onChange={e => setRegForm({ ...regForm, phone_no: e.target.value })}
-              placeholder="Contoh: 085882500073"
+              placeholder="Contoh: 081..."
               style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '0.9rem', outline: 'none' }}
             />
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            <div>
-              <label style={{ fontSize: '0.75rem', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '4px' }}>NIK (NOMOR INDUK KARYAWAN) *</label>
+            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+              <label style={{ fontSize: '0.72rem', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '4px', lineHeight: 1.2 }}>
+                NIK (NOMOR INDUK<br/>KARYAWAN) *
+              </label>
               <input
                 type="text" required
                 value={regForm.nik}
                 onChange={e => setRegForm({ ...regForm, nik: e.target.value })}
-                placeholder="Contoh: 10101"
+                placeholder=""
                 style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '0.9rem', outline: 'none' }}
               />
             </div>
-            <div>
-              <label style={{ fontSize: '0.75rem', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '4px' }}>NIK KTP (16-DIGIT) *</label>
+            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+              <label style={{ fontSize: '0.72rem', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '4px', lineHeight: 1.2 }}>
+                NIK KTP<br/>(16-DIGIT) *
+              </label>
               <input
                 type="text" required
                 value={regForm.ktp_no}
                 onChange={e => setRegForm({ ...regForm, ktp_no: e.target.value })}
-                placeholder="Contoh: 320101..."
+                placeholder=""
                 style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '0.9rem', outline: 'none' }}
               />
             </div>
@@ -407,14 +417,14 @@ function RegisterEwaModal({ isOpen, onClose, onSuccessLogin }) {
             <button
               type="button"
               onClick={onClose}
-              style={{ padding: '12px', background: '#94a3b8', color: 'white', border: 'none', borderRadius: '12px', fontWeight: 800, fontSize: '0.85rem', cursor: 'pointer' }}
+              style={{ padding: '12px', background: 'var(--button-cancel-bg, #64748b)', color: 'white', border: 'none', borderRadius: '12px', fontWeight: 800, fontSize: '0.85rem', cursor: 'pointer' }}
             >
               Batal
             </button>
             <button
               type="submit"
               disabled={submitting}
-              style={{ padding: '12px', background: submitting ? '#94a3b8' : '#16a34a', color: 'white', border: 'none', borderRadius: '12px', fontWeight: 800, fontSize: '0.85rem', cursor: submitting ? 'not-allowed' : 'pointer' }}
+              style={{ padding: '12px', background: submitting ? '#94a3b8' : 'var(--button-bg, #0B2545)', color: 'white', border: 'none', borderRadius: '12px', fontWeight: 800, fontSize: '0.85rem', cursor: submitting ? 'not-allowed' : 'pointer' }}
             >
               {submitting ? 'Memproses...' : 'Daftar & Aktifkan'}
             </button>
@@ -425,8 +435,527 @@ function RegisterEwaModal({ isOpen, onClose, onSuccessLogin }) {
   );
 }
 
+function ChangePinModal({ isOpen, onClose, parameters = [], currentUser, onSuccess, onLogout, initialOldVal = '' }) {
+  if (!isOpen) return null;
+
+  const [mode, setMode] = useState('pin');
+  const [username, setUsername] = useState('');
+  const [oldVal, setOldVal] = useState('');
+  const [newVal, setNewVal] = useState('');
+  const [confirmVal, setConfirmVal] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [showOldVal, setShowOldVal] = useState(false);
+  const [showNewVal, setShowNewVal] = useState(false);
+  const [showConfirmVal, setShowConfirmVal] = useState(false);
+
+  const isMobileAppEnv = () => {
+    if (typeof window === 'undefined') return false;
+    return !!(window.Capacitor?.isNativePlatform?.() || window.Capacitor?.getPlatform?.() === 'android' || window.Capacitor?.getPlatform?.() === 'ios');
+  };
+
+  useEffect(() => {
+    if (currentUser) {
+      if (currentUser.force_pwd_change) {
+        setMode('password');
+        if (initialOldVal) {
+          setOldVal(initialOldVal);
+        }
+      } else {
+        const userRole = (currentUser.role || '').toLowerCase();
+        if (userRole.includes('admin') || userRole.includes('hrd') || userRole.includes('pengurus')) {
+          if (!isMobileAppEnv()) {
+            setMode('password');
+          } else {
+            setMode('pin');
+          }
+        }
+      }
+      if (currentUser.username) setUsername(currentUser.username);
+    }
+  }, [currentUser, isOpen, initialOldVal]);
+
+  const handleCloseModal = () => {
+    if (currentUser?.force_pwd_change) {
+      if (window.confirm('⚠️ Pembatalan ganti password akan mengakhiri sesi login Anda. Yakin ingin Batal & Logout?')) {
+        if (typeof onLogout === 'function') {
+          onLogout('⚠️ Sesi diakhiri karena ganti password wajib dibatalkan.');
+        } else {
+          onClose();
+        }
+      }
+      return;
+    }
+    onClose();
+  };
+
+  const getParam = (k, def) => {
+    const p = (parameters || []).find(x => x.key_name === k || x.KeyName === k || x.param_key === k);
+    return p ? (p.key_value || p.KeyValue) : def;
+  };
+
+  const pwdMinLen = parseInt(getParam('PWD_MIN_LENGTH', '9')) || 9;
+  const pwdMinLower = parseInt(getParam('PWD_MIN_LOWERCASE', '1')) || 1;
+  const pwdMinUpper = parseInt(getParam('PWD_MIN_UPPERCASE', '1')) || 1;
+  const pwdMinNum = parseInt(getParam('PWD_MIN_NUMERIC', '1')) || 1;
+  const pwdMinSpec = parseInt(getParam('PWD_MIN_SPECIAL', '1')) || 1;
+  const pinMinLen = parseInt(getParam('PIN_MIN_LENGTH', '6')) || 6;
+
+  // Real-time Validations
+  const isPwdLenOk = newVal.length >= pwdMinLen;
+  const isPwdLowerOk = (newVal.match(/[a-z]/g) || []).length >= pwdMinLower;
+  const isPwdUpperOk = (newVal.match(/[A-Z]/g) || []).length >= pwdMinUpper;
+  const isPwdNumOk = (newVal.match(/[0-9]/g) || []).length >= pwdMinNum;
+  const isPwdSpecOk = (newVal.match(/[!@#$%^&*()_+\-=\[\]{}|;':",./<>?~`]/g) || []).length >= pwdMinSpec;
+
+  const isPinNumOnly = /^\d*$/.test(newVal) && newVal.length > 0;
+  const isPinLenOk = newVal.length >= pinMinLen;
+  const isPinNotRepeated = newVal.length > 0 && !/^(\d)\1+$/.test(newVal);
+  const checkSequential = (str) => {
+    if (str.length < 2) return false;
+    let asc = true, desc = true;
+    for (let i = 1; i < str.length; i++) {
+      if (str.charCodeAt(i) !== str.charCodeAt(i-1) + 1) asc = false;
+      if (str.charCodeAt(i) !== str.charCodeAt(i-1) - 1) desc = false;
+    }
+    return asc || desc;
+  };
+  const isPinNotSequential = newVal.length > 0 && !checkSequential(newVal);
+
+  const handleUsernameChange = (val) => {
+    setUsername(val);
+    const clean = val.trim().toLowerCase();
+    if (!clean) return;
+    if (isNaN(Number(clean))) {
+      if (isMobileAppEnv()) {
+        setErrorMsg('⚠️ Penggantian Password Pengurus hanya dapat dilakukan melalui Web Application (Desktop LMS). Di Mobile App hanya dapat melakukan Ganti PIN.');
+        setMode('pin');
+      } else {
+        setMode('password');
+      }
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    if (!username.trim()) {
+      setErrorMsg('⚠️ Username / No. HP harus diisi!');
+      return;
+    }
+    if (!oldVal.trim()) {
+      setErrorMsg(`⚠️ ${mode === 'password' ? 'Password' : 'PIN'} Lama harus diisi!`);
+      return;
+    }
+    if (!newVal.trim()) {
+      setErrorMsg(`⚠️ ${mode === 'password' ? 'Password' : 'PIN'} Baru harus diisi!`);
+      return;
+    }
+    if (newVal !== confirmVal) {
+      setErrorMsg(`⚠️ Konfirmasi ${mode === 'password' ? 'Password' : 'PIN'} Baru tidak sesuai!`);
+      return;
+    }
+
+    if (mode === 'password') {
+      if (!isPwdLenOk || !isPwdLowerOk || !isPwdUpperOk || !isPwdNumOk || !isPwdSpecOk) {
+        setErrorMsg('⚠️ Password baru belum memenuhi seluruh syarat keamanan!');
+        return;
+      }
+    } else {
+      if (!isPinNumOnly) {
+        setErrorMsg('⚠️ PIN baru harus berupa angka (0-9)!');
+        return;
+      }
+      if (!isPinLenOk) {
+        setErrorMsg(`⚠️ PIN baru minimal ${pinMinLen} digit angka!`);
+        return;
+      }
+      if (!isPinNotRepeated) {
+        setErrorMsg('⚠️ PIN baru terlalu mudah ditebak! Harap tidak menggunakan angka berulang.');
+        return;
+      }
+      if (!isPinNotSequential) {
+        setErrorMsg('⚠️ PIN baru terlalu mudah ditebak! Harap tidak menggunakan urutan angka berurutan.');
+        return;
+      }
+    }
+
+    setSubmitting(true);
+    try {
+      if (mode === 'password') {
+        const res = await axios.post(`${getApiBaseUrl()}/api/change-password`, {
+          username: username.trim(),
+          old_password: oldVal.trim(),
+          new_password: newVal.trim()
+        });
+        setSuccessMsg(res.data.message || '✅ Password berhasil diperbarui!');
+        alert(res.data.message || '✅ Password berhasil diperbarui!');
+      } else {
+        const res = await axios.post(`${getApiBaseUrl()}/api/change-pin`, {
+          username: username.trim(),
+          old_pin: oldVal.trim(),
+          new_pin: newVal.trim()
+        });
+        setSuccessMsg(res.data.message || '✅ PIN berhasil diperbarui!');
+        alert(res.data.message || '✅ PIN berhasil diperbarui!');
+      }
+      if (typeof onSuccess === 'function') {
+        onSuccess();
+      }
+      setTimeout(() => onClose(), 1200);
+    } catch (err) {
+      const msg = err.response?.data?.error || err.message || 'Gagal mengubah Password/PIN';
+      setErrorMsg(`❌ ${msg}`);
+      alert(`❌ ${msg}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+      backgroundColor: 'rgba(15, 23, 42, 0.85)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      zIndex: 999999, backdropFilter: 'blur(6px)', padding: '16px'
+    }}>
+      <div style={{
+        backgroundColor: 'white', borderRadius: '24px', padding: '24px',
+        width: '100%', maxWidth: '440px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.3)',
+        maxHeight: '92vh', overflowY: 'auto'
+      }}>
+        <div style={{
+          background: 'var(--header-bg, #0B2545)',
+          color: '#ffffff', padding: '16px 20px', borderRadius: '20px 20px 14px 14px',
+          margin: '-24px -24px 20px -24px', textAlign: 'center'
+        }}>
+          <h3 style={{ margin: 0, fontSize: '1.2rem', color: '#ffffff', fontWeight: 800 }}>
+            {currentUser?.force_pwd_change ? '🔑 Ganti Password (Wajib)' : (mode === 'password' ? '🔑 Ganti Password LMS' : '🔐 Ganti PIN Mobile EWA')}
+          </h3>
+          <p style={{ margin: '4px 0 0 0', fontSize: '0.78rem', color: 'rgba(255, 255, 255, 0.85)' }}>
+            {currentUser?.force_pwd_change ? 'Wajib Buat Password Baru Sebelum Lanjut' : 'Perbarui Kredensial Keamanan Akun Anda'}
+          </p>
+        </div>
+
+        {currentUser?.force_pwd_change && (
+          <div style={{ padding: '10px 14px', background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a', borderRadius: '10px', fontSize: '0.85rem', marginBottom: '14px', fontWeight: 600 }}>
+            ⚠️ Administrator mewajibkan Anda untuk mengganti password baru sebelum dapat beraktivitas di sistem LMS.
+          </div>
+        )}
+
+        {!currentUser?.force_pwd_change && (
+          <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: '12px', padding: '4px', marginBottom: '16px' }}>
+            <button
+              type="button"
+              onClick={() => { setMode('pin'); setErrorMsg(''); setNewVal(''); setConfirmVal(''); }}
+              style={{
+                flex: 1, padding: '8px', border: 'none', borderRadius: '8px', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer',
+                background: mode === 'pin' ? 'var(--header-bg, #0B2545)' : 'transparent',
+                color: mode === 'pin' ? '#ffffff' : '#64748b'
+              }}
+            >
+              🔐 Ganti PIN
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (isMobileAppEnv()) {
+                  setErrorMsg('⚠️ Penggantian Password Pengurus hanya dapat dilakukan melalui Web Application (Desktop LMS). Di Mobile App Anda hanya dapat melakukan Ganti PIN.');
+                  setMode('pin');
+                } else {
+                  setMode('password');
+                  setErrorMsg('');
+                  setNewVal('');
+                  setConfirmVal('');
+                }
+              }}
+              style={{
+                flex: 1, padding: '8px', border: 'none', borderRadius: '8px', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer',
+                background: mode === 'password' ? 'var(--header-bg, #0B2545)' : 'transparent',
+                color: mode === 'password' ? '#ffffff' : '#64748b'
+              }}
+            >
+              🔑 Ganti Password
+            </button>
+          </div>
+        )}
+
+        {errorMsg && (
+          <div style={{ padding: '10px 14px', background: '#fee2e2', color: '#991b1b', borderRadius: '10px', fontSize: '0.825rem', marginBottom: '14px', fontWeight: 600 }}>
+            {errorMsg}
+          </div>
+        )}
+        {successMsg && (
+          <div style={{ padding: '10px 14px', background: '#dcfce7', color: '#166534', borderRadius: '10px', fontSize: '0.825rem', marginBottom: '14px', fontWeight: 700, textAlign: 'center' }}>
+            {successMsg}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '4px' }}>USERNAME / NO. HP *</label>
+            <input
+              type="text" required
+              value={username}
+              onChange={e => handleUsernameChange(e.target.value)}
+              placeholder="Username / No. HP Anda"
+              style={{ width: '100%', padding: '9px 12px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '0.875rem', outline: 'none' }}
+            />
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '4px' }}>{mode === 'password' ? 'PASSWORD LAMA *' : 'PIN LAMA *'}</label>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <input
+                type={showOldVal ? 'text' : 'password'} required
+                value={oldVal}
+                onChange={e => setOldVal(e.target.value)}
+                placeholder={mode === 'password' ? 'Masukkan Password lama' : 'Masukkan PIN lama'}
+                style={{ width: '100%', padding: '9px 40px 9px 12px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '0.875rem', outline: 'none' }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowOldVal(!showOldVal)}
+                title={showOldVal ? 'Sembunyikan' : 'Tampilkan'}
+                style={{ position: 'absolute', right: '10px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.1rem', color: '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2px', userSelect: 'none' }}
+              >
+                {showOldVal ? '👁️' : '👁️‍🗨️'}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '4px' }}>{mode === 'password' ? 'PASSWORD BARU *' : 'PIN BARU *'}</label>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <input
+                type={showNewVal ? 'text' : 'password'} required
+                value={newVal}
+                onChange={e => setNewVal(e.target.value)}
+                placeholder={mode === 'password' ? 'Masukkan Password baru' : 'Masukkan PIN baru (angka)'}
+                style={{ width: '100%', padding: '9px 40px 9px 12px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '0.875rem', outline: 'none' }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowNewVal(!showNewVal)}
+                title={showNewVal ? 'Sembunyikan' : 'Tampilkan'}
+                style={{ position: 'absolute', right: '10px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.1rem', color: '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2px', userSelect: 'none' }}
+              >
+                {showNewVal ? '👁️' : '👁️‍🗨️'}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '4px' }}>KONFIRMASI {mode === 'password' ? 'PASSWORD BARU *' : 'PIN BARU *'}</label>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <input
+                type={showConfirmVal ? 'text' : 'password'} required
+                value={confirmVal}
+                onChange={e => setConfirmVal(e.target.value)}
+                placeholder={mode === 'password' ? 'Ulangi Password baru' : 'Ulangi PIN baru'}
+                style={{ width: '100%', padding: '9px 40px 9px 12px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '0.875rem', outline: 'none' }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirmVal(!showConfirmVal)}
+                title={showConfirmVal ? 'Sembunyikan' : 'Tampilkan'}
+                style={{ position: 'absolute', right: '10px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.1rem', color: '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2px', userSelect: 'none' }}
+              >
+                {showConfirmVal ? '👁️' : '👁️‍🗨️'}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 12px', fontSize: '0.75rem' }}>
+            <div style={{ fontWeight: 700, color: '#475569', marginBottom: '6px' }}>Syarat Keamanan {mode === 'password' ? 'Password' : 'PIN'}:</div>
+            {mode === 'password' ? (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
+                <span style={{ color: isPwdLenOk ? '#16a34a' : '#94a3b8', fontWeight: isPwdLenOk ? 700 : 400 }}>{isPwdLenOk ? '✓' : '○'} Min {pwdMinLen} karakter</span>
+                <span style={{ color: isPwdLowerOk ? '#16a34a' : '#94a3b8', fontWeight: isPwdLowerOk ? 700 : 400 }}>{isPwdLowerOk ? '✓' : '○'} Min {pwdMinLower} huruf kecil (a-z)</span>
+                <span style={{ color: isPwdUpperOk ? '#16a34a' : '#94a3b8', fontWeight: isPwdUpperOk ? 700 : 400 }}>{isPwdUpperOk ? '✓' : '○'} Min {pwdMinUpper} huruf besar (A-Z)</span>
+                <span style={{ color: isPwdNumOk ? '#16a34a' : '#94a3b8', fontWeight: isPwdNumOk ? 700 : 400 }}>{isPwdNumOk ? '✓' : '○'} Min {pwdMinNum} angka (0-9)</span>
+                <span style={{ color: isPwdSpecOk ? '#16a34a' : '#94a3b8', fontWeight: isPwdSpecOk ? 700 : 400 }}>{isPwdSpecOk ? '✓' : '○'} Min {pwdMinSpec} karakter spesial</span>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                <span style={{ color: isPinLenOk ? '#16a34a' : '#94a3b8', fontWeight: isPinLenOk ? 700 : 400 }}>{isPinLenOk ? '✓' : '○'} Minimal {pinMinLen} digit angka</span>
+                <span style={{ color: isPinNumOnly ? '#16a34a' : '#94a3b8', fontWeight: isPinNumOnly ? 700 : 400 }}>{isPinNumOnly ? '✓' : '○'} Hanya karakter angka (0-9)</span>
+                <span style={{ color: isPinNotRepeated ? '#16a34a' : '#94a3b8', fontWeight: isPinNotRepeated ? 700 : 400 }}>{isPinNotRepeated ? '✓' : '○'} Tidak boleh angka berulang (111111)</span>
+                <span style={{ color: isPinNotSequential ? '#16a34a' : '#94a3b8', fontWeight: isPinNotSequential ? 700 : 400 }}>{isPinNotSequential ? '✓' : '○'} Tidak boleh urutan berurutan (123456)</span>
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '6px' }}>
+            <button
+              type="button"
+              onClick={handleCloseModal}
+              style={{ padding: '10px', background: 'var(--button-cancel-bg, #64748b)', color: 'white', border: 'none', borderRadius: '10px', fontWeight: 800, fontSize: '0.85rem', cursor: 'pointer' }}
+            >
+              Batal
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              style={{ padding: '10px', background: submitting ? '#94a3b8' : 'var(--button-bg, #0B2545)', color: 'white', border: 'none', borderRadius: '10px', fontWeight: 800, fontSize: '0.85rem', cursor: submitting ? 'not-allowed' : 'pointer' }}
+            >
+              {submitting ? 'Memproses...' : (mode === 'password' ? 'Simpan Password' : 'Simpan PIN')}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function MenuAuthModal({ isOpen, onClose, pendingMenu, currentUser, onSuccessProceed }) {
+  if (!isOpen || !pendingMenu) return null;
+
+  const [passwordInput, setPasswordInput] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setErrorMsg('');
+
+    if (!passwordInput.trim()) {
+      setErrorMsg('⚠️ Silakan masukkan Password / PIN Anda!');
+      return;
+    }
+
+    const username = currentUser?.username || currentUser?.name || 'admin';
+    setSubmitting(true);
+
+    try {
+      const res = await axios.post(`${getApiBaseUrl()}/api/verify-menu-password`, {
+        username: username,
+        password: passwordInput.trim(),
+        menu_id: pendingMenu.menu_id || 0,
+        path: pendingMenu.path || ''
+      });
+
+      const notifType = res.data?.notification_type || 0;
+      if (notifType > 0) {
+        const notifText = notifType === 1 ? 'Email' : 'Email & WhatsApp';
+        alert(`🔐 Verifikasi Berhasil! Akses ke menu "${pendingMenu.title || pendingMenu.path}" telah dikonfirmasi. Notifikasi audit (${notifText}) telah dikirim.`);
+      }
+
+      onSuccessProceed(pendingMenu);
+      onClose();
+      setPasswordInput('');
+    } catch (err) {
+      const msg = err.response?.data?.error || err.message || 'Password/PIN tidak sesuai. Akses menu ditolak!';
+      setErrorMsg(`❌ ${msg}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+      backgroundColor: 'rgba(15, 23, 42, 0.85)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      zIndex: 999999, backdropFilter: 'blur(6px)', padding: '16px'
+    }}>
+      <div style={{
+        backgroundColor: 'white', borderRadius: '24px', padding: '24px',
+        width: '100%', maxWidth: '400px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.3)'
+      }}>
+        {/* Header tanpa Icon & tanpa Teks "Proteksi Akses Menu" */}
+        <div style={{
+          background: 'var(--header-bg, #0B2545)',
+          color: '#ffffff', padding: '18px 20px', borderRadius: '20px 20px 14px 14px',
+          margin: '-24px -24px 18px -24px', textAlign: 'center'
+        }}>
+          <h3 style={{ margin: 0, fontSize: '1.2rem', color: '#ffffff', fontWeight: 800 }}>
+            {pendingMenu.title || pendingMenu.path || 'Pengajuan Pinjaman'}
+          </h3>
+        </div>
+
+        {/* Teks Deskripsi Ringkas */}
+        <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#475569', marginBottom: '16px', textAlign: 'center' }}>
+          Masukkan Password / PIN Anda
+        </div>
+
+        {errorMsg && (
+          <div style={{ padding: '10px 14px', background: '#fee2e2', color: '#991b1b', borderRadius: '10px', fontSize: '0.825rem', marginBottom: '14px', fontWeight: 600 }}>
+            {errorMsg}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '4px' }}>PASSWORD / PIN ANDA *</label>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <input
+                type={showPassword ? 'text' : 'password'} required autoFocus
+                value={passwordInput}
+                onChange={e => setPasswordInput(e.target.value)}
+                placeholder="Masukkan Password / PIN"
+                style={{ width: '100%', padding: '10px 42px 10px 14px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '0.9rem', outline: 'none' }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                title={showPassword ? 'Sembunyikan Password' : 'Tampilkan Password'}
+                style={{ position: 'absolute', right: '10px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.15rem', color: '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2px', userSelect: 'none' }}
+              >
+                {showPassword ? '👁️' : '👁️‍🗨️'}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '4px' }}>
+            <button
+              type="button"
+              onClick={onClose}
+              style={{ padding: '12px', background: 'var(--button-cancel-bg, #64748b)', color: 'white', border: 'none', borderRadius: '12px', fontWeight: 800, fontSize: '0.85rem', cursor: 'pointer' }}
+            >
+              Batal
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              style={{ padding: '12px', background: submitting ? '#94a3b8' : 'var(--button-bg, #0B2545)', color: 'white', border: 'none', borderRadius: '12px', fontWeight: 800, fontSize: '0.85rem', cursor: submitting ? 'not-allowed' : 'pointer' }}
+            >
+              {submitting ? 'Verifikasi...' : 'Verifikasi & Buka'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [registerModalOpen, setRegisterModalOpen] = useState(false);
+  const [changePinModalOpen, setChangePinModalOpen] = useState(false);
+  const [isMenuAuthModalOpen, setIsMenuAuthModalOpen] = useState(false);
+  const [pendingMenuAuth, setPendingMenuAuth] = useState(null);
+
+  const navigateToMenu = (targetPath) => {
+    if (targetPath === 'pengajuan') {
+      setActiveTab('pengajuan');
+      return;
+    }
+    const allAvailableMenus = (referenceData.menus && referenceData.menus.length > 0)
+      ? referenceData.menus
+      : defaultFallbackMenus;
+    const targetMenu = allAvailableMenus.find(m => m.path === targetPath);
+
+    if (targetMenu && (targetMenu.is_password || targetMenu.IsPassword)) {
+      setPendingMenuAuth(targetMenu);
+      setIsMenuAuthModalOpen(true);
+    } else {
+      setActiveTab(targetPath);
+    }
+  };
   const [serverModalOpen, setServerModalOpen] = useState(false);
   const [serverApiPort, setServerApiPort] = useState('8086');
   const [serverApiIp, setServerApiIp] = useState(() => {
@@ -1015,6 +1544,8 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!currentUser) return;
+
     if (activeTab === 'dashboard') {
       fetchDashboardSummary();
     }
@@ -1146,84 +1677,116 @@ function App() {
     const file = targetInput.files[0];
     if (!file) return;
 
+    const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
     const reader = new FileReader();
+
     reader.onload = async (evt) => {
-      const text = evt.target.result;
-      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-      if (lines.length <= 1) {
-        alert("File CSV kosong atau format header tidak sesuai.");
+      let rowsRaw = [];
+      if (isExcel) {
+        try {
+          const data = new Uint8Array(evt.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          rowsRaw = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+        } catch (err) {
+          alert("❌ Gagal membaca file Excel: " + err.message);
+          if (targetInput) targetInput.value = '';
+          return;
+        }
+      } else {
+        const text = evt.target.result;
+        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+        if (lines.length <= 1) {
+          alert("File CSV/Teks kosong atau format header tidak sesuai.");
+          if (targetInput) targetInput.value = '';
+          return;
+        }
+
+        const delimiter = lines[0].includes(';') ? ';' : ',';
+        const cleanHeaderStr = (str) => (str || '').replace(/^\uFEFF/, '').replace(/"/g, '').trim().toUpperCase();
+        const headers = lines[0].split(delimiter).map(h => cleanHeaderStr(h));
+
+        for (let i = 1; i < lines.length; i++) {
+          const cols = lines[i].split(delimiter).map(c => c.replace(/^"/, '').replace(/"$/, '').trim());
+          if (cols.length >= 2) {
+            const rowObj = {};
+            headers.forEach((h, idx) => {
+              rowObj[h] = cols[idx] || '';
+            });
+            rowsRaw.push(rowObj);
+          }
+        }
+      }
+
+      if (rowsRaw.length === 0) {
+        alert("File kosong atau tidak memiliki baris data valid.");
+        if (targetInput) targetInput.value = '';
         return;
       }
 
-      const delimiter = lines[0].includes(';') ? ';' : ',';
-      const cleanHeaderStr = (str) => (str || '').replace(/^\uFEFF/, '').replace(/"/g, '').trim().toUpperCase();
-      const headers = lines[0].split(delimiter).map(h => cleanHeaderStr(h));
       const parsedData = [];
       const importPayload = [];
 
-      for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i].split(delimiter).map(c => c.replace(/^"/, '').replace(/"$/, '').trim());
-        if (cols.length >= 2) {
-          const rowObj = {};
-          headers.forEach((h, idx) => {
-            rowObj[h] = cols[idx] || '';
-          });
+      rowsRaw.forEach((rawRow, i) => {
+        const rowObj = {};
+        Object.keys(rawRow).forEach(k => {
+          rowObj[String(k).trim().toUpperCase()] = rawRow[k];
+        });
 
-          const cleanNum = (str) => {
-            if (!str) return 0;
-            const cleaned = String(str).replace(/"/g, '').replace(/[^0-9.,-]/g, '').trim();
-            if (!cleaned) return 0;
-            return parseFloat(cleaned.replace(',', '.')) || 0;
-          };
+        const cleanNum = (str) => {
+          if (!str && str !== 0) return 0;
+          const cleaned = String(str).replace(/"/g, '').replace(/[^0-9.,-]/g, '').trim();
+          if (!cleaned) return 0;
+          return parseFloat(cleaned.replace(',', '.')) || 0;
+        };
 
-          const refNo = rowObj['NO_REFERENSI'] || rowObj['NO_REF'] || `LMS-PAY-202608-${i}`;
-          const rawEmpId = rowObj['EMPLOYEE_ID'] || rowObj['EMPLOYEE'] || (refNo.includes('-') ? refNo.split('-').pop() : '110102');
-          const empId = parseInt(rawEmpId) || 110102;
-          const period = rowObj['PERIODE'] || '2026-08';
-          const status = rowObj['STATUS_POTONGAN'] || rowObj['STATUS'] || 'SUCCESS';
-          
-          const rawDeducted = rowObj['NOMINAL_TERPOTONG'] || rowObj['NOMINAL_POTONGAN'] || rowObj['DEDUCTED'] || '0';
-          const rawAmount = rowObj['NOMINAL_TAGIHAN'] || rowObj['NOMINAL_POTONGAN'] || rowObj['AMOUNT'] || '0';
+        const refNo = rowObj['NO_REFERENSI'] || rowObj['NO_REF'] || `LMS-PAY-202608-${i+1}`;
+        const rawEmpId = rowObj['EMPLOYEE_ID'] || rowObj['EMPLOYEE'] || (refNo.includes('-') ? refNo.split('-').pop() : '110102');
+        const empId = parseInt(rawEmpId) || 110102;
+        const period = rowObj['PERIODE'] || '2026-08';
+        const status = rowObj['STATUS_POTONGAN'] || rowObj['STATUS'] || 'SUCCESS';
+        
+        const rawDeducted = rowObj['NOMINAL_TERPOTONG'] || rowObj['NOMINAL_POTONGAN'] || rowObj['DEDUCTED'] || '0';
+        const rawAmount = rowObj['NOMINAL_TAGIHAN'] || rowObj['NOMINAL_POTONGAN'] || rowObj['AMOUNT'] || '0';
 
-          let deducted = cleanNum(rawDeducted);
-          let amount = cleanNum(rawAmount);
+        let deducted = cleanNum(rawDeducted);
+        let amount = cleanNum(rawAmount);
 
-          // If NOMINAL_TERPOTONG is blank/0 but NOMINAL_TAGIHAN is provided, fallback deducted = amount
-          if (deducted === 0 && amount > 0) {
-            deducted = amount;
-          }
-          if (amount === 0 && deducted > 0) {
-            amount = deducted;
-          }
-
-          const keterangan = rowObj['KETERANGAN'] || 'Potongan gaji diproses';
-
-          parsedData.push({
-            refNo: refNo,
-            nik: rowObj['NIK_ADIRA'] || rowObj['NIK'] || '3171012345670001',
-            name: rowObj['NAMA_KARYAWAN'] || rowObj['NAMA'] || `Employee #${cols[1] || i}`,
-            period: period,
-            amount: amount,
-            deducted: deducted,
-            status: status,
-            keterangan: keterangan
-          });
-
-          const rawLoanNo = rowObj['LOAN_NO'] || rowObj['LOAN_ID'] || rowObj['NO_LOAN'] || '0';
-          const loanNo = parseInt(rawLoanNo) || 0;
-
-          importPayload.push({
-            ref_no: refNo,
-            employee_id: empId,
-            loan_no: loanNo,
-            period: period,
-            nominal_original: amount,
-            deducted: deducted,
-            status: status,
-            keterangan: keterangan
-          });
+        if (deducted === 0 && amount > 0) {
+          deducted = amount;
         }
-      }
+        if (amount === 0 && deducted > 0) {
+          amount = deducted;
+        }
+
+        const keterangan = rowObj['KETERANGAN'] || 'Potongan gaji diproses';
+
+        parsedData.push({
+          refNo: refNo,
+          nik: rowObj['NIK_ADIRA'] || rowObj['NIK'] || '3171012345670001',
+          name: rowObj['NAMA_KARYAWAN'] || rowObj['NAMA'] || `Employee #${empId}`,
+          period: period,
+          amount: amount,
+          deducted: deducted,
+          status: status,
+          keterangan: keterangan
+        });
+
+        const rawLoanNo = rowObj['LOAN_NO'] || rowObj['LOAN_ID'] || rowObj['NO_LOAN'] || '0';
+        const loanNo = parseInt(rawLoanNo) || 0;
+
+        importPayload.push({
+          ref_no: refNo,
+          employee_id: empId,
+          loan_no: loanNo,
+          period: period,
+          nominal_original: amount,
+          deducted: deducted,
+          status: status,
+          keterangan: keterangan
+        });
+      });
 
       setImportedRows(parsedData);
       setPayrollReconciled(true);
@@ -1252,7 +1815,12 @@ function App() {
         if (targetInput) targetInput.value = '';
       }
     };
-    reader.readAsText(file);
+
+    if (isExcel) {
+      reader.readAsArrayBuffer(file);
+    } else {
+      reader.readAsText(file);
+    }
   };
 
   const handlePrintReconciliationReport = async (displayList, totalAmount, totalDeducted, totalShortage) => {
@@ -1627,14 +2195,14 @@ function App() {
                   setExportModalOpen(true);
                 }}
                 style={{ padding: '6px 12px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
-                title={`Export File CSV Tagihan s/d Tanggal Cut-off ke Folder ${exportFolder}`}
+                title={`Export File (${String(getParamVal('BILL_FILE_EXPORT_FORMAT', 'xlsx')).toUpperCase()}) Tagihan s/d Tanggal Cut-off ke Folder ${exportFolder}`}
               >
-                📥 Export File Payroll (.csv)
+                📥 Export File Payroll (.{String(getParamVal('BILL_FILE_EXPORT_FORMAT', 'xlsx')).toLowerCase()})
               </button>
               <input 
                 type="file" 
                 ref={fileInputRef} 
-                accept=".csv,.txt" 
+                accept=".csv,.xlsx,.xls,.txt" 
                 onChange={handleCSVUpload} 
                 style={{ display: 'none' }} 
               />
@@ -1642,9 +2210,9 @@ function App() {
                 onClick={() => fileInputRef.current && fileInputRef.current.click()}
                 disabled={reconcileClosingInfo.status === 'CLOSED'}
                 style={{ padding: '6px 12px', background: reconcileClosingInfo.status === 'CLOSED' ? '#64748b' : '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: reconcileClosingInfo.status === 'CLOSED' ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
-                title={`Buka Folder Import ${importFolder} & Pilih File CSV Rekonsiliasi`}
+                title={`Buka Folder Import ${importFolder} & Pilih File (${String(getParamVal('BILL_FILE_IMPORT_FORMAT', 'xlsx')).toUpperCase()}) Rekonsiliasi`}
               >
-                📤 Import Result Rekonsiliasi
+                📤 Import Result Rekonsiliasi (.{String(getParamVal('BILL_FILE_IMPORT_FORMAT', 'xlsx')).toLowerCase()})
               </button>
             </div>
           </div>
@@ -2168,7 +2736,28 @@ function App() {
   }, [masterTab, currentPage]);
 
   const submitApplication = async (e) => {
-    e.preventDefault();
+    if (e && e.preventDefault) e.preventDefault();
+
+    const allAvailableMenus = (referenceData.menus && referenceData.menus.length > 0)
+      ? referenceData.menus
+      : defaultFallbackMenus;
+    const pengajuanMenu = allAvailableMenus.find(m => m.path === 'pengajuan');
+
+    if (pengajuanMenu && (pengajuanMenu.is_password || pengajuanMenu.IsPassword)) {
+      setPendingMenuAuth({
+        ...pengajuanMenu,
+        title: 'Pengajuan Pinjaman',
+        path: 'pengajuan',
+        isSubmitAction: true
+      });
+      setIsMenuAuthModalOpen(true);
+      return;
+    }
+
+    doSubmitApplication();
+  };
+
+  const doSubmitApplication = async () => {
     try {
       await axios.post(`${getApiBaseUrl()}/api/applications`, {
         member_no: parseInt(form.member_no),
@@ -2176,7 +2765,7 @@ function App() {
         requested_amount: parseFloat(form.requested_amount),
         tenor: parseInt(form.tenor)
       });
-      alert('Pengajuan berhasil dikirim!');
+      alert('✅ Pengajuan berhasil dikirim!');
       setForm({ ...form, product_id: '', requested_amount: '', tenor: '' });
       setSimulation(null);
       fetchApplications();
@@ -2201,76 +2790,119 @@ function App() {
     }
   }, [parameters]);
 
-  // Simulasi Dinamis
+  // Auto-default product_id & tenor when products load
   useEffect(() => {
-    if (form.product_id && form.requested_amount > 0 && form.tenor > 0) {
+    if (products && products.length > 0) {
+      const firstId = String(products[0].id || products[0].ID);
+      setForm(prev => ({
+        ...prev,
+        product_id: prev.product_id || firstId,
+        tenor: prev.tenor || '1'
+      }));
+    }
+  }, [products]);
+
+  // Dynamic Real-Time Simulation
+  useEffect(() => {
+    const activeProductId = form.product_id || (products.length > 0 ? String(products[0].id || products[0].ID) : '');
+    const activeTenor = parseInt(form.tenor) || 1;
+    const rawAmt = String(form.requested_amount || '').replace(/\D/g, '');
+    const requestedAmount = parseFloat(rawAmt) || 0;
+
+    if (activeProductId && requestedAmount > 0 && activeTenor > 0) {
+      const selectedProd = products.find(p => String(p.id || p.ID) === String(activeProductId)) || products[0];
+      const rate = selectedProd ? (selectedProd.interest_rate !== undefined ? selectedProd.interest_rate : (selectedProd.InterestRate || 0)) : 0;
+      const adminFee = selectedProd ? (selectedProd.admin_fee !== undefined ? selectedProd.admin_fee : (selectedProd.AdminFee || 0)) : 0;
+
+      const principalPerMonth = requestedAmount / activeTenor;
+      const interestPerMonth = requestedAmount * (rate / 100);
+      const totalInstallment = principalPerMonth + interestPerMonth;
+
+      // Set instantaneous real-time simulation state
+      setSimulation({
+        principal_per_month: principalPerMonth,
+        interest_rate: rate,
+        interest_per_month: interestPerMonth,
+        admin_fee: adminFee,
+        total_installment: totalInstallment
+      });
+
+      // Also call backend API to sync precise server simulation if available
       const fetchSimulation = async () => {
         try {
+          const memberNo = userInfo?.member_no || currentUser?.member_no || currentUser?.employee_id || 10101;
           const response = await axios.post(`${getApiBaseUrl()}/api/applications/simulate`, {
-            member_no: parseInt(form.member_no),
-            product_id: parseInt(form.product_id),
-            requested_amount: parseFloat(form.requested_amount),
-            tenor: parseInt(form.tenor)
+            member_no: parseInt(memberNo),
+            product_id: parseInt(activeProductId),
+            requested_amount: requestedAmount,
+            tenor: activeTenor
           });
-          setSimulation(response.data.data);
+          if (response.data?.data) {
+            setSimulation(response.data.data);
+          }
         } catch (error) {
-          setSimulation({ error: error.response?.data?.error || error.message });
+          // Keep instant simulation fallback
         }
       };
-      // Simple debounce
-      const timeoutId = setTimeout(() => fetchSimulation(), 500);
+      const timeoutId = setTimeout(() => fetchSimulation(), 300);
       return () => clearTimeout(timeoutId);
     } else {
       setSimulation(null);
     }
-  }, [form.product_id, form.requested_amount, form.tenor]);
+  }, [form.product_id, form.requested_amount, form.tenor, products, userInfo, currentUser]);
 
   useEffect(() => {
     fetchProducts();
-    fetchApplications();
     fetchParameters();
-    fetchReferenceData();
+    verifySession();
   }, []);
 
   // Login Authentication Verification
   const verifySession = async (overrideToken = '') => {
     try {
+      const storedToken = sessionStorage.getItem('lms_auth_token') || localStorage.getItem('lms_auth_token') || '';
+      const tokenToUse = overrideToken || storedToken;
       const headers = {};
-      if (overrideToken) {
-        headers['Authorization'] = `Bearer ${overrideToken}`;
+      if (tokenToUse) {
+        headers['Authorization'] = `Bearer ${tokenToUse}`;
       }
       const res = await axios.post(`${getApiBaseUrl()}/api/karisma/verify`, {}, { 
         withCredentials: true,
         headers
       });
       const user = res.data.user;
-      if (overrideToken) {
-        sessionStorage.setItem('lms_auth_token', overrideToken);
+      if (tokenToUse) {
+        sessionStorage.setItem('lms_auth_token', tokenToUse);
+        localStorage.setItem('lms_auth_token', tokenToUse);
       }
       setCurrentUser(user);
+      if (user?.force_pwd_change) {
+        setChangePinModalOpen(true);
+      }
       const appUserKey = getParamVal('APP_USER', 'ewa_user');
       localStorage.setItem(appUserKey, JSON.stringify(user));
       // Cleanup legacy token from localStorage for security
       localStorage.removeItem('karisma_token');
       localStorage.removeItem('ewa_token');
       setForm(prev => ({...prev, member_no: user.employee_id}));
+      // Fetch authenticated data ONLY when user session is valid
+      fetchReferenceData();
+      fetchApplications();
     } catch (err) {
-      const appUserKey = getParamVal('APP_USER', 'ewa_user');
-      localStorage.removeItem(appUserKey);
-      localStorage.removeItem('karisma_user');
-      localStorage.removeItem('karisma_token');
-      localStorage.removeItem('ewa_token');
-      setCurrentUser(null);
+      console.warn("verifySession error:", err);
+      const storedToken = sessionStorage.getItem('lms_auth_token') || localStorage.getItem('lms_auth_token');
+      if (err.response?.status === 401 || !storedToken) {
+        const appUserKey = getParamVal('APP_USER', 'ewa_user');
+        localStorage.removeItem(appUserKey);
+        localStorage.removeItem('karisma_user');
+        localStorage.removeItem('karisma_token');
+        localStorage.removeItem('ewa_token');
+        localStorage.removeItem('lms_auth_token');
+        sessionStorage.removeItem('lms_auth_token');
+        setCurrentUser(null);
+      }
     }
   };
-
-  useEffect(() => {
-    // Cleanup any token left in LocalStorage for security (APP_TOKEN is HttpOnly Cookie)
-    localStorage.removeItem('karisma_token');
-    localStorage.removeItem('ewa_token');
-    verifySession();
-    fetchReferenceData();
-  }, []);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -2307,7 +2939,6 @@ function App() {
     if (reason) {
       setLoginError(reason);
     }
-    window.location.href = '/';
   };
 
     const getMasterTitle = (tab) => {
@@ -2382,6 +3013,36 @@ function App() {
         if (payload.deptno !== undefined && payload.deptno !== null) payload.deptno = String(payload.deptno).trim();
         if (payload.Deptno !== undefined && payload.Deptno !== null) { payload.deptno = String(payload.Deptno).trim(); delete payload.Deptno; }
         if (payload.DeptNo !== undefined && payload.DeptNo !== null) { payload.deptno = String(payload.DeptNo).trim(); delete payload.DeptNo; }
+      }
+
+      if (masterTab === 'users') {
+        const pwd = payload.password ? String(payload.password).trim() : '';
+        if (!isEditMasterMode && !pwd) {
+          alert('Password wajib diisi saat membuat user baru!');
+          return;
+        }
+        if (pwd) {
+          if (pwd.length < 9) {
+            alert('Password minimal 9 karakter (sesuai parameter PWD_MIN_LENGTH)!');
+            return;
+          }
+          if (!/[a-z]/.test(pwd)) {
+            alert('Password minimal harus memiliki 1 huruf kecil (a-z)!');
+            return;
+          }
+          if (!/[A-Z]/.test(pwd)) {
+            alert('Password minimal harus memiliki 1 huruf besar (A-Z)!');
+            return;
+          }
+          if (!/[0-9]/.test(pwd)) {
+            alert('Password minimal harus memiliki 1 angka (0-9)!');
+            return;
+          }
+          if (!/[!@#$%^&*()_+\-=\[\]{}|;':",./<>?~`]/.test(pwd)) {
+            alert('Password minimal harus memiliki 1 karakter spesial (!@#$...)!');
+            return;
+          }
+        }
       }
 
       await axios.post(`${getApiBaseUrl()}/api/master/${masterTab}`, payload, { withCredentials: true });
@@ -2545,34 +3206,33 @@ function App() {
             <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
               <button 
                 type="button" 
-                onClick={() => alert('Ganti Password: Masukkan Username & Password lama Anda, lalu hubungi admin atau ubah di menu profil setelah login.')}
-                style={{ flex: 1, padding: '12px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '12px', fontSize: '0.95rem', fontWeight: 700, cursor: 'pointer' }}
+                onClick={() => setChangePinModalOpen(true)}
+                style={{ flex: 1, padding: '12px', background: 'var(--button-bg, #0B2545)', color: '#ffffff', border: 'none', borderRadius: '12px', fontSize: '0.95rem', fontWeight: 700, cursor: 'pointer' }}
               >
-                Ganti Password
+                Ganti PIN
               </button>
               <button 
                 type="submit" 
-                style={{ flex: 1, padding: '12px', background: 'var(--button-bg, #10b981)', color: '#ffffff', border: 'none', borderRadius: '12px', fontSize: '0.95rem', fontWeight: 700, cursor: 'pointer' }}
+                style={{ flex: 1, padding: '12px', background: 'var(--button-bg, #0B2545)', color: '#ffffff', border: 'none', borderRadius: '12px', fontSize: '0.95rem', fontWeight: 700, cursor: 'pointer' }}
               >
                 Login
               </button>
             </div>
 
-            <button 
-              type="button" 
-              onClick={() => setRegisterModalOpen(true)}
-              style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#ffffff', border: 'none', borderRadius: '12px', fontSize: '0.9rem', fontWeight: 800, cursor: 'pointer', marginTop: '4px' }}
-            >
-              📱 Register / Login Mobile EWA (PIN 6-Digit)
-            </button>
-
-            <div style={{ textAlign: 'center', marginTop: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '14px', padding: '0 4px' }}>
               <button 
                 type="button" 
                 onClick={() => alert('Akun Tersedia (Simulator):\n- User Anggota: ID Angka Berapa Saja (Contoh: 10101) / password123\n- User Admin: admin / admin123\n- User HRD: hrd / hrd123')}
-                style={{ background: 'none', border: 'none', color: '#6366f1', fontSize: '0.85rem', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline' }}
+                style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: '0.875rem', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline', padding: 0 }}
               >
                 Forgot?
+              </button>
+              <button 
+                type="button" 
+                onClick={() => setRegisterModalOpen(true)}
+                style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: '0.875rem', cursor: 'pointer', fontWeight: 800, textDecoration: 'underline', padding: 0 }}
+              >
+                Register
               </button>
             </div>
           </form>
@@ -2584,6 +3244,22 @@ function App() {
               setLoginForm({ username: phone, password: pin });
               alert(`✅ Registrasi berhasil! Silakan klik tombol Login untuk masuk dengan username: ${phone}`);
             }}
+          />
+
+          <ChangePinModal
+            isOpen={changePinModalOpen}
+            onClose={() => setChangePinModalOpen(false)}
+            onSuccess={() => {
+              setCurrentUser(prev => prev ? { ...prev, force_pwd_change: false } : null);
+              verifySession();
+            }}
+            onLogout={(reason) => {
+              setChangePinModalOpen(false);
+              handleLogout(reason);
+            }}
+            initialOldVal={loginForm.password}
+            parameters={parameters}
+            currentUser={currentUser}
           />
         </div>
       </div>
@@ -2644,7 +3320,7 @@ function App() {
                           <div 
                             key={sub.menu_id}
                             className={`nav-item ${activeTab === sub.path ? 'active' : ''}`}
-                            onClick={() => setActiveTab(sub.path)}
+                            onClick={() => navigateToMenu(sub.path)}
                             style={{ fontSize: '0.875rem', padding: '8px 12px' }}
                           >
                             <span className="nav-icon">{sub.icon || '📌'}</span>
@@ -2661,7 +3337,7 @@ function App() {
                 <div 
                   key={menu.menu_id}
                   className={`nav-item ${activeTab === menu.path ? 'active' : ''}`}
-                  onClick={() => setActiveTab(menu.path)}
+                  onClick={() => navigateToMenu(menu.path)}
                   title={isSidebarCollapsed ? menu.title : ''}
                 >
                   <span className="nav-icon">{menu.icon || '📌'}</span>
@@ -2715,12 +3391,9 @@ function App() {
               const displayName = userInfo?.name || currentUser?.name || 'User';
               return (
                 <>
-                  <span style={{ fontWeight: 500, color: '#ffffff' }}>
-                    {displayName} ({currentUser?.employee_id || currentUser?.username}) - <span style={{ textTransform: 'capitalize' }}>{realRoleName}</span>
+                  <span style={{ fontWeight: 500, color: '#ffffff', fontSize: '0.85rem' }}>
+                    {displayName} - <span style={{ textTransform: 'capitalize' }}>{realRoleName}</span>
                   </span>
-                  <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'var(--accent-blue)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' }}>
-                    {displayName ? displayName.substring(0, 2).toUpperCase() : ''}
-                  </div>
                   <button
                     type="button"
                     onClick={() => handleLogout()}
@@ -2728,8 +3401,8 @@ function App() {
                     style={{
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '6px',
-                      padding: '8px 14px',
+                      justifyContent: 'center',
+                      padding: '8px 10px',
                       background: '#ef4444',
                       color: '#ffffff',
                       border: 'none',
@@ -2738,16 +3411,15 @@ function App() {
                       fontSize: '0.85rem',
                       cursor: 'pointer',
                       boxShadow: '0 2px 6px rgba(239, 68, 68, 0.3)',
-                      marginLeft: '8px',
+                      marginLeft: '6px',
                       transition: 'all 0.2s ease'
                     }}
                   >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
                       <polyline points="16 17 21 12 16 7"></polyline>
                       <line x1="21" y1="12" x2="9" y2="12"></line>
                     </svg>
-                    <span>Logout</span>
                   </button>
                 </>
               );
@@ -2758,147 +3430,148 @@ function App() {
         <div className="content-body">
           {activeTab === 'dashboard' && (
             <>
-              <div className="card-grid">
-                <div className="card">
-                  <div className="card-title">Available Credit Limit</div>
-                  <div className="card-value" style={{ color: '#059669' }}>
+              {/* Header-2: Compact Shopee-style Horizontal Summary Bar (Fits 1 Screen) */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: '6px',
+                marginBottom: '12px',
+                background: 'white',
+                padding: '8px 10px',
+                borderRadius: '14px',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.04)'
+              }}>
+                <div style={{ borderRight: '1px solid #f1f5f9', paddingRight: '4px' }}>
+                  <div style={{ fontSize: '0.6rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    AVAILABLE LIMIT
+                  </div>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#059669', marginTop: '2px', whiteSpace: 'nowrap' }}>
                     Rp {dashboardSummary.available_limit ? dashboardSummary.available_limit.toLocaleString('id-ID') : '0'}
                   </div>
                 </div>
-                <div className="card">
-                  <div className="card-title">Total Hutang</div>
-                  <div className="card-value" style={{ color: '#dc2626' }}>
+
+                <div style={{ borderRight: '1px solid #f1f5f9', paddingRight: '4px', paddingLeft: '4px' }}>
+                  <div style={{ fontSize: '0.6rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    TOTAL HUTANG
+                  </div>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#dc2626', marginTop: '2px', whiteSpace: 'nowrap' }}>
                     Rp {dashboardSummary.total_debt ? dashboardSummary.total_debt.toLocaleString('id-ID') : '0'}
                   </div>
                 </div>
-                <div className="card">
-                  <div className="card-title">Pinjaman Aktif</div>
-                  <div className="card-value" style={{ color: '#2563eb' }}>
+
+                <div style={{ paddingLeft: '4px' }}>
+                  <div style={{ fontSize: '0.6rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    PINJAMAN AKTIF
+                  </div>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#2563eb', marginTop: '2px' }}>
                     {dashboardSummary.active_loans || 0}
                   </div>
                 </div>
               </div>
 
-              <div className="table-container">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', paddingBottom: '8px', borderBottom: '1px solid #e2e8f0' }}>
-                  <div className="table-header" style={{ marginBottom: 0 }}>Pinjaman Terbaru</div>
-                  <button 
-                    onClick={fetchDashboardSummary} 
-                    style={{ padding: '4px 12px', background: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                  >
-                    🔄 Refresh Real-Time Data
-                  </button>
+              {/* Header-3: Shopee-style Shortcut Menu Grid (3 Columns) */}
+              <div style={{
+                background: 'white',
+                borderRadius: '14px',
+                padding: '12px 14px',
+                marginBottom: '12px',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.04)'
+              }}>
+                <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#334155', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  🚀 SHORTCUT MENU EWA
                 </div>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gap: '8px'
+                }}>
+                  <div
+                    onClick={() => setActiveTab('pengajuan')}
+                    style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '12px', padding: '10px 4px', display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer', textAlign: 'center' }}
+                  >
+                    <span style={{ fontSize: '1.3rem', marginBottom: '2px' }}>📝</span>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#166534' }}>Pengajuan</span>
+                  </div>
 
-                <table>
-                  <thead>
-                    <tr>
-                      <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>No Pengajuan</th>
-                      <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Employee ID</th>
-                      <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Tanggal</th>
-                      <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Nominal</th>
-                      <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Tenor</th>
-                      <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {!dashboardSummary.recent_loans || dashboardSummary.recent_loans.length === 0 ? (
-                      <tr>
-                        <td colSpan="6" style={{ textAlign: 'center', padding: '24px 16px', color: '#64748b' }}>
-                          Belum ada pengajuan / pinjaman aktif.
-                        </td>
-                      </tr>
-                    ) : (
-                      dashboardSummary.recent_loans.map(app => (
-                        <tr key={app.ApplicationNo || app.application_no} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                          <td style={{ padding: '8px 10px', fontSize: '0.85rem' }}><strong>{app.ApplicationNo || app.application_no}</strong></td>
-                          <td style={{ padding: '8px 10px', fontSize: '0.85rem', fontWeight: 600, color: '#0f172a' }}>{app.MemberNo || app.member_no}</td>
-                          <td style={{ padding: '8px 10px', fontSize: '0.85rem', color: '#64748B' }}>
-                            {formatDate(app.SubmissionDate || app.submission_date)}
-                          </td>
-                          <td style={{ padding: '8px 10px', fontSize: '0.85rem' }}>
-                            Rp {(app.RequestedAmount || app.requested_amount) ? (app.RequestedAmount || app.requested_amount).toLocaleString('id-ID') : '0'}
-                          </td>
-                          <td style={{ padding: '8px 10px', fontSize: '0.85rem' }}>{app.Tenor || app.tenor} Bulan</td>
-                          <td style={{ padding: '8px 10px', fontSize: '0.85rem' }}>
-                            <span className={getStatusBadge(app.Status || app.status)}>
-                              {app.Status || app.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+                  <div
+                    onClick={() => setActiveTab('pinjaman')}
+                    style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '12px', padding: '10px 4px', display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer', textAlign: 'center' }}
+                  >
+                    <span style={{ fontSize: '1.3rem', marginBottom: '2px' }}>📋</span>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#1e40af' }}>Daftar Pinjaman</span>
+                  </div>
+
+                  <div
+                    onClick={() => setActiveTab('account')}
+                    style={{ background: '#f3e8ff', border: '1px solid #e9d5ff', borderRadius: '12px', padding: '10px 4px', display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer', textAlign: 'center' }}
+                  >
+                    <span style={{ fontSize: '1.3rem', marginBottom: '2px' }}>👤</span>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#6b21a8' }}>Account</span>
+                  </div>
+                </div>
               </div>
 
-              {/* Tampilan Integrasi Backend (Products) */}
-              <div className="table-container" style={{ marginTop: '32px' }}>
-                <div className="table-header">Katalog Produk Pinjaman (Dari Backend)</div>
-                <div style={{ padding: '24px' }}>
-                  {loading ? (
-                    <p>Loading data dari API...</p>
-                  ) : products.length === 0 ? (
-                    <p>Belum ada produk pinjaman. Coba tambahkan lewat POST /api/products.</p>
-                  ) : (
-                    <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-                      {products.map(p => {
-                        const pId = p.id || p.ID;
-                        const pName = p.name || p.Name || `Produk #${pId}`;
-                        const pTenor = p.max_tenor_months || p.MaxTenorMonths || 12;
-                        const pRate = p.interest_rate !== undefined ? p.interest_rate : (p.InterestRate !== undefined ? p.InterestRate : 0);
-                        const pStatus = p.status || p.Status || 'ACTIVE';
-                        return (
-                          <div key={pId} style={{ border: '1px solid var(--border-color)', padding: '16px', borderRadius: '8px', minWidth: '250px' }}>
-                            <h4 style={{ color: 'var(--primary-blue)', marginBottom: '8px' }}>{pName}</h4>
-                            <p style={{ fontSize: '0.875rem', color: '#64748B' }}>Max Tenor: {pTenor} bln</p>
-                            <p style={{ fontSize: '0.875rem', color: '#64748B' }}>Bunga: {pRate}%</p>
-                            <span className={getStatusBadge(pStatus)} style={{ marginTop: '12px', display: 'inline-block' }}>{pStatus}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  <button 
-                    onClick={fetchProducts} 
-                    style={{ marginTop: '16px', padding: '8px 16px', background: 'var(--primary-blue)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                  >
-                    Refresh Data
-                  </button>
+              {/* Single-Screen Informational Banner */}
+              <div style={{
+                background: 'white',
+                borderRadius: '14px',
+                padding: '12px 14px',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.03)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px'
+              }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#ecfdf5', color: '#059669', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem', flexShrink: 0 }}>
+                  💡
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0f172a' }}>
+                    Sistem EWA Kopkara Active
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '2px' }}>
+                    Gunakan <strong>Pengajuan</strong> untuk EWA & <strong>Daftar Pinjaman</strong> untuk memantau status.
+                  </div>
                 </div>
               </div>
             </>
           )}
 
           {activeTab === 'pengajuan' && (
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', padding: '24px 0' }}>
-              <div style={{ maxWidth: '680px', width: '100%', margin: '0 auto', background: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', boxShadow: '0 4px 20px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', width: '100%', padding: '0' }}>
+              <div style={{ width: '100%', maxWidth: '100%', margin: '0 auto', background: '#ffffff', borderRadius: '14px', border: '1px solid #cbd5e1', boxShadow: '0 4px 20px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
                 {/* Header Card dengan background HEADER_BG dan font putih */}
-                <div style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff', padding: '18px 24px' }}>
-                  <h2 style={{ color: '#ffffff', margin: 0, fontSize: '1.25rem', fontWeight: 700 }}>
-                    Formulir Pengajuan Pinjaman
+                <div style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff', padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h2 style={{ color: '#ffffff', margin: 0, fontSize: '1.05rem', fontWeight: 800 }}>
+                    📝 Pengajuan Pinjaman
                   </h2>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('dashboard')}
+                    style={{ background: 'rgba(255, 255, 255, 0.2)', color: '#ffffff', border: '1px solid rgba(255, 255, 255, 0.4)', borderRadius: '8px', padding: '4px 12px', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    ❌ Tutup
+                  </button>
                 </div>
 
-                <div style={{ padding: '24px' }}>
+                <div style={{ padding: '14px' }}>
                   {dateError && (
                     <div style={{ padding: '12px', background: '#fee2e2', color: '#991B1B', borderRadius: '6px', marginBottom: '16px', fontWeight: 600 }}>
                       ⚠️ {dateError}
                     </div>
                   )}
 
-                  <form onSubmit={submitApplication} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-                    {/* 1. Produk Pinjaman (Label & Dropdown Sebaris) */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                      <label style={{ width: '180px', flexShrink: 0, fontWeight: 600, color: '#334155' }}>Produk Pinjaman</label>
+                  <form onSubmit={submitApplication} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                    {/* 1. Produk (Baris 1) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <label style={{ width: '85px', flexShrink: 0, fontWeight: 700, color: '#334155', fontSize: '0.9rem' }}>Produk</label>
                       <div style={{ flex: 1 }}>
                         <select 
                           required 
-                          value={form.product_id} 
+                          value={form.product_id || (products.length > 0 ? (products[0].id || products[0].ID) : '')} 
                           onChange={e => setForm({...form, product_id: e.target.value})}
-                          style={{ width: '100%', padding: '10px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontSize: '0.95rem', outline: 'none' }}
+                          style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontSize: '0.9rem', outline: 'none', fontWeight: 600 }}
                         >
-                          <option value="">-- Pilih Produk --</option>
+                          {products.length > 1 && <option value="">-- Pilih Produk --</option>}
                           {products.map(p => {
                             const pId = p.id || p.ID;
                             const pName = p.name || p.Name || `Produk #${pId}`;
@@ -2906,7 +3579,7 @@ function App() {
                             const pType = p.loan_type || p.LoanType || 'FLAT';
                             return (
                               <option key={pId} value={pId}>
-                                {pName} - (Bunga {pRate}% / bln - {pType})
+                                {pName} - ({pRate}% / bln - {pType})
                               </option>
                             );
                           })}
@@ -2914,40 +3587,20 @@ function App() {
                       </div>
                     </div>
 
-                    {/* 2. Nominal Pinjaman (Label & Input Sebaris) */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                      <label style={{ width: '180px', flexShrink: 0, fontWeight: 600, color: '#334155' }}>Nominal Pinjaman (Rp)</label>
-                      <div style={{ flex: 1 }}>
-                        <input 
-                          type="text" 
-                          required 
-                          placeholder="Contoh: 300.000"
-                          value={form.requested_amount ? Number(form.requested_amount).toLocaleString('id-ID') : ''}
-                          onChange={e => {
-                            const rawVal = e.target.value.replace(/\D/g, '');
-                            setForm({...form, requested_amount: rawVal});
-                          }}
-                          style={{ width: '100%', padding: '10px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontWeight: 600, fontSize: '0.95rem', outline: 'none' }}
-                        />
-
-                      </div>
-                    </div>
-
-                    {/* 3. Tenor (Label & Dropdown Sebaris) */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                      <label style={{ width: '180px', flexShrink: 0, fontWeight: 600, color: '#334155' }}>Tenor (Bulan)</label>
+                    {/* 2. Tenor (Baris 2) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <label style={{ width: '85px', flexShrink: 0, fontWeight: 700, color: '#334155', fontSize: '0.9rem' }}>Tenor</label>
                       <div style={{ flex: 1 }}>
                         <select 
                           required
-                          value={form.tenor}
+                          value={form.tenor || '1'}
                           onChange={e => setForm({...form, tenor: e.target.value})}
-                          style={{ width: '100%', padding: '10px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontSize: '0.95rem', outline: 'none' }}
+                          style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontSize: '0.9rem', outline: 'none', fontWeight: 600 }}
                         >
-                          <option value="">-- Pilih Tenor --</option>
                           {(() => {
                             const maxParam = parameters.find(p => String(p.KeyName || p.key_name || '').toUpperCase() === 'LOAN_MAX_TENOR');
                             const maxGlobal = maxParam ? (parseInt(maxParam.KeyValue || maxParam.key_value) || 60) : 60;
-                            const selectedProduct = products.find(p => String(p.ID || p.id) === String(form.product_id));
+                            const selectedProduct = products.find(p => String(p.ID || p.id) === String(form.product_id || (products.length > 0 ? (products[0].id || products[0].ID) : '')));
                             const maxProduct = selectedProduct ? (parseInt(selectedProduct.MaxTenorMonths || selectedProduct.max_tenor_months) || 60) : 60;
                             const maxTenor = Math.min(maxGlobal, maxProduct);
                             return Array.from({ length: Math.max(1, maxTenor) }, (_, i) => i + 1).map(m => (
@@ -2958,72 +3611,69 @@ function App() {
                       </div>
                     </div>
 
-                    {/* Simulasi Breakdown */}
+                    {/* 3. Nominal (Baris 3) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <label style={{ width: '85px', flexShrink: 0, fontWeight: 700, color: '#334155', fontSize: '0.9rem' }}>Nominal</label>
+                      <div style={{ flex: 1 }}>
+                        <input 
+                          type="text" 
+                          required 
+                          placeholder="Contoh: 300.000"
+                          value={form.requested_amount ? Number(form.requested_amount).toLocaleString('id-ID') : ''}
+                          onChange={e => {
+                            const rawVal = e.target.value.replace(/\D/g, '');
+                            setForm({...form, requested_amount: rawVal});
+                          }}
+                          style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontWeight: 700, fontSize: '0.95rem', outline: 'none' }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Rincian Simulasi Real-Time */}
                     {simulation && !simulation.error && (
-                      <div style={{ marginTop: '12px', padding: '16px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#1e293b' }}>
-                        <h3 style={{ fontSize: '1rem', marginBottom: '12px', color: 'var(--header-bg, #0B2545)', borderBottom: '1px solid #e2e8f0', paddingBottom: '6px' }}>Rincian Simulasi Pinjaman</h3>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 24px', fontSize: '0.875rem' }}>
+                      <div style={{ marginTop: '8px', padding: '12px 14px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#1e293b' }}>
+                        <h3 style={{ fontSize: '0.9rem', marginBottom: '8px', color: 'var(--header-bg, #0B2545)', borderBottom: '1px solid #e2e8f0', paddingBottom: '4px', fontWeight: 800 }}>Rincian Simulasi Pinjaman</h3>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px', fontSize: '0.8rem' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span style={{ color: '#64748b' }}>Pokok per Bulan:</span>
-                            <strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.principal_per_month).toLocaleString('id-ID')}</strong>
+                            <strong style={{ color: '#0f172a' }}>{Math.round(simulation.principal_per_month).toLocaleString('id-ID')}</strong>
                           </div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ color: '#64748b' }}>Bunga per Bulan ({simulation.interest_rate}%):</span>
-                            <strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.interest_per_month).toLocaleString('id-ID')}</strong>
+                            <span style={{ color: '#64748b' }}>Bunga ({simulation.interest_rate}%):</span>
+                            <strong style={{ color: '#0f172a' }}>{Math.round(simulation.interest_per_month).toLocaleString('id-ID')}</strong>
                           </div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ color: '#64748b' }}>Biaya Administrasi:</span>
-                            <strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.admin_fee).toLocaleString('id-ID')}</strong>
+                            <span style={{ color: '#64748b' }}>Biaya Admin:</span>
+                            <strong style={{ color: '#0f172a' }}>{Math.round(simulation.admin_fee).toLocaleString('id-ID')}</strong>
                           </div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ color: '#64748b' }}>Total Angsuran per Bulan:</span>
-                            <strong style={{ color: '#0f172a' }}>Rp {Math.round(simulation.total_installment).toLocaleString('id-ID')}</strong>
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gridColumn: 'span 2', marginTop: '6px', paddingTop: '8px', borderTop: '1px dashed #cbd5e1' }}>
-                            <span style={{ color: '#64748b' }}>
-                              {(() => {
-                                const d = new Date();
-                                const day = String(d.getDate()).padStart(2, '0');
-                                const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
-                                const m = months[d.getMonth()];
-                                const y = d.getFullYear();
-                                return `Batas Plafon Maksimal ${day}-${m}-${y}:`;
-                              })()}
-                            </span>
-                            <strong style={{ fontSize: '1rem', color: '#047857' }}>Rp {simulation.credit_limit ? Math.round(simulation.credit_limit).toLocaleString('id-ID') : 'Tidak Dibatasi'}</strong>
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gridColumn: 'span 2' }}>
-                            <span style={{ color: '#64748b' }}>Total Pinjaman Sebelumnya:</span>
-                            <strong style={{ fontSize: '0.95rem', color: '#0f172a' }}>Rp {Math.round(simulation.total_previous_loans || 0).toLocaleString('id-ID')}</strong>
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gridColumn: 'span 2' }}>
-                            <span style={{ color: '#64748b' }}>Sisa Plafon Pinjaman:</span>
-                            <strong style={{ fontSize: '0.95rem', color: '#047857' }}>
-                              {simulation.credit_limit ? `Rp ${Math.round(simulation.remaining_limit !== undefined ? simulation.remaining_limit : Math.max(0, simulation.credit_limit - (simulation.total_previous_loans || 0))).toLocaleString('id-ID')}` : 'Tidak Dibatasi'}
-                            </strong>
+                            <span style={{ color: '#64748b' }}>Total Angsuran:</span>
+                            <strong style={{ color: '#047857', fontSize: '0.85rem' }}>{Math.round(simulation.total_installment).toLocaleString('id-ID')}</strong>
                           </div>
                         </div>
                       </div>
                     )}
                     {simulation && simulation.error && (
-                      <div style={{ padding: '12px', background: '#fee2e2', color: '#991B1B', borderRadius: '6px', marginTop: '12px', fontWeight: 600 }}>
-                        ❌ {simulation.error}
+                      <div style={{ padding: '10px', background: '#fee2e2', color: '#991B1B', borderRadius: '6px', marginTop: '8px', fontWeight: 600, fontSize: '0.85rem' }}>
+                        ⚠️ {simulation.error}
                       </div>
                     )}
 
-                    <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', marginTop: '16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', marginTop: '12px' }}>
                       <button 
                         type="submit" 
                         disabled={dateError !== '' || (simulation && simulation.error)}
                         style={{ 
-                          padding: '10px 24px', 
+                          width: '100%',
+                          padding: '12px 24px', 
                           background: dateError || (simulation && simulation.error) ? '#94a3b8' : 'var(--button-bg, #10b981)', 
                           color: '#ffffff', 
                           border: 'none', 
-                          borderRadius: '6px', 
-                          fontWeight: 700, 
+                          borderRadius: '8px', 
+                          fontWeight: 800, 
                           fontSize: '0.95rem',
-                          cursor: dateError || (simulation && simulation.error) ? 'not-allowed' : 'pointer' 
+                          cursor: dateError || (simulation && simulation.error) ? 'not-allowed' : 'pointer',
+                          boxShadow: '0 2px 6px rgba(16, 185, 129, 0.3)'
                         }}
                       >
                         Kirim Pengajuan
@@ -3039,8 +3689,17 @@ function App() {
             <div className="table-container" style={{ padding: 0, overflow: 'hidden' }}>
               {/* Header Container dengan background HEADER_BG & font putih */}
               <div style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff', padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                <div style={{ fontSize: '1.15rem', fontWeight: 'bold', color: '#ffffff' }}>
-                  Daftar Pengajuan & Pinjaman
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 'bold', color: '#ffffff' }}>
+                    Daftar Pengajuan & Pinjaman
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('dashboard')}
+                    style={{ background: 'rgba(255, 255, 255, 0.2)', color: '#ffffff', border: '1px solid rgba(255, 255, 255, 0.4)', borderRadius: '8px', padding: '4px 12px', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    ❌ Tutup
+                  </button>
                 </div>
 
                 {/* Badge Status Privilege Role */}
@@ -3158,27 +3817,25 @@ function App() {
               <table>
                 <thead>
                   <tr>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>No. Pengajuan</th>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Employee ID</th>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tanggal Submit</th>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Nominal</th>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tenor</th>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Status</th>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Catatan HRD</th>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Tanggal Approval</th>
-                    <th style={{ padding: '6px 10px', fontSize: '0.85rem', textAlign: 'center' }}>Aksi</th>
+                    <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Tanggal Submit</th>
+                    <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Nominal</th>
+                    <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Status</th>
+                    <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Tenor</th>
+                    <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>No. Pengajuan</th>
+                    <th style={{ padding: '8px 10px', fontSize: '0.85rem' }}>Tanggal Approval</th>
+                    <th style={{ padding: '8px 10px', fontSize: '0.85rem', textAlign: 'center' }}>Aksi</th>
                   </tr>
                 </thead>
                 <tbody>
                   {!hasSearchedLoans ? (
                     <tr>
-                      <td colSpan="9" style={{ textAlign: 'center', padding: '36px 16px', color: '#475569', fontSize: '0.9rem' }}>
+                      <td colSpan="7" style={{ textAlign: 'center', padding: '36px 16px', color: '#475569', fontSize: '0.9rem' }}>
                         🔍 Silakan pilih periode & klik tombol <strong>"Cari Pinjaman"</strong> untuk menampilkan data.
                       </td>
                     </tr>
                   ) : applications.length === 0 ? (
                     <tr>
-                      <td colSpan="9" style={{ textAlign: 'center', padding: '24px 16px', color: '#dc2626', fontWeight: 600, backgroundColor: '#fef2f2', borderBottom: '1px solid #fecaca' }}>
+                      <td colSpan="7" style={{ textAlign: 'center', padding: '24px 16px', color: '#dc2626', fontWeight: 600, backgroundColor: '#fef2f2', borderBottom: '1px solid #fecaca' }}>
                         ⚠️ Data pinjaman tidak ditemukan (Periode {loanMonthFilter.year}-{loanMonthFilter.month})
                       </td>
                     </tr>
@@ -3196,30 +3853,27 @@ function App() {
                         const requestedAmount = app.requested_amount ?? app.RequestedAmount ?? 0;
                         const tenor = app.tenor ?? app.Tenor ?? 0;
                         const status = app.status || app.Status || '';
-                        const approvalNotes = app.approval_notes || app.ApprovalNotes || '-';
                         const approvedAt = app.approved_at || app.ApprovedAt;
 
                         return (
                           <tr key={appNo} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                            <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}><strong>{appNo}</strong></td>
-                            <td style={{ padding: '6px 10px', fontSize: '0.85rem', fontWeight: 600, color: '#0f172a' }}>{memberNo}</td>
-                            <td style={{ padding: '6px 10px', fontSize: '0.85rem', color: '#64748B' }}>
+                            <td style={{ padding: '8px 10px', fontSize: '0.85rem', color: '#475569', whiteSpace: 'nowrap' }}>
                               {formatDate(submissionDate)}
                             </td>
-                            <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>Rp {requestedAmount ? Number(requestedAmount).toLocaleString('id-ID') : '0'}</td>
-                            <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>{tenor} Bulan</td>
-                            <td style={{ padding: '6px 10px', fontSize: '0.85rem' }}>
+                            <td style={{ padding: '8px 10px', fontSize: '0.85rem', fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap' }}>
+                              {requestedAmount ? Number(requestedAmount).toLocaleString('id-ID') : '0'}
+                            </td>
+                            <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
                               <span className={getStatusBadge(status)} style={{ backgroundColor: status === 'REVISION_REQUIRED' ? '#f59e0b' : undefined }}>
                                 {status === 'REVISION_REQUIRED' ? 'PERLU REVISI' : status}
                               </span>
                             </td>
-                            <td style={{ padding: '6px 10px', fontSize: '0.85rem', color: '#b45309', fontWeight: 500 }}>
-                              {approvalNotes}
-                            </td>
-                            <td style={{ padding: '6px 10px', fontSize: '0.85rem', color: '#64748B' }}>
+                            <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{tenor} Bulan</td>
+                            <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}><strong>{appNo}</strong></td>
+                            <td style={{ padding: '8px 10px', fontSize: '0.85rem', color: '#475569', whiteSpace: 'nowrap' }}>
                               {formatDate(approvedAt)}
                             </td>
-                            <td style={{ padding: '6px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                            <td style={{ padding: '8px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
                               <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
                                 {status === 'REVISION_REQUIRED' && (
                                   <button 
@@ -3233,7 +3887,7 @@ function App() {
                                       setActiveTab('pengajuan');
                                       alert(`Silakan revisi nominal/tenor pengajuan #${appNo} lalu klik Kirim Pengajuan.`);
                                     }}
-                                    style={{ padding: '3px 8px', background: '#f59e0b', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                    style={{ padding: '4px 10px', background: '#f59e0b', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
                                   >
                                     ✏️ Revisi
                                   </button>
@@ -3241,7 +3895,7 @@ function App() {
                                 {(status === 'APPROVED' || status === 'DISBURSED') && (
                                   <button 
                                     onClick={() => handlePrintContract(app)}
-                                    style={{ padding: '3px 8px', background: '#0f172a', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                    style={{ padding: '4px 10px', background: '#0f172a', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
                                     title="Cetak Surat Perjanjian Kredit & Kontrak Pinjaman"
                                   >
                                     📄 Kontrak
@@ -3250,7 +3904,7 @@ function App() {
                                 {status === 'APPROVED' && (
                                   <button 
                                     onClick={() => handleDisburse(app)}
-                                    style={{ padding: '3px 8px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                    style={{ padding: '4px 10px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
                                     title="Cairkan Dana Pinjaman"
                                   >
                                     💵 Cairkan
@@ -3258,7 +3912,7 @@ function App() {
                                 )}
                                 <button 
                                   onClick={() => handleOpenTracking(appNo)}
-                                  style={{ padding: '3px 8px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+                                  style={{ padding: '4px 10px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
                                   title="Lihat Riwayat Status / Tracking"
                                 >
                                   📜 Track
@@ -3286,14 +3940,14 @@ function App() {
                       <button
                         disabled={safePage <= 1}
                         onClick={() => setLoanPage(prev => Math.max(prev - 1, 1))}
-                        style={{ padding: '5px 12px', background: safePage <= 1 ? '#e2e8f0' : '#0284c7', color: safePage <= 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: safePage <= 1 ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+                        style={{ padding: '5px 14px', background: safePage <= 1 ? '#e2e8f0' : '#0284c7', color: safePage <= 1 ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: safePage <= 1 ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
                       >
                         ◀ Prev
                       </button>
                       <button
                         disabled={safePage >= totalPages}
                         onClick={() => setLoanPage(prev => Math.min(prev + 1, totalPages))}
-                        style={{ padding: '5px 12px', background: safePage >= totalPages ? '#e2e8f0' : '#0284c7', color: safePage >= totalPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: safePage >= totalPages ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+                        style={{ padding: '5px 14px', background: safePage >= totalPages ? '#e2e8f0' : '#0284c7', color: safePage >= totalPages ? '#94a3b8' : 'white', border: 'none', borderRadius: '4px', cursor: safePage >= totalPages ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
                       >
                         Next ▶
                       </button>
@@ -3484,7 +4138,7 @@ function App() {
                 </div>
               </div>
             );
-          })()} //
+          })()}
 
           {activeTab === 'disbursement' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -3665,18 +4319,28 @@ function App() {
                           custom_folder: exportCustomFolder,
                           cutoff_date: effectiveCutoffDate
                         });
-                        const csvContent = "data:text/csv;charset=utf-8," + (res.data.csv_content || "");
-                        const encodedUri = encodeURI(csvContent);
-                        const link = document.createElement("a");
-                        link.setAttribute("href", encodedUri);
-                        link.setAttribute("download", res.data.file_name || `ADIRA_PAYROLL_KOPKARA_OUTGOING_${effectiveCutoffDate.replace(/-/g, '')}.csv`);
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
+                        if (res.data.xlsx_base64) {
+                          const link = document.createElement("a");
+                          link.setAttribute("href", `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${res.data.xlsx_base64}`);
+                          link.setAttribute("download", res.data.file_name || `ADIRA_PAYROLL_KOPKARA_OUTGOING_${effectiveCutoffDate.replace(/-/g, '')}.xlsx`);
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        } else {
+                          const csvContent = "data:text/csv;charset=utf-8," + (res.data.csv_content || "");
+                          const encodedUri = encodeURI(csvContent);
+                          const link = document.createElement("a");
+                          link.setAttribute("href", encodedUri);
+                          link.setAttribute("download", res.data.file_name || `ADIRA_PAYROLL_KOPKARA_OUTGOING_${effectiveCutoffDate.replace(/-/g, '')}.csv`);
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        }
 
                         setExportModalOpen(false);
+                        const fmtName = (res.data.file_format || 'xlsx').toUpperCase();
                         const labelInfo = scanMode === 'DUEDATE' ? `Cut-Off Tanggal: s/d ${effectiveCutoffDate}` : `Cut-Off Periode: s/d ${exportPeriodYear}-${exportPeriodMonth}`;
-                        alert(`✅ File CSV Tagihan Payroll HRD Adira BERHASIL digenerate!\n\n📁 Folder Simpan: ${res.data.file_path || exportCustomFolder}\n📅 ${labelInfo}\n📊 Total ${res.data.total_rows || 0} tagihan karyawan diproses.`);
+                        alert(`✅ File ${fmtName} Tagihan Payroll HRD Adira BERHASIL digenerate!\n\n📁 Folder Simpan: ${res.data.file_path || exportCustomFolder}\n📅 ${labelInfo}\n📊 Total ${res.data.total_rows || 0} tagihan karyawan diproses.`);
                       } catch (err) {
                         alert("❌ Gagal mengeksport file payroll: " + (err.response?.data?.error || err.message));
                       }
@@ -3768,7 +4432,84 @@ function App() {
                   </div>
                 </div>
               )}
-            
+
+          {activeTab === 'account' && (
+            <div style={{ maxWidth: '640px', margin: '0 auto', background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 4px 16px rgba(0,0,0,0.06)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '1px solid #f1f5f9' }}>
+                <h3 style={{ margin: 0, fontSize: '1.2rem', color: '#0f172a', fontWeight: 800 }}>
+                  👤 Profil Akun Saya
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('dashboard')}
+                  style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '6px 14px', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  ❌ Tutup
+                </button>
+              </div>
+
+              <div style={{ textAlign: 'center', marginBottom: '20px', paddingBottom: '16px', borderBottom: '1px solid #f1f5f9' }}>
+                <h3 style={{ margin: 0, fontSize: '1.25rem', color: '#0f172a', fontWeight: 800 }}>
+                  {userInfo?.name || currentUser?.name || 'Nur Kholim'}
+                </h3>
+                <span style={{ display: 'inline-block', background: '#dcfce7', color: '#15803d', padding: '4px 12px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 800, marginTop: '6px' }}>
+                  {realRoleName.toUpperCase()}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ padding: '12px 16px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>1. Nama Lengkap</div>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>{userInfo?.name || currentUser?.name || 'Nur Kholim'}</div>
+                </div>
+
+                <div style={{ padding: '12px 16px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>2. NIK (Nomor Induk Karyawan)</div>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>{userInfo?.nik || currentUser?.employee_id || currentUser?.username || '100001'}</div>
+                </div>
+
+                <div style={{ padding: '12px 16px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>3. No. HP / WhatsApp</div>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>{userInfo?.phone_number || currentUser?.phone_number || '085882500073'}</div>
+                </div>
+
+                <div style={{ padding: '12px 16px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>4. No. KTP</div>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>{userInfo?.no_ktp || currentUser?.no_ktp || '3201012345670001'}</div>
+                </div>
+
+                <div style={{ padding: '12px 16px', background: '#ecfdf5', borderRadius: '12px', border: '1px solid #a7f3d0' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#047857', fontWeight: 700, textTransform: 'uppercase' }}>5. Status Keanggotaan / Karyawan</div>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#065f46', marginTop: '2px' }}>{userInfo?.employee_status || 'TETAP (ACTIVE)'}</div>
+                </div>
+
+                <div style={{ padding: '12px 16px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>6. Nama Bank</div>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#2563eb', marginTop: '2px' }}>{userInfo?.bank_name || 'BANK MANDIRI'}</div>
+                </div>
+
+                <div style={{ padding: '12px 16px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>7. Nomor Rekening Bank</div>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>{userInfo?.bank_account_no || '123000456789'}</div>
+                </div>
+
+                <div style={{ padding: '12px 16px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>8. Nama Pemilik Rekening Bank</div>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>{userInfo?.bank_account_name || userInfo?.name || currentUser?.name || 'NUR KHOLIM'}</div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '20px', paddingTop: '16px', borderTop: '1px solid #f1f5f9' }}>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('dashboard')}
+                  style={{ background: '#475569', color: '#ffffff', border: 'none', borderRadius: '10px', padding: '10px 24px', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  ❌ Tutup & Kembali ke Dashboard
+                </button>
+              </div>
+            </div>
+          )}
 
           {activeTab === 'approval' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -4291,7 +5032,8 @@ function App() {
                                 if (masterDataList.length > 0) {
                                   keys = Object.keys(masterDataList[0]).filter(k => 
                                     k !== 'CreatedAt' && k !== 'UpdatedAt' && k !== 'DeletedAt' && k !== 'CreatedUser' &&
-                                    k.toLowerCase() !== 'updated_at' && k.toLowerCase() !== 'deleted_at'
+                                    k.toLowerCase() !== 'updated_at' && k.toLowerCase() !== 'deleted_at' &&
+                                    k.toLowerCase() !== 'updated_user' && k.toLowerCase() !== 'updateduser'
                                   );
                                 }
                                 return (
@@ -4316,7 +5058,8 @@ function App() {
                               const pkValue = getFieldValue(row, pkField) || row['ID'] || row['id'];
                               const keys = Object.keys(row).filter(k => 
                                 k !== 'CreatedAt' && k !== 'UpdatedAt' && k !== 'DeletedAt' && k !== 'CreatedUser' &&
-                                k.toLowerCase() !== 'updated_at' && k.toLowerCase() !== 'deleted_at'
+                                k.toLowerCase() !== 'updated_at' && k.toLowerCase() !== 'deleted_at' &&
+                                k.toLowerCase() !== 'updated_user' && k.toLowerCase() !== 'updateduser'
                               );
 
                               return (
@@ -4495,6 +5238,9 @@ function App() {
                       borderRadius: '12px', 
                       width: '90%', 
                       maxWidth: '560px', 
+                      maxHeight: '90vh',
+                      display: 'flex',
+                      flexDirection: 'column',
                       boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', 
                       border: '1px solid #cbd5e1', 
                       overflow: 'hidden' 
@@ -4518,7 +5264,7 @@ function App() {
                     </div>
 
                     {/* Modal Body Form */}
-                    <div style={{ padding: '24px' }}>
+                    <div style={{ padding: '24px', overflowY: 'auto', maxHeight: 'calc(90vh - 65px)' }}>
                       <form onSubmit={paramForm.id > 0 || masterTab === 'parameters' ? submitParameter : saveMasterData} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                         {(() => {
                           const pkFieldKey = getPrimaryKeyKey(masterTab);
@@ -4552,11 +5298,17 @@ function App() {
                             {k:'description', l:'Description'}
                           ];
                           else if (masterTab === 'menus') fields = [
+                            {k:'parent_id', l:'Parent Menu ID', type:'number'},
                             {k:'title', l:'Menu Title'},
-                            {k:'icon', l:'Icon (Emoji)'},
-                            {k:'path', l:'Path (Route)'},
-                            {k:'parent_id', l:'Parent ID (Number)', type:'number'},
-                            {k:'order', l:'Order Sequence (Number)', type:'number'}
+                            {k:'icon', l:'Icon (fas fa-barcode / Emoji)'},
+                            {k:'path', l:'Router Path'},
+                            {k:'order', l:'Display Order', type:'number'},
+                            {k:'is_password', l:'Require Password for This Menu', type:'checkbox'},
+                            {k:'notification_type', l:'Require Notification', type:'select', options: [
+                              {val: 0, label: '0 - Tidak Kirim Notifikasi (Default)'},
+                              {val: 1, label: '1 - Kirim Notifikasi Email'},
+                              {val: 2, label: '2 - Kirim Notifikasi Email & WhatsApp'}
+                            ]}
                           ];
                           else if (masterTab === 'role-menus') fields = [
                             {k:'role_id', l:'Role', type:'select', options: referenceData.roles.map(d => ({val: d.role_id, label: d.role_name}))},
@@ -4585,7 +5337,8 @@ function App() {
                                 label: `No. ${m.member_no}${m.bank_account_name ? ' - ' + m.bank_account_name : ''}`
                               })))
                             ]},
-                            {k:'password', l: isEditMode ? 'New Password (Kosongkan jika tidak diubah)' : 'Password', type:'password'}
+                            {k:'password', l: isEditMode ? 'New Password (Kosongkan jika tidak diubah)' : 'Password', type:'password'},
+                            {k:'force_pwd_change', l:'Force Pwd Change', type:'checkbox'}
                           ];
                           
                           return fields.map(f => {
@@ -4769,46 +5522,79 @@ function App() {
                                       <option key={opt.val} value={opt.val}>{opt.label} ({opt.val})</option>
                                     ))}
                                   </select>
-                                ) : f.type === 'password' ? (
-                                  <div style={{ position: 'relative', width: '100%' }}>
-                                    <input 
-                                      type={showPassword ? 'text' : 'password'}
-                                      disabled={isDisabled}
-                                      required={!isEditMode}
-                                      placeholder={isEditMode ? 'Kosongkan jika tidak diubah' : 'Masukkan password...'}
-                                      value={val ?? ''}
-                                      onChange={e => setMasterForm({...masterForm, [f.k]: e.target.value})}
-                                      style={{ 
-                                        width: '100%', 
-                                        padding: '10px 42px 10px 10px', 
-                                        borderRadius: '6px', 
-                                        border: '1px solid #cbd5e1',
-                                        backgroundColor: isDisabled ? '#f1f5f9' : '#ffffff',
-                                        color: isDisabled ? '#64748b' : '#0f172a'
-                                      }}
-                                    />
-                                    <button 
-                                      type="button"
-                                      onClick={() => setShowPassword(!showPassword)}
-                                      title={showPassword ? "Sembunyikan Password" : "Tampilkan Password"}
-                                      style={{
-                                        position: 'absolute',
-                                        right: '10px',
-                                        top: '50%',
-                                        transform: 'translateY(-50%)',
-                                        background: 'none',
-                                        border: 'none',
-                                        cursor: 'pointer',
-                                        fontSize: '1.1rem',
-                                        padding: '4px',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center'
-                                      }}
-                                    >
-                                      {showPassword ? '🙈' : '👁️'}
-                                    </button>
-                                  </div>
+                                 ) : f.type === 'password' ? (
+                                   <div style={{ width: '100%' }}>
+                                     <div style={{ position: 'relative', width: '100%' }}>
+                                       <input 
+                                         type={showPassword ? 'text' : 'password'}
+                                         disabled={isDisabled}
+                                         required={!isEditMode}
+                                         placeholder={isEditMode ? 'Kosongkan jika tidak diubah' : 'Masukkan password...'}
+                                         value={val ?? ''}
+                                         onChange={e => setMasterForm({...masterForm, [f.k]: e.target.value})}
+                                         style={{ 
+                                           width: '100%', 
+                                           padding: '10px 42px 10px 10px', 
+                                           borderRadius: '6px', 
+                                           border: '1px solid #cbd5e1',
+                                           backgroundColor: isDisabled ? '#f1f5f9' : '#ffffff',
+                                           color: isDisabled ? '#64748b' : '#0f172a'
+                                         }}
+                                       />
+                                       <button 
+                                         type="button"
+                                         onClick={() => setShowPassword(!showPassword)}
+                                         title={showPassword ? "Sembunyikan Password" : "Tampilkan Password"}
+                                         style={{
+                                           position: 'absolute',
+                                           right: '10px',
+                                           top: '50%',
+                                           transform: 'translateY(-50%)',
+                                           background: 'none',
+                                           border: 'none',
+                                           cursor: 'pointer',
+                                           fontSize: '1.1rem',
+                                           padding: '4px',
+                                           display: 'flex',
+                                           alignItems: 'center',
+                                           justifyContent: 'center'
+                                         }}
+                                       >
+                                         {showPassword ? '🙈' : '👁️'}
+                                       </button>
+                                     </div>
+                                     {masterTab === 'users' && (
+                                       <div style={{
+                                         marginTop: '8px',
+                                         padding: '10px 12px',
+                                         backgroundColor: '#f8fafc',
+                                         borderRadius: '8px',
+                                         border: '1px solid #cbd5e1',
+                                         fontSize: '0.8rem'
+                                       }}>
+                                         <div style={{ fontWeight: 600, color: '#475569', marginBottom: '4px' }}>
+                                           Syarat Keamanan Password:
+                                         </div>
+                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px' }}>
+                                           <span style={{ color: (val && String(val).length >= 9) ? '#16a34a' : '#64748b', fontWeight: (val && String(val).length >= 9) ? 600 : 400 }}>
+                                             {(val && String(val).length >= 9) ? '✓' : '✓'} Min 9 karakter
+                                           </span>
+                                           <span style={{ color: (val && /[a-z]/.test(String(val))) ? '#16a34a' : '#64748b', fontWeight: (val && /[a-z]/.test(String(val))) ? 600 : 400 }}>
+                                             {(val && /[a-z]/.test(String(val))) ? '✓' : '✓'} Min 1 huruf kecil (a-z)
+                                           </span>
+                                           <span style={{ color: (val && /[A-Z]/.test(String(val))) ? '#16a34a' : '#64748b', fontWeight: (val && /[A-Z]/.test(String(val))) ? 600 : 400 }}>
+                                             {(val && /[A-Z]/.test(String(val))) ? '✓' : '✓'} Min 1 huruf besar (A-Z)
+                                           </span>
+                                           <span style={{ color: (val && /[0-9]/.test(String(val))) ? '#16a34a' : '#64748b', fontWeight: (val && /[0-9]/.test(String(val))) ? 600 : 400 }}>
+                                             {(val && /[0-9]/.test(String(val))) ? '✓' : '✓'} Min 1 angka (0-9)
+                                           </span>
+                                           <span style={{ color: (val && /[!@#$%^&*()_+\-=\[\]{}|;':",./<>?~`]/.test(String(val))) ? '#16a34a' : '#64748b', fontWeight: (val && /[!@#$%^&*()_+\-=\[\]{}|;':",./<>?~`]/.test(String(val))) ? 600 : 400 }}>
+                                             {(val && /[!@#$%^&*()_+\-=\[\]{}|;':",./<>?~`]/.test(String(val))) ? '✓' : '✓'} Min 1 karakter spesial
+                                           </span>
+                                         </div>
+                                       </div>
+                                     )}
+                                   </div>
                                 ) : f.type === 'textarea' ? (
                                   <textarea 
                                     disabled={isDisabled}
@@ -6091,7 +6877,7 @@ function App() {
             <MobileEwaEnterpriseApp currentUser={currentUser} onLogout={handleLogout} />
           )}
 
-          {!isReportTab() && activeTab !== 'dashboard' && activeTab !== 'pengajuan' && activeTab !== 'pinjaman' && activeTab !== 'parameters' && activeTab !== 'master' && activeTab !== 'approval' && activeTab !== 'disbursement' && activeTab !== 'payroll' && activeTab !== 'payroll-reconciliation' && activeTab !== 'manual-repayment' && activeTab !== 'products' && activeTab !== 'report-loan-applications' && activeTab !== 'mobile-app-enterprise' && !activeTab.startsWith('master-') && (
+          {!isReportTab() && activeTab !== 'dashboard' && activeTab !== 'account' && activeTab !== 'pengajuan' && activeTab !== 'pinjaman' && activeTab !== 'parameters' && activeTab !== 'master' && activeTab !== 'approval' && activeTab !== 'disbursement' && activeTab !== 'payroll' && activeTab !== 'payroll-reconciliation' && activeTab !== 'manual-repayment' && activeTab !== 'products' && activeTab !== 'report-loan-applications' && activeTab !== 'mobile-app-enterprise' && !activeTab.startsWith('master-') && (
             <div className="card">
               <h2>Module: {visibleMenus.find(m => m.path === activeTab)?.title || activeTab}</h2>
               <p style={{ marginTop: '16px', color: '#64748B' }}>
@@ -6220,10 +7006,10 @@ function App() {
 
       {/* LIMS Style Riwayat Status / Loan Tracking Modal */}
       {trackingModalOpen && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
-          <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '24px', width: '95%', maxWidth: '1200px', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', paddingBottom: '12px', borderBottom: '2px solid #e2e8f0' }}>
-              <h2 style={{ margin: 0, fontSize: '1.25rem', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(15, 23, 42, 0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999999, padding: '12px', boxSizing: 'border-box', backdropFilter: 'blur(4px)' }}>
+          <div style={{ backgroundColor: 'white', borderRadius: '16px', padding: '16px', width: '100%', maxWidth: '750px', maxHeight: '82vh', overflowY: 'auto', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.3)', margin: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '10px', borderBottom: '2px solid #e2e8f0' }}>
+              <h2 style={{ margin: 0, fontSize: '1.1rem', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 📜 Riwayat Status Pengajuan Pinjaman <span style={{ color: 'var(--primary-blue)', fontFamily: 'monospace' }}>#{trackingAppNo}</span>
               </h2>
               <button onClick={() => setTrackingModalOpen(false)} style={{ background: '#f1f5f9', border: 'none', borderRadius: '50%', width: '32px', height: '32px', cursor: 'pointer', fontWeight: 'bold', color: '#64748b' }}>✕</button>
@@ -6284,7 +7070,77 @@ function App() {
           </div>
         </div>
       )}
+        {/* Fixed Shopee-style Bottom Navigation Bar */}
+        <div style={{
+          position: 'fixed',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: '52px',
+          background: '#ffffff',
+          borderTop: '1px solid #cbd5e1',
+          display: 'flex',
+          justify: 'space-around',
+          alignItems: 'center',
+          zIndex: 99999,
+          boxShadow: '0 -2px 10px rgba(0,0,0,0.06)',
+          paddingBottom: 'env(safe-area-inset-bottom, 2px)'
+        }}>
+          <div
+            onClick={() => setActiveTab('dashboard')}
+            style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: activeTab === 'dashboard' ? '#044B36' : '#64748b', fontWeight: activeTab === 'dashboard' ? 800 : 600 }}
+          >
+            <span style={{ fontSize: '1.15rem', lineHeight: 1 }}>🏠</span>
+            <span style={{ fontSize: '0.65rem', marginTop: '2px', lineHeight: 1 }}>Home</span>
+          </div>
+
+          <div
+            onClick={() => setActiveTab('pinjaman')}
+            style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: (activeTab === 'pinjaman' || activeTab === 'applications') ? '#044B36' : '#64748b', fontWeight: (activeTab === 'pinjaman' || activeTab === 'applications') ? 800 : 600 }}
+          >
+            <span style={{ fontSize: '1.15rem', lineHeight: 1 }}>📋</span>
+            <span style={{ fontSize: '0.65rem', marginTop: '2px', lineHeight: 1 }}>Daftar Pinjaman</span>
+          </div>
+
+          <div
+            onClick={() => setActiveTab('account')}
+            style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: activeTab === 'account' ? '#044B36' : '#64748b', fontWeight: activeTab === 'account' ? 800 : 600 }}
+          >
+            <span style={{ fontSize: '1.15rem', lineHeight: 1 }}>👤</span>
+            <span style={{ fontSize: '0.65rem', marginTop: '2px', lineHeight: 1 }}>Account</span>
+          </div>
         </div>
+        </div>
+
+        <MenuAuthModal
+          isOpen={isMenuAuthModalOpen}
+          onClose={() => setIsMenuAuthModalOpen(false)}
+          pendingMenu={pendingMenuAuth}
+          currentUser={currentUser}
+          onSuccessProceed={(pendingMenu) => {
+            if (pendingMenu?.isSubmitAction) {
+              doSubmitApplication();
+            } else if (pendingMenu?.path) {
+              setActiveTab(pendingMenu.path);
+            }
+          }}
+        />
+
+        <ChangePinModal
+          isOpen={changePinModalOpen}
+          onClose={() => setChangePinModalOpen(false)}
+          onSuccess={() => {
+            setCurrentUser(prev => prev ? { ...prev, force_pwd_change: false } : null);
+            verifySession();
+          }}
+          onLogout={(reason) => {
+            setChangePinModalOpen(false);
+            handleLogout(reason);
+          }}
+          initialOldVal={loginForm.password}
+          parameters={parameters}
+          currentUser={currentUser}
+        />
       </main>
     </div>
   )

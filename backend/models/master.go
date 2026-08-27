@@ -28,16 +28,19 @@ func (EmployeeCategory) TableName() string {
 
 // Employee represents lms_sch.employees
 type Employee struct {
-	EmployeeID     int64   `gorm:"primaryKey;column:employee_id;autoIncrement:false" json:"employee_id"`
-	Name           string  `gorm:"column:name" json:"name"`
-	EmployeeStatus string  `gorm:"column:employee_status" json:"employee_status"` // renamed from work_status
-	DeptNo         string  `gorm:"column:deptno" json:"deptno"`
-	CategoryCode   string  `gorm:"column:category_code" json:"category_code"`
-	Salary         float64 `gorm:"column:salary" json:"salary"`
-	TotalLoan      float64 `gorm:"column:total_loan" json:"total_loan"`
-	NoKTP          string  `gorm:"column:no_ktp" json:"no_ktp,omitempty"`
-	PhoneNumber    string  `gorm:"column:phone_number" json:"phone_number,omitempty"`
-	Email          string  `gorm:"column:email" json:"email,omitempty"`
+	EmployeeID      int64   `gorm:"primaryKey;column:employee_id;autoIncrement:false" json:"employee_id"`
+	Name            string  `gorm:"column:name" json:"name"`
+	EmployeeStatus  string  `gorm:"column:employee_status" json:"employee_status"` // renamed from work_status
+	DeptNo          string  `gorm:"column:deptno" json:"deptno"`
+	CategoryCode    string  `gorm:"column:category_code" json:"category_code"`
+	Salary          float64 `gorm:"column:salary" json:"salary"`
+	TotalLoan       float64 `gorm:"column:total_loan" json:"total_loan"`
+	NoKTP           string  `gorm:"column:no_ktp" json:"no_ktp,omitempty"`
+	PhoneNumber     string  `gorm:"column:phone_number" json:"phone_number,omitempty"`
+	Email           string  `gorm:"column:email" json:"email,omitempty"`
+	BankName        string  `gorm:"column:bank_name" json:"bank_name,omitempty"`
+	BankAccountNo   string  `gorm:"column:bank_account_no" json:"bank_account_no,omitempty"`
+	BankAccountName string  `gorm:"column:bank_account_name" json:"bank_account_name,omitempty"`
 	MasterBaseModel
 }
 
@@ -47,13 +50,10 @@ func (Employee) TableName() string {
 
 // Member represents lms_sch.members
 type Member struct {
-	MemberNo        int64  `gorm:"primaryKey;column:member_no;autoIncrement:false" json:"member_no"`
-	EmployeeID      int64  `gorm:"column:employee_id;index:idx_member_employee" json:"employee_id"`
-	KopkaraStatus   string `gorm:"column:kopkara_status" json:"kopkara_status"` // renamed from status
-	JoinDate        string `gorm:"column:join_date" json:"join_date"`
-	BankName        string `gorm:"column:bank_name" json:"bank_name"`
-	BankAccountNo   string `gorm:"column:bank_account_no" json:"bank_account_no"`
-	BankAccountName string `gorm:"column:bank_account_name" json:"bank_account_name"`
+	MemberNo      int64  `gorm:"primaryKey;column:member_no;autoIncrement:false" json:"member_no"`
+	EmployeeID    int64  `gorm:"column:employee_id;index:idx_member_employee" json:"employee_id"`
+	KopkaraStatus string `gorm:"column:kopkara_status" json:"kopkara_status"` // renamed from status
+	JoinDate      string `gorm:"column:join_date" json:"join_date"`
 	MasterBaseModel
 }
 
@@ -141,12 +141,14 @@ func (Role) TableName() string {
 
 // Menu represents lms_sch.menus
 type Menu struct {
-	MenuID   int64  `gorm:"primaryKey;column:menu_id;autoIncrement:true" json:"menu_id"`
-	ParentID *int64 `gorm:"column:parent_id" json:"parent_id"` // Nullable for top level menus
-	Title    string `gorm:"column:title" json:"title"`
-	Icon     string `gorm:"column:icon" json:"icon"`
-	Path     string `gorm:"column:path" json:"path"`
-	Order    int    `gorm:"column:order_seq" json:"order"`
+	MenuID           int64  `gorm:"primaryKey;column:menu_id;autoIncrement:true" json:"menu_id"`
+	ParentID         *int64 `gorm:"column:parent_id" json:"parent_id"` // Nullable for top level menus
+	Title            string `gorm:"column:title" json:"title"`
+	Icon             string `gorm:"column:icon" json:"icon"`
+	Path             string `gorm:"column:path" json:"path"`
+	Order            int    `gorm:"column:order_seq" json:"order"`
+	IsPassword       bool   `gorm:"column:is_password" json:"is_password"`
+	NotificationType int    `gorm:"column:notification_type" json:"notification_type"`
 	MasterBaseModel
 }
 

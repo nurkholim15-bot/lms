@@ -3,6 +3,7 @@ package main
 import (
 	"compress/gzip"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"lms-backend/config"
 	"lms-backend/handlers"
@@ -25,6 +27,7 @@ import (
 	"github.com/Knetic/govaluate"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/xuri/excelize/v2"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -356,11 +359,14 @@ func AuthMiddleware() gin.HandlerFunc {
 		}
 
 		path := c.Request.URL.Path
-		// Skip public authentication, health check, and read-only GET master/user-info endpoints
+		// Skip public authentication, health check, change password/pin, and read-only GET master/user-info endpoints
 		if strings.HasPrefix(path, "/api/karisma/login") || 
 		   strings.HasPrefix(path, "/api/karisma/register") || 
 		   strings.HasPrefix(path, "/api/karisma/verify") || 
 		   strings.HasPrefix(path, "/api/karisma/change-password") || 
+		   strings.HasPrefix(path, "/api/change-password") || 
+		   strings.HasPrefix(path, "/api/change-pin") || 
+		   strings.HasPrefix(path, "/api/verify-menu-password") || 
 		   strings.HasPrefix(path, "/api/products") || 
 		   strings.HasPrefix(path, "/api/parameters") || 
 		   strings.HasPrefix(path, "/api/health") || 
@@ -834,7 +840,12 @@ func main() {
 				var user models.User
 				userFound := false
 				if config.DB != nil {
-					err := config.DB.Where("(username = ? OR username = ? OR phone_number = ? OR phone_number = ? OR (member_no IS NOT NULL AND member_no = ?)) AND deleted_at IS NULL", username, phone08, phone08, phone62, memNoParsed).First(&user).Error
+					var err error
+					if memNoParsed > 0 || strings.HasPrefix(username, "08") || strings.HasPrefix(username, "+62") {
+						err = config.DB.Where("(username = ? OR phone_number = ? OR phone_number = ? OR (member_no IS NOT NULL AND member_no = ?)) AND deleted_at IS NULL", username, phone08, phone62, memNoParsed).First(&user).Error
+					} else {
+						err = config.DB.Where("(username = ? OR (member_no IS NOT NULL AND member_no = ?)) AND deleted_at IS NULL", username, memNoParsed).First(&user).Error
+					}
 					if err == nil {
 						userFound = true
 					}
@@ -914,9 +925,10 @@ func main() {
 					}
 
 					// Login Berhasil! Reset failed login attempts & lockout
-					user.FailedLoginAttempts = 0
-					user.LockedUntil = nil
-					config.DB.Save(&user)
+					config.DB.Model(&user).Updates(map[string]interface{}{
+						"failed_login_attempts": 0,
+						"locked_until":          nil,
+					})
 
 					// Cek SINGLE_SESSION_MODE
 					singleSessionMode := false
@@ -967,21 +979,6 @@ func main() {
 					return
 				}
 
-		// Logout endpoint
-		api.POST("/karisma/logout", func(c *gin.Context) {
-			token := getTokenFromRequest(c)
-			if token != "" && config.DB != nil {
-				config.DB.Model(&models.Session{}).Where("token = ?", token).Update("is_active", false)
-				log.Printf("[KARISMA-LOGOUT] Session deactivated for token: %s", token)
-			}
-			isSecure := c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
-			tokenCookieName := getAppTokenName()
-			c.SetCookie(tokenCookieName, "", -1, "/", "", isSecure, true)
-			c.SetCookie("karisma_token", "", -1, "/", "", isSecure, true)
-			c.SetCookie("ewa_token", "", -1, "/", "", isSecure, true)
-			c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Logout berhasil"})
-		})
-
 				// 2. Fallback check for initial mock users (admin / hrd / employee numbers) if users table not yet populated in DB
 				if username == "admin" && password == "admin123" {
 					token := "mock-token-admin"
@@ -1004,25 +1001,22 @@ func main() {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "Username atau Password salah!"})
 			})
 
-			karisma.POST("/logout", func(c *gin.Context) {
-				var token string
-				authHeader := c.GetHeader("Authorization")
-				if len(authHeader) >= 8 && strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
-					token = strings.TrimSpace(authHeader[7:])
-				}
-				if token == "" {
-					if cookieToken, err := c.Cookie("karisma_token"); err == nil {
-						token = strings.TrimSpace(cookieToken)
-					}
-				}
-
+			// Logout endpoint
+			logoutHandler := func(c *gin.Context) {
+				token := getTokenFromRequest(c)
 				if token != "" && config.DB != nil {
 					config.DB.Model(&models.Session{}).Where("token = ?", token).Update("is_active", false)
+					log.Printf("[KARISMA-LOGOUT] Session deactivated for token: %s", token)
 				}
-
-				c.SetCookie("karisma_token", "", -1, "/", "", true, true)
-				c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Logged out successfully"})
-			})
+				isSecure := c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
+				tokenCookieName := getAppTokenName()
+				c.SetCookie(tokenCookieName, "", -1, "/", "", isSecure, true)
+				c.SetCookie("karisma_token", "", -1, "/", "", isSecure, true)
+				c.SetCookie("ewa_token", "", -1, "/", "", isSecure, true)
+				c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Logout berhasil"})
+			}
+			api.POST("/logout", logoutHandler)
+			karisma.POST("/logout", logoutHandler)
 
 			karisma.POST("/verify", func(c *gin.Context) {
 				var token string
@@ -1097,13 +1091,14 @@ func main() {
 							c.JSON(http.StatusOK, gin.H{
 								"status": "success",
 								"user": gin.H{
-									"employee_id": empID,
-									"member_no":   user.MemberNo,
-									"username":    user.Username,
-									"name":        name,
-									"eligible":    true,
-									"role":        role,
-									"role_id":     user.RoleID,
+									"employee_id":      empID,
+									"member_no":        user.MemberNo,
+									"username":         user.Username,
+									"name":             name,
+									"eligible":         true,
+									"role":             role,
+									"role_id":          user.RoleID,
+									"force_pwd_change": user.ForcePwdChange,
 								},
 							})
 							return
@@ -1151,7 +1146,7 @@ func main() {
 				})
 			})
 
-			karisma.POST("/change-password", func(c *gin.Context) {
+				changePasswordHandler := func(c *gin.Context) {
 				var req struct {
 					Username    string `json:"username"`
 					OldPassword string `json:"old_password"`
@@ -1171,15 +1166,83 @@ func main() {
 					return
 				}
 
+				// Validate Password against global parameters (PWD_MIN_LENGTH, PWD_MIN_LOWERCASE, PWD_MIN_UPPERCASE, PWD_MIN_NUMERIC, PWD_MIN_SPECIAL)
 				pwdMinLength := 9
 				if p, err := paramRepo.FindByKey("PWD_MIN_LENGTH"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
 					if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed > 0 {
 						pwdMinLength = parsed
 					}
 				}
-
 				if len(newPassword) < pwdMinLength {
-					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Password baru minimal harus %d karakter (sesuai parameter PWD_MIN_LENGTH)!", pwdMinLength)})
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Password baru minimal %d karakter (sesuai parameter PWD_MIN_LENGTH)!", pwdMinLength)})
+					return
+				}
+
+				pwdMinLower := 1
+				if p, err := paramRepo.FindByKey("PWD_MIN_LOWERCASE"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+					if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed >= 0 {
+						pwdMinLower = parsed
+					}
+				}
+				lowerCount := 0
+				for _, r := range newPassword {
+					if unicode.IsLower(r) {
+						lowerCount++
+					}
+				}
+				if lowerCount < pwdMinLower {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Password minimal harus memiliki %d huruf kecil (a-z) (sesuai parameter PWD_MIN_LOWERCASE)!", pwdMinLower)})
+					return
+				}
+
+				pwdMinUpper := 1
+				if p, err := paramRepo.FindByKey("PWD_MIN_UPPERCASE"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+					if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed >= 0 {
+						pwdMinUpper = parsed
+					}
+				}
+				upperCount := 0
+				for _, r := range newPassword {
+					if unicode.IsUpper(r) {
+						upperCount++
+					}
+				}
+				if upperCount < pwdMinUpper {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Password minimal harus memiliki %d huruf besar (A-Z) (sesuai parameter PWD_MIN_UPPERCASE)!", pwdMinUpper)})
+					return
+				}
+
+				pwdMinNum := 1
+				if p, err := paramRepo.FindByKey("PWD_MIN_NUMERIC"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+					if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed >= 0 {
+						pwdMinNum = parsed
+					}
+				}
+				numCount := 0
+				for _, r := range newPassword {
+					if unicode.IsDigit(r) {
+						numCount++
+					}
+				}
+				if numCount < pwdMinNum {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Password minimal harus memiliki %d karakter angka (0-9) (sesuai parameter PWD_MIN_NUMERIC)!", pwdMinNum)})
+					return
+				}
+
+				pwdMinSpecial := 1
+				if p, err := paramRepo.FindByKey("PWD_MIN_SPECIAL"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+					if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed >= 0 {
+						pwdMinSpecial = parsed
+					}
+				}
+				specialCount := 0
+				for _, r := range newPassword {
+					if unicode.IsPunct(r) || unicode.IsSymbol(r) || strings.ContainsRune("!@#$%^&*()_+-=[]{}|;':\",./<>?~`", r) {
+						specialCount++
+					}
+				}
+				if specialCount < pwdMinSpecial {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Password minimal harus memiliki %d karakter spesial (!@#$...) (sesuai parameter PWD_MIN_SPECIAL)!", pwdMinSpecial)})
 					return
 				}
 
@@ -1218,6 +1281,7 @@ func main() {
 				user.FailedLoginAttempts = 0
 				user.LockedUntil = nil
 				user.PasswordChangedAt = time.Now()
+				user.ForcePwdChange = false
 
 				if err := config.DB.Save(&user).Error; err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal menyimpan password baru ke database: " + err.Error()})
@@ -1226,6 +1290,180 @@ func main() {
 
 				log.Printf("[CHANGE-PASSWORD-SUCCESS] ✅ Password for user '%s' updated successfully.", username)
 				c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Password berhasil diperbarui! Silakan login kembali dengan password baru."})
+			}
+
+			karisma.POST("/change-password", changePasswordHandler)
+			api.POST("/change-password", changePasswordHandler)
+
+			// Endpoint Fitur Ganti PIN dengan syarat PIN_MIN_LENGTH & Anti Weak/Repetitive PIN
+			changePinHandler := func(c *gin.Context) {
+				var req struct {
+					Username string `json:"username"`
+					OldPin   string `json:"old_pin"`
+					NewPin   string `json:"new_pin"`
+				}
+				if err := c.ShouldBindJSON(&req); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Payload ganti PIN tidak valid"})
+					return
+				}
+
+				username := strings.TrimSpace(req.Username)
+				oldPin := strings.TrimSpace(req.OldPin)
+				newPin := strings.TrimSpace(req.NewPin)
+
+				if username == "" || oldPin == "" || newPin == "" {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Username, PIN Lama, dan PIN Baru harus diisi!"})
+					return
+				}
+
+				// Validate PIN rules: numeric only
+				for _, r := range newPin {
+					if !unicode.IsDigit(r) {
+						c.JSON(http.StatusBadRequest, gin.H{"error": "PIN Baru harus terdiri dari karakter angka (0-9)!"})
+						return
+					}
+				}
+
+				// Validate PIN length against PIN_MIN_LENGTH (default 6)
+				pinMinLength := 6
+				if p, err := paramRepo.FindByKey("PIN_MIN_LENGTH"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+					if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed > 0 {
+						pinMinLength = parsed
+					}
+				}
+				if len(newPin) < pinMinLength {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("PIN Baru minimal harus %d digit (sesuai parameter PIN_MIN_LENGTH)!", pinMinLength)})
+					return
+				}
+
+				// Anti weak / repetitive PIN check (e.g. 111111, 222222, 123456, 654321, 000000)
+				allSame := true
+				for i := 1; i < len(newPin); i++ {
+					if newPin[i] != newPin[0] {
+						allSame = false
+						break
+					}
+				}
+				if allSame {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("PIN '%s' terlalu mudah ditebak! Harap tidak menggunakan angka berulang sama.", newPin)})
+					return
+				}
+
+				isSeqAsc := true
+				isSeqDesc := true
+				for i := 1; i < len(newPin); i++ {
+					if newPin[i] != newPin[i-1]+1 {
+						isSeqAsc = false
+					}
+					if newPin[i] != newPin[i-1]-1 {
+						isSeqDesc = false
+					}
+				}
+				if isSeqAsc || isSeqDesc {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("PIN '%s' terlalu mudah ditebak! Harap tidak menggunakan urutan angka berurutan.", newPin)})
+					return
+				}
+
+				if config.DB == nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Database tidak terhubung"})
+					return
+				}
+
+				var user models.User
+				if err := config.DB.Where("username = ? AND deleted_at IS NULL", username).First(&user).Error; err != nil {
+					c.JSON(http.StatusNotFound, gin.H{"error": "User tidak ditemukan di database."})
+					return
+				}
+
+				// Verify old PIN / Password
+				oldMatch := false
+				if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(oldPin)); err == nil {
+					oldMatch = true
+				} else if user.Password == oldPin {
+					oldMatch = true
+				}
+
+				if !oldMatch {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "PIN Lama Anda tidak sesuai!"})
+					return
+				}
+
+				// Hash new PIN with Bcrypt
+				hashedPin, err := bcrypt.GenerateFromPassword([]byte(newPin), bcrypt.DefaultCost)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal mengenkripsi PIN baru"})
+					return
+				}
+
+				user.Password = string(hashedPin)
+				user.FailedLoginAttempts = 0
+				user.LockedUntil = nil
+				user.PasswordChangedAt = time.Now()
+
+				if err := config.DB.Save(&user).Error; err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal menyimpan PIN baru ke database: " + err.Error()})
+					return
+				}
+
+				log.Printf("[CHANGE-PIN-SUCCESS] ✅ PIN for user '%s' updated & encrypted successfully.", username)
+				c.JSON(http.StatusOK, gin.H{"status": "success", "message": "PIN berhasil diperbarui & dienkripsi! Silakan login kembali menggunakan PIN baru Anda."})
+			}
+
+			api.POST("/change-pin", changePinHandler)
+			karisma.POST("/change-pin", changePinHandler)
+
+			// Endpoint Verifikasi Password / PIN untuk Akses Menu Proteksi (is_password = true)
+			api.POST("/verify-menu-password", func(c *gin.Context) {
+				var req struct {
+					Username string `json:"username"`
+					Password string `json:"password"`
+					MenuID   int64  `json:"menu_id"`
+					Path     string `json:"path"`
+				}
+				if err := c.ShouldBindJSON(&req); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Payload verifikasi menu tidak valid"})
+					return
+				}
+
+				username := strings.TrimSpace(req.Username)
+				pass := strings.TrimSpace(req.Password)
+				if username == "" || pass == "" {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Username dan Password/PIN harus diisi!"})
+					return
+				}
+
+				var user models.User
+				if err := config.DB.Where("username = ? AND deleted_at IS NULL", username).First(&user).Error; err != nil {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "User tidak ditemukan atau Password/PIN salah!"})
+					return
+				}
+
+				valid := false
+				if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(pass)); err == nil {
+					valid = true
+				} else if user.Password == pass {
+					valid = true
+				}
+
+				if !valid {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "Password / PIN Anda tidak sesuai. Akses ke menu ini ditolak!"})
+					return
+				}
+
+				var notifType int = 0
+				if req.MenuID > 0 {
+					var menu models.Menu
+					if err := config.DB.Where("menu_id = ?", req.MenuID).First(&menu).Error; err == nil {
+						notifType = menu.NotificationType
+					}
+				}
+
+				log.Printf("[MENU-AUTH-SUCCESS] 🔐 User '%s' verified password/PIN for menu '%s' (notification_type=%d)", username, req.Path, notifType)
+				c.JSON(http.StatusOK, gin.H{
+					"status": "success",
+					"message": "Verifikasi Password/PIN Berhasil!",
+					"notification_type": notifType,
+				})
 			})
 		}
 
@@ -1418,7 +1656,7 @@ func main() {
 			var args []interface{}
 			if q != "" {
 				likeStr := "%" + strings.ToLower(q) + "%"
-				whereClause = "WHERE LOWER(CAST(m.member_no AS VARCHAR)) LIKE ? OR LOWER(CAST(COALESCE(e.employee_id, m.employee_id) AS VARCHAR)) LIKE ? OR LOWER(COALESCE(e.name, m.bank_account_name, CONCAT('Anggota #', m.member_no))) LIKE ?"
+				whereClause = "WHERE LOWER(CAST(m.member_no AS VARCHAR)) LIKE ? OR LOWER(CAST(COALESCE(e.employee_id, m.employee_id) AS VARCHAR)) LIKE ? OR LOWER(COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', m.member_no))) LIKE ?"
 				args = append(args, likeStr, likeStr, likeStr)
 			}
 
@@ -1426,7 +1664,7 @@ func main() {
 				SELECT 
 					m.member_no,
 					COALESCE(e.employee_id, m.employee_id) AS employee_id,
-					COALESCE(e.name, m.bank_account_name, CONCAT('Anggota #', m.member_no)) AS name
+					COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', m.member_no)) AS name
 				FROM lms_sch.members m
 				LEFT JOIN lms_sch.employees e ON m.employee_id = e.employee_id
 				%s
@@ -1479,7 +1717,7 @@ func main() {
 				SELECT 
 					m.member_no,
 					COALESCE(e.employee_id, m.employee_id) AS employee_id,
-					COALESCE(e.name, m.bank_account_name, CONCAT('Anggota #', m.member_no)) AS name
+					COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', m.member_no)) AS name
 				FROM lms_sch.members m
 				LEFT JOIN lms_sch.employees e ON m.employee_id = e.employee_id
 				ORDER BY m.member_no ASC;
@@ -1545,9 +1783,9 @@ func main() {
 					ls.loan_no,
 					l.application_no,
 					l.member_no,
-					COALESCE(e.name, m.bank_account_name, CONCAT('Karyawan #', l.member_no)) AS employee_name,
+					COALESCE(e.name, e.bank_account_name, CONCAT('Karyawan #', l.member_no)) AS employee_name,
 					COALESCE(e.deptno, 'IT-01') AS dept_no,
-					COALESCE(m.bank_account_no, CAST(l.member_no AS VARCHAR)) AS nik,
+					COALESCE(e.bank_account_no, CAST(l.member_no AS VARCHAR)) AS nik,
 					ls.period,
 					ls.installment_no,
 					ls.principal,
@@ -1633,10 +1871,10 @@ func main() {
 
 			baseQuery := `
 				SELECT 
-					COALESCE(m.bank_account_no, CAST(l.member_no AS VARCHAR)) AS nik_adira,
+					COALESCE(e.bank_account_no, CAST(l.member_no AS VARCHAR)) AS nik_adira,
 					l.member_no AS employee_id,
 					l.loan_no AS loan_no,
-					COALESCE(e.name, m.bank_account_name, CONCAT('Anggota #', l.member_no)) AS nama_karyawan,
+					COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', l.member_no)) AS nama_karyawan,
 					COALESCE(e.deptno, 'IT-01') AS dept_no,
 					'POT_KOPKARA' AS kode_potongan,
 					'Potongan Angsuran Kopkara' AS nama_potongan,
@@ -1667,49 +1905,122 @@ func main() {
 				return
 			}
 
-			csvContent := "NIK_ADIRA,EMPLOYEE_ID,LOAN_NO,NAMA_KARYAWAN,DEPT_NO,KODE_POTONGAN,NAMA_POTONGAN,PERIODE,NOMINAL_TAGIHAN,NOMINAL_TERPOTONG,STATUS_POTONGAN,KETERANGAN,NO_REFERENSI\n"
-			for _, r := range rows {
-				csvContent += fmt.Sprintf("%s,%d,%d,%s,%s,%s,%s,%s,%.2f,,,%s\n",
-					r.Nik, r.EmployeeID, r.LoanNo, r.NamaKaryawan, r.DeptNo, r.KodePotongan, r.NamaPotongan, r.Periode, r.NominalPotongan, r.NoReferensi)
+			// Fetch BILL_FILE_EXPORT_FORMAT parameter (default: "xlsx")
+			var exportFormat string
+			config.DB.Raw("SELECT key_value FROM lms_sch.global_parameters WHERE key_name = 'BILL_FILE_EXPORT_FORMAT' AND deleted_at IS NULL LIMIT 1").Scan(&exportFormat)
+			exportFormat = strings.ToLower(strings.TrimSpace(exportFormat))
+			if exportFormat != "csv" && exportFormat != "xlsx" {
+				exportFormat = "xlsx" // default format
 			}
 
 			// Smart Cross-Platform Path Resolver (Windows / WSL / Linux)
 			rawPath := strings.TrimRight(targetFolder, "/\\")
 			rawPath = strings.ReplaceAll(rawPath, "/", "\\") // Normalize to Windows style for display
 
-			// For file system operations on Linux/WSL if path starts with D:\ or D:/
 			diskPath := rawPath
 			if strings.HasPrefix(strings.ToLower(diskPath), "d:\\") || strings.HasPrefix(strings.ToLower(diskPath), "d:/") {
 				if os.PathSeparator == '/' {
-					// Running inside Linux / WSL environment
 					diskPath = "/mnt/d/" + strings.ReplaceAll(diskPath[3:], "\\", "/")
 				}
 			}
 
-			// Ensure target folder exists on server/disk
 			if err := os.MkdirAll(diskPath, 0755); err != nil {
 				log.Printf("Error creating export directory %s: %v", diskPath, err)
 			}
 
-			fileName := fmt.Sprintf("ADIRA_PAYROLL_KOPKARA_OUTGOING_%s.csv", time.Now().Format("200601"))
+			var fileName string
+			var userDisplayPath string
+			var csvContent string
+			var xlsxBase64 string
 
-			// Disk write path
-			diskFullPath := filepath.Join(diskPath, fileName)
-			if err := os.WriteFile(diskFullPath, []byte(csvContent), 0644); err != nil {
-				log.Printf("Failed writing file to disk %s: %v", diskFullPath, err)
+			if exportFormat == "xlsx" {
+				fileName = fmt.Sprintf("ADIRA_PAYROLL_KOPKARA_OUTGOING_%s.xlsx", time.Now().Format("200601"))
+				diskFullPath := filepath.Join(diskPath, fileName)
+
+				f := excelize.NewFile()
+				sheetName := "Sheet1"
+				index, _ := f.NewSheet(sheetName)
+				f.SetActiveSheet(index)
+
+				headers := []string{
+					"NIK_ADIRA", "EMPLOYEE_ID", "LOAN_NO", "NAMA_KARYAWAN", "DEPT_NO",
+					"KODE_POTONGAN", "NAMA_POTONGAN", "PERIODE", "NOMINAL_TAGIHAN",
+					"NOMINAL_TERPOTONG", "STATUS_POTONGAN", "KETERANGAN", "NO_REFERENSI",
+				}
+
+				styleID, _ := f.NewStyle(&excelize.Style{
+					Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
+					Fill: excelize.Fill{Type: "pattern", Color: []string{"#0B2545"}, Pattern: 1},
+				})
+
+				for colIdx, h := range headers {
+					cellName, _ := excelize.CoordinatesToCellName(colIdx+1, 1)
+					f.SetCellValue(sheetName, cellName, h)
+					f.SetCellStyle(sheetName, cellName, cellName, styleID)
+				}
+
+				for rowIdx, r := range rows {
+					rowNum := rowIdx + 2
+					f.SetCellValue(sheetName, fmt.Sprintf("A%d", rowNum), r.Nik)
+					f.SetCellValue(sheetName, fmt.Sprintf("B%d", rowNum), r.EmployeeID)
+					f.SetCellValue(sheetName, fmt.Sprintf("C%d", rowNum), r.LoanNo)
+					f.SetCellValue(sheetName, fmt.Sprintf("D%d", rowNum), r.NamaKaryawan)
+					f.SetCellValue(sheetName, fmt.Sprintf("E%d", rowNum), r.DeptNo)
+					f.SetCellValue(sheetName, fmt.Sprintf("F%d", rowNum), r.KodePotongan)
+					f.SetCellValue(sheetName, fmt.Sprintf("G%d", rowNum), r.NamaPotongan)
+					f.SetCellValue(sheetName, fmt.Sprintf("H%d", rowNum), r.Periode)
+					f.SetCellValue(sheetName, fmt.Sprintf("I%d", rowNum), r.NominalPotongan)
+					f.SetCellValue(sheetName, fmt.Sprintf("J%d", rowNum), "")
+					f.SetCellValue(sheetName, fmt.Sprintf("K%d", rowNum), "")
+					f.SetCellValue(sheetName, fmt.Sprintf("L%d", rowNum), "")
+					f.SetCellValue(sheetName, fmt.Sprintf("M%d", rowNum), r.NoReferensi)
+				}
+
+				if err := f.SaveAs(diskFullPath); err != nil {
+					log.Printf("Failed writing XLSX file to disk %s: %v", diskFullPath, err)
+				}
+
+				buffer, err := f.WriteToBuffer()
+				if err == nil {
+					xlsxBase64 = base64.StdEncoding.EncodeToString(buffer.Bytes())
+				}
+				userDisplayPath = rawPath + "\\" + fileName
+
+				c.JSON(http.StatusOK, gin.H{
+					"status":      "success",
+					"message":     fmt.Sprintf("File XLSX berhasil digenerate dan disimpan langsung ke folder: %s", userDisplayPath),
+					"file_path":   userDisplayPath,
+					"file_name":   fileName,
+					"file_format": "xlsx",
+					"total_rows":  len(rows),
+					"xlsx_base64": xlsxBase64,
+				})
+			} else {
+				fileName = fmt.Sprintf("ADIRA_PAYROLL_KOPKARA_OUTGOING_%s.csv", time.Now().Format("200601"))
+				diskFullPath := filepath.Join(diskPath, fileName)
+
+				csvContent = "NIK_ADIRA,EMPLOYEE_ID,LOAN_NO,NAMA_KARYAWAN,DEPT_NO,KODE_POTONGAN,NAMA_POTONGAN,PERIODE,NOMINAL_TAGIHAN,NOMINAL_TERPOTONG,STATUS_POTONGAN,KETERANGAN,NO_REFERENSI\n"
+				for _, r := range rows {
+					csvContent += fmt.Sprintf("%s,%d,%d,%s,%s,%s,%s,%s,%.2f,,,%s\n",
+						r.Nik, r.EmployeeID, r.LoanNo, r.NamaKaryawan, r.DeptNo, r.KodePotongan, r.NamaPotongan, r.Periode, r.NominalPotongan, r.NoReferensi)
+				}
+
+				if err := os.WriteFile(diskFullPath, []byte(csvContent), 0644); err != nil {
+					log.Printf("Failed writing CSV file to disk %s: %v", diskFullPath, err)
+				}
+
+				userDisplayPath = rawPath + "\\" + fileName
+
+				c.JSON(http.StatusOK, gin.H{
+					"status":      "success",
+					"message":     fmt.Sprintf("File CSV berhasil digenerate dan disimpan langsung ke folder: %s", userDisplayPath),
+					"file_path":   userDisplayPath,
+					"file_name":   fileName,
+					"file_format": "csv",
+					"total_rows":  len(rows),
+					"csv_content": csvContent,
+				})
 			}
-
-			// Clean User Display Path
-			userDisplayPath := rawPath + "\\" + fileName
-
-			c.JSON(http.StatusOK, gin.H{
-				"status":      "success",
-				"message":     fmt.Sprintf("File CSV berhasil digenerate dan disimpan langsung ke folder: %s", userDisplayPath),
-				"file_path":   userDisplayPath,
-				"file_name":   fileName,
-				"total_rows":  len(rows),
-				"csv_content": csvContent,
-			})
 		})
 
 		// Import Payroll Reconciliation & Update Database Endpoint
@@ -1842,7 +2153,7 @@ func main() {
 				// Get employee name & NIK for display
 				var empName, empNik string
 				config.DB.Raw(`
-					SELECT COALESCE(e.name, m.bank_account_name, CONCAT('Anggota #', ?)), COALESCE(m.bank_account_no, CAST(? AS VARCHAR))
+					SELECT COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', ?)), COALESCE(e.bank_account_no, CAST(? AS VARCHAR))
 					FROM lms_sch.members m
 					LEFT JOIN lms_sch.employees e ON e.employee_id = m.employee_id OR e.employee_id = m.member_no
 					WHERE m.member_no = ? OR m.employee_id = ? LIMIT 1
@@ -2296,7 +2607,7 @@ func main() {
 					pd.id,
 					pd.loan_no,
 					COALESCE(l.member_no, 0) AS member_no,
-					COALESCE(e.name, m.bank_account_name, 'Karyawan') AS employee_name,
+					COALESCE(e.name, e.bank_account_name, 'Karyawan') AS employee_name,
 					pd.period,
 					pd.nominal_original,
 					pd.nominal_deducted,
@@ -2476,7 +2787,7 @@ func main() {
 
 			config.DB.Raw(`
 				SELECT pa.id, pa.period, pa.loan_no, pa.ref_no, pa.adjustment_type, pa.original_amount, pa.deducted_amount, pa.adjusted_amount, pa.notes, pa.created_at, pa.created_user,
-				       COALESCE(e.name, m.bank_account_name, CONCAT('Anggota #', m.member_no), 'Anggota #110101') as employee_name,
+				       COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', m.member_no), 'Anggota #110101') as employee_name,
 				       COALESCE(CAST(m.member_no AS VARCHAR), CAST(pa.loan_no AS VARCHAR), '110101') as member_no
 				FROM lms_sch.payroll_adjustments pa
 				LEFT JOIN lms_sch.payroll_deductions pd ON CAST(pa.ref_no AS VARCHAR) = CAST(pd.id AS VARCHAR)

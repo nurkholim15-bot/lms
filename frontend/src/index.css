@@ -287,3 +287,27 @@ tr:hover td {
     display: none !important;
   }
 }
+
+/* Mobile Viewport Responsive Rules (HP Screen Optimization) */
+@media screen and (max-width: 768px) {
+  .sidebar {
+    display: none !important;
+  }
+  .sidebar.collapsed {
+    display: none !important;
+    width: 0 !important;
+  }
+  .main-content {
+    margin-left: 0 !important;
+    width: 100% !important;
+  }
+  .header {
+    padding: 8px 12px !important;
+  }
+  .content-body {
+    padding: 6px 8px 60px 8px !important;
+  }
+  .toggle-sidebar-btn {
+    display: none !important;
+  }
+}

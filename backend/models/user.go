@@ -26,6 +26,7 @@ type User struct {
 	UpdatedUser         *string    `gorm:"column:updated_user" json:"updated_user,omitempty"`
 	DeletedAt           *time.Time `gorm:"column:deleted_at;index" json:"deleted_at,omitempty"`
 	DeletedUser         *string    `gorm:"column:deleted_user" json:"deleted_user,omitempty"`
+	ForcePwdChange      bool       `gorm:"column:force_pwd_change;default:false" json:"force_pwd_change"`
 }
 
 func (User) TableName() string {

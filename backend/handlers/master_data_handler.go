@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -128,9 +129,7 @@ func (h *MasterDataHandler) GetAll(c *gin.Context) {
 		if q != "" {
 			memIDSearch, _ := strconv.ParseInt(q, 10, 64)
 			if memIDSearch > 0 {
-				memQuery = memQuery.Where("(member_no = ? OR employee_id = ? OR LOWER(bank_account_name) LIKE ? OR LOWER(bank_name) LIKE ?)", memIDSearch, memIDSearch, likeStr, likeStr)
-			} else {
-				memQuery = memQuery.Where("(LOWER(bank_account_name) LIKE ? OR LOWER(bank_name) LIKE ?)", likeStr, likeStr)
+				memQuery = memQuery.Where("(member_no = ? OR employee_id = ?)", memIDSearch, memIDSearch)
 			}
 		}
 		memQuery.Count(&totalRecords)
@@ -480,6 +479,17 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 		if t, ok := req["title"].(string); ok { menu.Title = t }
 		if ic, ok := req["icon"].(string); ok { menu.Icon = ic }
 		if p, ok := req["path"].(string); ok { menu.Path = p }
+		if isPwd, ok := req["is_password"].(bool); ok { menu.IsPassword = isPwd }
+		if ntVal, ok := req["notification_type"]; ok && ntVal != nil {
+			switch v := ntVal.(type) {
+			case float64:
+				menu.NotificationType = int(v)
+			case int64:
+				menu.NotificationType = int(v)
+			case int:
+				menu.NotificationType = v
+			}
+		}
 		if oVal, ok := req["order"]; ok && oVal != nil {
 			switch v := oVal.(type) {
 			case float64:
@@ -594,6 +604,12 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 			}
 		}
 
+		if forcePwdVal, ok := req["force_pwd_change"]; ok && forcePwdVal != nil {
+			if b, isBool := forcePwdVal.(bool); isBool {
+				user.ForcePwdChange = b
+			}
+		}
+
 		if username, ok := req["username"].(string); ok && username != "" {
 			user.Username = username
 		}
@@ -617,9 +633,92 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 				user.RoleID = 3
 			}
 		}
-		if password, ok := req["password"].(string); ok && password != "" {
-			if !strings.HasPrefix(password, "$2a$") && !strings.HasPrefix(password, "$2b$") {
-				hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+
+		// Validate password rules when user is new or password is provided
+		if password, ok := req["password"].(string); ok && strings.TrimSpace(password) != "" {
+			rawPwd := strings.TrimSpace(password)
+			if !strings.HasPrefix(rawPwd, "$2a$") && !strings.HasPrefix(rawPwd, "$2b$") {
+				// Validate against global parameters (PWD_MIN_LENGTH, PWD_MIN_LOWERCASE, PWD_MIN_UPPERCASE, PWD_MIN_NUMERIC, PWD_MIN_SPECIAL)
+				pwdMinLength := 9
+				if p, err := h.paramRepo.FindByKey("PWD_MIN_LENGTH"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+					if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed > 0 {
+						pwdMinLength = parsed
+					}
+				}
+				if len(rawPwd) < pwdMinLength {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Password minimal %d karakter (sesuai parameter PWD_MIN_LENGTH)!", pwdMinLength)})
+					return
+				}
+
+				pwdMinLower := 1
+				if p, err := h.paramRepo.FindByKey("PWD_MIN_LOWERCASE"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+					if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed >= 0 {
+						pwdMinLower = parsed
+					}
+				}
+				lowerCount := 0
+				for _, r := range rawPwd {
+					if unicode.IsLower(r) {
+						lowerCount++
+					}
+				}
+				if lowerCount < pwdMinLower {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Password minimal harus memiliki %d huruf kecil (a-z) (sesuai parameter PWD_MIN_LOWERCASE)!", pwdMinLower)})
+					return
+				}
+
+				pwdMinUpper := 1
+				if p, err := h.paramRepo.FindByKey("PWD_MIN_UPPERCASE"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+					if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed >= 0 {
+						pwdMinUpper = parsed
+					}
+				}
+				upperCount := 0
+				for _, r := range rawPwd {
+					if unicode.IsUpper(r) {
+						upperCount++
+					}
+				}
+				if upperCount < pwdMinUpper {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Password minimal harus memiliki %d huruf besar (A-Z) (sesuai parameter PWD_MIN_UPPERCASE)!", pwdMinUpper)})
+					return
+				}
+
+				pwdMinNum := 1
+				if p, err := h.paramRepo.FindByKey("PWD_MIN_NUMERIC"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+					if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed >= 0 {
+						pwdMinNum = parsed
+					}
+				}
+				numCount := 0
+				for _, r := range rawPwd {
+					if unicode.IsDigit(r) {
+						numCount++
+					}
+				}
+				if numCount < pwdMinNum {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Password minimal harus memiliki %d karakter angka (0-9) (sesuai parameter PWD_MIN_NUMERIC)!", pwdMinNum)})
+					return
+				}
+
+				pwdMinSpecial := 1
+				if p, err := h.paramRepo.FindByKey("PWD_MIN_SPECIAL"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+					if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed >= 0 {
+						pwdMinSpecial = parsed
+					}
+				}
+				specialCount := 0
+				for _, r := range rawPwd {
+					if unicode.IsPunct(r) || unicode.IsSymbol(r) || strings.ContainsRune("!@#$%^&*()_+-=[]{}|;':\",./<>?~`", r) {
+						specialCount++
+					}
+				}
+				if specialCount < pwdMinSpecial {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Password minimal harus memiliki %d karakter spesial (!@#$...) (sesuai parameter PWD_MIN_SPECIAL)!", pwdMinSpecial)})
+					return
+				}
+
+				hashed, err := bcrypt.GenerateFromPassword([]byte(rawPwd), bcrypt.DefaultCost)
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
 					return
@@ -627,6 +726,7 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 				user.Password = string(hashed)
 			}
 		}
+
 		if user.MemberNo != nil && *user.MemberNo > 0 {
 			var existingUser models.User
 			query := h.db.Where("member_no = ? AND deleted_at IS NULL", *user.MemberNo)
@@ -652,11 +752,29 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 		if count > 0 {
 			user.UpdatedUser = &currentUser
 			user.UpdatedAt = time.Now()
-			if err := h.db.Model(&models.User{}).Where("id = ?", user.ID).Updates(&user).Error; err != nil {
+
+			updateData := map[string]interface{}{
+				"username":          user.Username,
+				"name":              user.Name,
+				"role_id":           user.RoleID,
+				"member_no":         user.MemberNo,
+				"force_pwd_change":  user.ForcePwdChange,
+				"updated_user":      currentUser,
+				"updated_at":        time.Now(),
+			}
+			if user.Password != "" {
+				updateData["password"] = user.Password
+			}
+
+			if err := h.db.Model(&models.User{}).Where("id = ?", user.ID).Updates(updateData).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
 		} else {
+			if user.Password == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Password wajib diisi saat membuat user baru!"})
+				return
+			}
 			user.CreatedUser = &currentUser
 			user.UpdatedUser = &currentUser
 			if err := h.db.Create(&user).Error; err != nil {
@@ -858,13 +976,33 @@ func (h *MasterDataHandler) GetUserInfo(c *gin.Context) {
 		name = "Karyawan " + employeeIDStr
 	}
 
+	ktpStr := ""
+	if userRecord.NoKTP != nil && *userRecord.NoKTP != "" {
+		ktpStr = *userRecord.NoKTP
+	} else {
+		ktpStr = emp.NoKTP
+	}
+
+	phoneStr := ""
+	if userRecord.PhoneNumber != nil && *userRecord.PhoneNumber != "" {
+		phoneStr = *userRecord.PhoneNumber
+	} else {
+		phoneStr = emp.PhoneNumber
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"employee_id": employeeIDStr,
-		"name":        name,
-		"role_id":     roleID,
-		"role_name":   roleName,
-		"is_member":   isMember,
-		"menus":       menus,
+		"employee_id":       employeeIDStr,
+		"nik":               emp.EmployeeID,
+		"name":              name,
+		"role_id":           roleID,
+		"role_name":         roleName,
+		"is_member":         isMember,
+		"no_ktp":            ktpStr,
+		"phone_number":      phoneStr,
+		"bank_name":         emp.BankName,
+		"bank_account_no":   emp.BankAccountNo,
+		"bank_account_name": emp.BankAccountName,
+		"menus":             menus,
 	})
 }
 

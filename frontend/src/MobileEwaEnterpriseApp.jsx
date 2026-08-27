@@ -537,29 +537,41 @@ export default function MobileEwaEnterpriseApp({ currentUser, onLogout, defaultA
           </div>
         )}
 
-        {/* PROFIL TAB */}
-        {activeBottomNav === 'profil' && (
+        {/* ACCOUNT TAB */}
+        {(activeBottomNav === 'account' || activeBottomNav === 'profil') && (
           <div style={{ background: 'white', borderRadius: '16px', padding: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
             <h3 style={{ margin: '0 0 16px 0', fontSize: '1.05rem', color: '#0f172a', fontWeight: 800 }}>
-              👤 Profil Anggota Kopkara
+              👤 Account & Profil Anggota
             </h3>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.85rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid #f1f5f9' }}>
-                <span style={{ color: '#64748b' }}>Nama Anggota:</span>
-                <span style={{ fontWeight: 700 }}>{currentUser?.name || 'Nur Kholim'}</span>
+                <span style={{ color: '#64748b' }}>1. Nama Lengkap:</span>
+                <span style={{ fontWeight: 700, color: '#0f172a' }}>{currentUser?.name || 'Nur Kholim'}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid #f1f5f9' }}>
-                <span style={{ color: '#64748b' }}>Username / No. HP:</span>
-                <span style={{ fontWeight: 700 }}>{currentUser?.username || '085882500073'}</span>
+                <span style={{ color: '#64748b' }}>2. NIK Karyawan:</span>
+                <span style={{ fontWeight: 700, color: '#0f172a' }}>{currentUser?.nik || currentUser?.employee_id || currentUser?.username || '100001'}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid #f1f5f9' }}>
-                <span style={{ color: '#64748b' }}>Role Akses:</span>
-                <span style={{ fontWeight: 700, color: '#15803d' }}>ANGGOTA (STRICT MOBILE MODE)</span>
+                <span style={{ color: '#64748b' }}>3. No. HP / WhatsApp:</span>
+                <span style={{ fontWeight: 700, color: '#0f172a' }}>{currentUser?.phone_number || currentUser?.username || '085882500073'}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid #f1f5f9' }}>
-                <span style={{ color: '#64748b' }}>Target Server API:</span>
-                <span style={{ fontWeight: 700, color: '#2563eb' }}>{apiConfig.customUrl || `http://${apiConfig.ip}:${apiConfig.port}`}</span>
+                <span style={{ color: '#64748b' }}>4. No. KTP:</span>
+                <span style={{ fontWeight: 700, color: '#0f172a' }}>{currentUser?.no_ktp || '3201012345670001'}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid #f1f5f9' }}>
+                <span style={{ color: '#64748b' }}>5. Nama Bank (bank_name):</span>
+                <span style={{ fontWeight: 700, color: '#2563eb' }}>{currentUser?.bank_name || 'BANK MANDIRI'}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid #f1f5f9' }}>
+                <span style={{ color: '#64748b' }}>6. No. Rekening Bank:</span>
+                <span style={{ fontWeight: 700, color: '#0f172a' }}>{currentUser?.bank_account_no || '123000456789'}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid #f1f5f9' }}>
+                <span style={{ color: '#64748b' }}>7. Nama Pemilik Rekening:</span>
+                <span style={{ fontWeight: 700, color: '#0f172a' }}>{currentUser?.bank_account_name || currentUser?.name || 'NUR KHOLIM'}</span>
               </div>
 
               <button
@@ -583,7 +595,7 @@ export default function MobileEwaEnterpriseApp({ currentUser, onLogout, defaultA
 
       </div>
 
-      {/* 📱 BOTTOM NAVIGATION BAR */}
+      {/* 📱 BOTTOM NAVIGATION BAR (Shopee 3 Tabs Footer) */}
       <div style={{
         position: 'fixed',
         bottom: 0,
@@ -600,12 +612,11 @@ export default function MobileEwaEnterpriseApp({ currentUser, onLogout, defaultA
         boxShadow: '0 -4px 12px rgba(0,0,0,0.05)'
       }}>
         {[
-          { id: 'beranda', label: 'Beranda', icon: '🏠' },
-          { id: 'pengajuan', label: 'Pengajuan', icon: '📝' },
-          { id: 'pinjaman', label: 'Pinjaman', icon: '💰' },
-          { id: 'profil', label: 'Profil', icon: '👤' }
+          { id: 'beranda', label: 'Home', icon: '🏠' },
+          { id: 'pinjaman', label: 'Daftar Pinjaman', icon: '📋' },
+          { id: 'account', label: 'Account', icon: '👤' }
         ].map(item => {
-          const isActive = activeBottomNav === item.id;
+          const isActive = activeBottomNav === item.id || (item.id === 'account' && activeBottomNav === 'profil');
           return (
             <div
               key={item.id}

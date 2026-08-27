@@ -75,8 +75,8 @@ func main() {
 	log.Println("[SEEDER] Seeding Employees & Members in batches...")
 	batchSize := 1000
 	for i := 0; i < totalEmployees; i += batchSize {
-		empSql := "INSERT INTO lms_sch.employees (employee_id, name, employee_status, deptno, category_code, role_id, salary, created_at, updated_at) VALUES "
-		memSql := "INSERT INTO lms_sch.members (member_no, employee_id, kopkara_status, join_date, bank_name, bank_account_no, bank_account_name, created_at, updated_at) VALUES "
+		empSql := "INSERT INTO lms_sch.employees (employee_id, name, employee_status, deptno, category_code, role_id, salary, bank_name, bank_account_no, bank_account_name, created_at, updated_at) VALUES "
+		memSql := "INSERT INTO lms_sch.members (member_no, employee_id, kopkara_status, join_date, created_at, updated_at) VALUES "
 
 		for j := 0; j < batchSize && (i+j) < totalEmployees; j++ {
 			empID := 100001 + i + j
@@ -89,8 +89,8 @@ func main() {
 				empSql += ", "
 				memSql += ", "
 			}
-			empSql += fmt.Sprintf("(%d, '%s', 'ACTIVE', 'DEPT01', 'PERM', 2, %.2f, NOW(), NOW())", empID, name, salary)
-			memSql += fmt.Sprintf("(%d, %d, 'ACTIVE', '%s', 'BCA', '123456%d', '%s', NOW(), NOW())", memNo, empID, joinDate, empID, name)
+			empSql += fmt.Sprintf("(%d, '%s', 'ACTIVE', 'DEPT01', 'PERM', 2, %.2f, 'BCA', '123456%d', '%s', NOW(), NOW())", empID, name, salary, empID, name)
+			memSql += fmt.Sprintf("(%d, %d, 'ACTIVE', '%s', NOW(), NOW())", memNo, empID, joinDate)
 		}
 
 		empSql += " ON CONFLICT (employee_id) DO NOTHING;"

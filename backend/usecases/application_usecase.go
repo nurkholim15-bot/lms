@@ -330,19 +330,8 @@ func (u *applicationUseCase) GetApplicationsFiltered(period string, status strin
 		}
 	}
 
-	// Read PAGINATION_LIMIT parameter from DB cache if limit is 0 (not explicitly passed)
-	if limit == 0 {
-		defaultLimitStr := "5"
-		if p, err := u.paramRepo.FindByKey("PAGINATION_LIMIT"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
-			defaultLimitStr = p.KeyValue
-		} else if p, err := u.paramRepo.FindByKey("DEFAULT_PAGE_SIZE"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
-			defaultLimitStr = p.KeyValue
-		}
-		if parsed, err := strconv.Atoi(strings.TrimSpace(defaultLimitStr)); err == nil && parsed > 0 {
-			limit = parsed
-		}
-	} else if limit < 0 {
-		// limit = -1 specifies un-paginated query
+	// If limit is not explicitly passed (limit <= 0), fetch all matching records for client-side pagination
+	if limit <= 0 {
 		limit = 0
 	}
 
@@ -578,9 +567,11 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 			// 7. Check LOAN_DISBURSE_AUTOMATIC parameter (default: "true")
 			autoDisburseStr := u.getParamVal("LOAN_DISBURSE_AUTOMATIC", "true")
 			if strings.EqualFold(strings.TrimSpace(autoDisburseStr), "true") {
+				var emp models.Employee
+				_ = db.Where("employee_id = ?", member.EmployeeID).First(&emp).Error
 				disburseReq := DisburseRequest{
-					BankAccountNo: member.BankAccountNo,
-					BankName:      member.BankName,
+					BankAccountNo: emp.BankAccountNo,
+					BankName:      emp.BankName,
 					Notes:         "Auto-disbursed by System Automation",
 					UpdatedUser:   "SYSTEM_AUTO",
 				}
