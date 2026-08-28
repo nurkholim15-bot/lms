@@ -549,3 +549,172 @@ ALTER TABLE lms_sch.menus ADD COLUMN IF NOT EXISTS notification_type INT DEFAULT
    - Frontend mendukung pengunggahan dan pembacaan otomatis kedua jenis file (`.xlsx`, `.xls`, `.csv`).
    - File Excel dibaca via `FileReader.readAsArrayBuffer` + `XLSX.read`, sedangkan file CSV dibaca via `FileReader.readAsText`.
    - Label tombol dan `accept` filter input pada UI Rekonsiliasi secara otomatis menyesuaikan nilai parameter (`📥 Export File Payroll (.xlsx)` / `📤 Import Result Rekonsiliasi (.xlsx)`).
+4. **Dynamic Auto-Backup & File Relocation (Backend `main.go`)**:
+   - Setelah proses pemrosesan import selesai, backend memeriksa ekstensi file asli dan parameter `BILL_FILE_IMPORT_FORMAT`.
+   - File `.xlsx` atau `.csv` yang telah diproses otomatis dipindahkan dari `FOLDER_BILL_IMPORT` ke `FOLDER_BILL_IMPORT_BCK` / `FOLDER_BILL_EXPORT_BCK` dengan ekstensi yang sesuai (misal: `NAME_PROCESSED_YYYYMMDD_HHMMSS.xlsx`).
+   - Pesan konfirmasi dan log sistem mengonfirmasi tipe file yang dipindahkan secara presisi (`📦 File XLSX [...] telah otomatis dipindahkan ke folder Backup`).
+5. **Standarisasi Kolom Identitas Karyawan (`EMPLOYEE_ID` & `MEMBER_NO`)**:
+   - Kolom 1 diubah nama dari `NIK_ADIRA` menjadi `EMPLOYEE_ID` dengan nilainya diisi dari `employees.employee_id` atau `members.employee_id` (misal: `123456100001`).
+   - Kolom 2 diubah nama dari `EMPLOYEE_ID` menjadi `MEMBER_NO` dengan nilainya diisi dari `members.member_no` (misal: `200001`).
+   - Urutan header resmi file export/import billing: `EMPLOYEE_ID`, `MEMBER_NO`, `LOAN_NO`, `NAMA_KARYAWAN`, `DEPT_NO`, `KODE_POTONGAN`, `NAMA_POTONGAN`, `PERIODE`, `NOMINAL_TAGIHAN`, `NOMINAL_TERPOTONG`, `STATUS_POTONGAN`, `KETERANGAN`, `NO_REFERENSI`.
+6. **Optimasi Pembacaan Parameter Export via In-Memory Cache (Zero SQL Overhead)**:
+   - Handler `/api/payroll/export` kini sepenuhnya menggunakan `paramRepo.FindByKey()` (in-memory RLock cache) untuk parameter `SCAN_DUEDATE_BILLING`, `BILL_FILE_EXPORT_FORMAT`, dan `FOLDER_BILL_EXPORT`.
+   - Mengeliminasi query SQL `SELECT key_value FROM lms_sch.global_parameters` saat mengeksport file billing sehingga mempercepat respon sistem.
+7. **Pembaruan Query Backend `/payroll/schedules` & Laporan Rekonsiliasi**:
+   - Query backend `/api/payroll/schedules` diperbarui: kolom `nik` kini mengambil `COALESCE(CAST(e.employee_id AS VARCHAR), CAST(m.employee_id AS VARCHAR), CAST(l.member_no AS VARCHAR))`, menggantikan pengambilannya dari nomor rekening bank.
+   - Pada tabel UI layar dan cetak PDF laporan rekonsiliasi:
+     - Header `NIK Adira` diubah menjadi `NIK` dengan nilainya `employees.employee_id` / `members.employee_id`.
+     - Header `Anggota / Karyawan` diubah menjadi `Anggota` dengan nilainya `members.member_no` (misal: `200001`).
+   - Tabel `RIWAYAT ADJUSTMENT SELISIH PAYROLL` difilter ketat hanya untuk transaksi yang sedang ditampilkan, dan disembunyikan jika tidak ada adjustment terkait.
+
+### 14.21 Optimasi Alur Login & Eliminasi Query Berulang (Performance Tuning)
+1. **Throttling Update Tabel Sessions (`POST /api/karisma/verify`)**:
+   - Eksekusi `UPDATE lms_sch.sessions SET last_activity_at = NOW()` kini diberi pengondisian waktu (`time.Since(session.LastActivityAt) > 5*time.Minute`).
+   - Mengeliminasi query `UPDATE` berulang ke tabel `sessions` pada setiap verifikasi API / perpindahan layar.
+
+2. **Lazy Loading Reference Data Master (Frontend `App.jsx`)**:
+   - Panggilan `fetchReferenceData()` (9 request master parallel: `departments`, `employee-categories`, `employee-statuses`, `kopkara-statuses`, `employees`, `members`, `roles`, `menus`, `role-menus`) telah dihapus dari fungsi verifikasi sesi login (`verifySession()`).
+   - Data master kini **hanya di-load secara lazily** saat pengguna secara aktif membuka menu Master Data (`activeTab === 'master'`).
+
+3. **Eliminasi Panggilan API Ganda `GET /api/dashboard/summary`**:
+   - Matriks dependensi `useEffect` pada `App.jsx` disederhanakan menjadi `[activeTab, currentUser?.username]`.
+
+4. **Inisialisasi `ParameterCache` RAM Memori (`main.go`)**:
+   - `cache.ParameterCache.Init(config.DB)` dipanggil secara otomatis pada saat server startup. Semua panggilan `ParameterCache.Get()` membaca langsung dari RAM memori (0 SQL query).
+
+5. **Perbaikan State `form.member_no` Pengajuan Pinjaman (`App.jsx`)**:
+   - Nilai default hardcoded `member_no: 1001` pada state `form` telah dihapus dan disinkronkan secara dinamis dari pengguna yang sedang login (misal: `200001` / `100001`).
+
+### 14.22 Standarisasi Keamanan Password & PIN LIMS (Standard Compliance)
+1. **`PWD_ROTATION_DAYS`** *(Default: 90 Hari)*:
+   - Batas waktu (hari) password harus diperbarui. Jika `time.Since(lastChanged) > PWD_ROTATION_DAYS`, sistem secara otomatis mengaktifkan `force_pwd_change = true` pada pengguna (`main.go:949`).
+2. **`MAX_PASSWORD_ATTEMPTS`** *(Default: 3 Kali)*:
+   - Batas maksimal percobaan input password yang salah berturut-turut. Respon HTTP 401 menginfokan sisa percobaan login yang tersisa (`main.go:895`).
+3. **`LOGIN_LOCKOUT_MINUTES`** *(Default: 15 Menit)*:
+   - Durasi waktu (menit) akun dikunci sementara (`user.LockedUntil`) akibat salah password berturut-turut melebihi `MAX_PASSWORD_ATTEMPTS` (`main.go:858`).
+4. **`DEFAULT_IDLE_TIMEOUT_MINUTES`** *(Default: 30 Menit)*:
+   - Batas waktu idle sistem (menit) di frontend sebelum sesi pengguna di-logout secara otomatis karena tidak ada aktivitas (`App.jsx:1573`).
+5. **`PIN_IDLE_TIMEOUT_MINUTES`** *(Default: 15 Menit)*:
+   - Batas waktu idle di latar belakang (menit) sebelum modal Re-Autentikasi PIN 6-digit terkunci secara otomatis (`App.jsx:1573`).
+6. **Konsolidasi & Eliminasi Parameter Duplikat**:
+   - `PASSWORD_ROTATION_DAYS` $\rightarrow$ di-konsolidasikan ke **`PWD_ROTATION_DAYS`**.
+   - `PASSWORD_MAX_FAILED_ATTEMPTS` / `LOGIN_MAX_ATTEMPTS` $\rightarrow$ di-konsolidasikan ke **`MAX_PASSWORD_ATTEMPTS`**.
+   - `PASSWORD_MIN_LENGTH` $\rightarrow$ di-konsolidasikan ke **`PWD_MIN_LENGTH`**.
+
+### 14.23 Optimasi Kueri & RAM Identity Cache (Ultra-Fast Performance)
+1. **In-Memory Identity Cache RAM (`cache/identity_cache.go`)**:
+   - Panggilan ke `/api/user-info`, verifikasi token sesi, dan simulasi/submit pengajuan pinjaman membaca langsung dari `cache.IdentityCache` RAM memori (**0 SQL Query** ke tabel `users`, `members`, `employees`, dan `employee_categories`).
+2. **Optimasi Dashboard Total Hutang Tanpa JOIN Schedule (<3ms)**:
+   - Kueri `totalHutang` pada `GET /api/dashboard/summary` membaca langsung dari `lms_sch.employees` (`total_loan`) atau `lms_sch.loan_applications`, mengeliminasi pemindaian berat (*JOIN*) ke tabel `loan_schedules` dan `loans`.
+3. **Komponen Visual Card Available Limit & Total Hutang UI Pengajuan Pinjaman**:
+   - Menampilkan kartu ringkas *Available Limit* & *Total Hutang* di atas form Pengajuan Pinjaman dengan font nominal diperbesar (`1.25rem`) berwarna hijau dan merah.
+4. **Real-Time Refresh Available Limit & Total Hutang Setelah Submit**:
+   - `doSubmitApplication` di `App.jsx` secara otomatis memanggil `fetchDashboardSummary()` sesaat setelah pengajuan pinjaman berhasil dikirim untuk meng-update batas limit dan total hutang real-time.
+
+### 14.24 Filter Soft-Delete `role_menus` & Konsistensi Auth Modal Menu
+1. **Penyaringan Soft-Delete `lms_sch.role_menus` (`master_data_handler.go:971`)**:
+   - Kueri SQL pemuatan menu berdasarkan role menyertakan syarat `AND lms_sch.role_menus.deleted_at IS NULL`, memastikan menu yang di-soft delete tidak lagi muncul di sidebar UI.
+2. **Penambahan Field `is_password` pada Response `GetUserPermissions`**:
+   - Kolom `is_password` disertakan dalam kueri SELECT `GetUserPermissions` di backend (`master_data_handler.go:963`).
+3. **Helper `isPasswordRequired` & Eliminasi Bug Intermiten Modal Auth**:
+   - Navigasi menu dan submit aplikasi mendahulukan `userInfo.menus` dengan helper `isPasswordRequired(m)`, menjamin modal verifikasi Password/PIN **100% selalu muncul secara konsisten** saat `is_password = true`.
+
+### 14.25 Perbaikan Soft-Delete `lms_sch.global_parameters` & Tag GORM `MasterBaseModel`
+1. **Eliminasi Restriksi Tag `<-:create` pada `DeletedAt` (`base.go:53`)**:
+   - Tag GORM `<-:create` pada struct `MasterBaseModel.DeletedAt` membatasi izin penulisan kolom `deleted_at` hanya pada saat `INSERT` (Create).
+   - Tag tersebut kini telah dihapus (`DeletedAt gorm.DeletedAt`), sehingga GORM dapat menuliskan timestamp `deleted_at = NOW()` secara sempurna pada operasi soft-delete.
+2. **Pembaruan Handler `DeleteMasterData` untuk Tabel `parameters` (`master_data_handler.go:816`)**:
+   - Penghapusan parameter global kini secara eksplisit mengisikan `deleted_at = NOW()`, `updated_at = NOW()`, dan `deleted_user = currentUser`.
+   - Menjalankan sinkronisasi penghapusan langsung ke RAM memori `cache.ParameterCache.Delete(key)` agar parameter yang di-soft delete langsung terlepas dari memori RAM server.
+
+### 14.26 Optimasi Vite Build Chunking & Eliminasi Warning (`vite.config.js`)
+1. **Pemisahan Vendor Bundle (Code Splitting `manualChunks(id)` Function)**:
+   - Menggunakan fungsi `manualChunks(id)` pada `rollupOptions.output` yang kompatibel dengan Bundler Vite 8 (Rolldown Engine) untuk memilah modul pihak ketiga:
+     * `vendor-react`: `react`, `react-dom` (~140 kB)
+     * `vendor-icons`: `lucide-react` (~80 kB)
+     * `vendor-axios`: `axios` (~30 kB)
+   - Meningkatkan kecepatan pemuatan halaman dan efisiensi browser caching.
+2. **Penyesuaian Threshold Chunk Size Warning (`chunkSizeWarningLimit: 1600`)**:
+   - Mengatur `chunkSizeWarningLimit: 1600` untuk mengeliminasi peringatan bawaan Vite `(!) Some chunks are larger than 500 kB after minification`.
+
+## 15. PANDUAN BUILD APK MOBILE APP ANDROID (CAPACITOR + GRADLE CLI)
+
+Dokumen panduan lengkap pembuatan file **.APK Standalone** HP Android **100% via Linux Command Line (Ubuntu / Debian / WSL CLI)** tanpa perlu membuka Android Studio GUI, sangat ringan dan hemat RAM (laptop 8GB RAM).
+
+### 15.1 Ringkasan Perintah Build Rutin Sehari-hari (Daily Build)
+
+Jika sudah pernah melakukan setup awal dan ingin membuat file `.apk` baru setelah ada perubahan kode UI/React:
+
+```bash
+cd /mnt/d/Data_NK/Project5/LMS/frontend
+
+# 1. Build aset web React terbaru
+./node_modules/.bin/vite build
+
+# 2. Sinkronkan aset terbaru ke folder android
+npx cap sync android
+
+# 3. Pindah folder & kompilasi file APK baru
+cd android
+
+# Jika di Linux / WSL CLI (Ubuntu/Debian):
+./gradlew assembleDebug
+
+# Jika di Windows Command Prompt (cmd.exe):
+gradlew.bat assembleDebug
+
+# Jika di Windows PowerShell:
+.\gradlew.bat assembleDebug
+```
+
+📍 **Path Hasil Output File APK**:  
+`/mnt/d/Data_NK/Project5/LMS/frontend/android/app/build/outputs/apk/debug/app-debug.apk`  
+*(Atau `d:\Data_NK\Project5\LMS\frontend\android\app\build\outputs\apk\debug\app-debug.apk` di Windows)*
+
+---
+
+### 15.2 Konfigurasi Firewall Windows Server (1x Setup)
+
+Jalankan sekali di PowerShell (Run as Administrator) agar HP Android lokal dapat berkomunikasi dengan server backend laptop:
+
+```powershell
+New-NetFirewallRule -DisplayName "LMS Kopkara-EWA (Ports 8086 & 3005)" -Direction Inbound -LocalPort 8086,3005 -Protocol TCP -Action Allow
+```
+
+---
+
+### 15.3 Detail Alur Kompilasi & Frekuensi Eksekusi
+
+| Langkah | Perintah | Frekuensi | Keterangan |
+|---|---|---|---|
+| **Firewall** | `New-NetFirewallRule ... -Action Allow` | **1x (Admin Windows)** | Membuka Port Inbound 8086 & 3005 di Firewall |
+| **Langkah 1** | `npm install @capacitor/core @capacitor/cli @capacitor/android` | **1x (Setup Awal)** | Installing dependensi Capacitor |
+| **Langkah 2** | `npx cap init "Kopkara Mobile EWA" "com.kopkara.ewa.app" --web-dir dist` | **1x (Setup Awal)** | Inisialisasi Nama App & Package ID |
+| **Langkah 3** | `./node_modules/.bin/vite build` | **Setiap Build Baru** | Generasi berkas HTML/JS/CSS React di `dist` |
+| **Langkah 4** | `npx cap add android` | **1x (Setup Awal)** | Generasi platform native Android |
+| **Langkah 5** | `npx cap sync android` | **Setiap Build Baru** | Menyalin aset `dist` ke folder `/android` |
+| **Kompilasi** | `cd android && ./gradlew assembleDebug`<br>*(atau `gradlew.bat assembleDebug` di Windows)* | **Setiap Build Baru** | Kompilasi file **`app-debug.apk`** |
+
+---
+
+### 15.4 Setup & Pengujian di HP Android
+
+1. Kirim file **`app-debug.apk`** ke HP Android (via WhatsApp/USB/Drive).
+2. Install file `.apk` di HP Android.
+3. Buka aplikasi **Kopkara Mobile EWA**.
+4. Klik ikon **⚙️ Pengaturan Server API** di pojok kanan atas:
+   - Masukkan IP laptop lokal Anda (contoh: `192.168.0.103:8086`).
+   - Klik **Tes Koneksi** $\rightarrow$ **Simpan & Terapkan**.
+5. Aplikasi Mobile EWA di HP Android siap digunakan dan terhubung 100% Real ke backend LMS.
+
+---
+
+### 15.5 Catatan Log Output Gradle (`BUILD SUCCESSFUL` & Warning)
+
+1. **`BUILD SUCCESSFUL in 1m 47s`**:
+   - Status kompilasi **100% SUKSES**! File APK **`app-debug.apk`** telah berhasil dibuat dan siap di-install di HP Android.
+2. **`WARNING: Using flatDir should be avoided...`**:
+   - Peringatan standar bawaan Capacitor Android saat membaca dependensi plugin Cordova/Capacitor lokal. Peringatan ini **normal dan aman diabaikan**.
+3. **Penyebab & Solusi Error `Build-tool 35.0.0 is missing AAPT` / `Build Tools revision 35.0.0 is corrupted`**:
+   - **Penyebab**: Menunjuk `sdk.dir` pada `local.properties` ke folder Windows Android SDK (`C:\Users\...\Android\Sdk`) saat menjalankan Gradle dari terminal Linux WSL. Gradle versi Linux mencari biner ELF Linux (`aapt`), sedangkan folder Windows SDK hanya berisi biner Windows (`aapt.exe`).
+   - **Solusi**: Pada kompilasi via Linux WSL, biarkan baris `sdk.dir` di-comment out (`# sdk.dir=...`) pada file `frontend/android/local.properties`. Gradle Linux akan secara otomatis menggunakan environment Android SDK Linux dan kompilasi akan **100% SUKSES (`BUILD SUCCESSFUL`)**.

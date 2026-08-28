@@ -180,20 +180,24 @@ func (u *applicationUseCase) runSimulation(req SubmitApplicationRequest, product
 	if len(existingMember) > 0 && existingMember[0] != nil && existingMember[0].MemberNo > 0 {
 		member = *existingMember[0]
 	} else {
-		if err := db.Where("member_no = ?", req.MemberNo).First(&member).Error; err != nil {
-			if err2 := db.Where("employee_id = ?", req.MemberNo).First(&member).Error; err2 != nil {
-				member = models.Member{MemberNo: req.MemberNo, EmployeeID: req.MemberNo}
-			}
+		if mPtr, errM := cache.IdentityCache.GetMemberByNo(db, req.MemberNo); errM == nil && mPtr != nil {
+			member = *mPtr
+		} else {
+			member = models.Member{MemberNo: req.MemberNo, EmployeeID: req.MemberNo}
 		}
 	}
 
 	var employee models.Employee
-	if err := db.Where("employee_id = ?", member.EmployeeID).First(&employee).Error; err != nil {
+	if ePtr, errE := cache.IdentityCache.GetEmployeeByID(db, member.EmployeeID); errE == nil && ePtr != nil {
+		employee = *ePtr
+	} else {
 		employee = models.Employee{EmployeeID: member.EmployeeID, Salary: 8000000, CategoryCode: "PERMANENT"}
 	}
 
 	var category models.EmployeeCategory
-	if err := db.Where("category_code = ?", employee.CategoryCode).First(&category).Error; err != nil {
+	if catPtr, errCat := cache.IdentityCache.GetCategoryByCode(db, employee.CategoryCode); errCat == nil && catPtr != nil {
+		category = *catPtr
+	} else {
 		category = models.EmployeeCategory{CategoryCode: employee.CategoryCode, MaxLimit: 100000000}
 	}
 
@@ -442,11 +446,9 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 
 	db := u.appRepo.GetDB()
 	var member models.Member
-	if err := db.Where("member_no = ?", req.MemberNo).First(&member).Error; err != nil {
-		if err2 := db.Where("employee_id = ?", req.MemberNo).First(&member).Error; err2 != nil {
-			u.writeSubmitLoanLog("RC_SUBMIT_LOAN_NON_ADIRA", "11", req.MemberNo, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_NON_ADIRA", 0, req.CreatedUser)
-			return nil, fmt.Errorf("ditolak bukan karyawan Adira")
-		}
+	if err := db.Where("member_no = ? OR employee_id = ?", req.MemberNo, req.MemberNo).First(&member).Error; err != nil {
+		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_NON_ADIRA", "11", req.MemberNo, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_NON_ADIRA", 0, req.CreatedUser)
+		return nil, fmt.Errorf("ditolak bukan karyawan Adira")
 	}
 	req.MemberNo = member.MemberNo
 

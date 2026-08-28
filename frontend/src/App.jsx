@@ -939,17 +939,29 @@ function App() {
   const [isMenuAuthModalOpen, setIsMenuAuthModalOpen] = useState(false);
   const [pendingMenuAuth, setPendingMenuAuth] = useState(null);
 
+  const isPasswordRequired = (m) => {
+    if (!m) return false;
+    const val = m.is_password !== undefined ? m.is_password : (m.IsPassword !== undefined ? m.IsPassword : m.isPassword);
+    if (typeof val === 'boolean') return val;
+    if (typeof val === 'number') return val === 1;
+    if (typeof val === 'string') {
+      const s = val.trim().toLowerCase();
+      return s === 'true' || s === 'ya' || s === '1' || s === 'yes' || s === 't';
+    }
+    return false;
+  };
+
   const navigateToMenu = (targetPath) => {
     if (targetPath === 'pengajuan') {
       setActiveTab('pengajuan');
       return;
     }
-    const allAvailableMenus = (referenceData.menus && referenceData.menus.length > 0)
-      ? referenceData.menus
-      : defaultFallbackMenus;
+    const userMenus = userInfo?.menus || [];
+    const refMenus = referenceData?.menus || [];
+    const allAvailableMenus = userMenus.length > 0 ? userMenus : (refMenus.length > 0 ? refMenus : defaultFallbackMenus);
     const targetMenu = allAvailableMenus.find(m => m.path === targetPath);
 
-    if (targetMenu && (targetMenu.is_password || targetMenu.IsPassword)) {
+    if (targetMenu && isPasswordRequired(targetMenu)) {
       setPendingMenuAuth(targetMenu);
       setIsMenuAuthModalOpen(true);
     } else {
@@ -1263,7 +1275,7 @@ function App() {
   });
 
   // Form State
-  const [form, setForm] = useState({ member_no: 1001, product_id: '', requested_amount: '', tenor: '' });
+  const [form, setForm] = useState({ member_no: '', product_id: '', requested_amount: '', tenor: '' });
   const [paramForm, setParamForm] = useState({ id: 0, key_name: '', key_value: '', description: '' });
 
   const [userInfo, setUserInfo] = useState(null);
@@ -1296,6 +1308,9 @@ function App() {
         .then(res => {
           const info = res.data;
           setUserInfo(info);
+          if (info?.member_no || info?.nik || info?.employee_id) {
+            setForm(prev => ({ ...prev, member_no: info.member_no || info.nik || info.employee_id }));
+          }
 
           // Pengecekan Keanggotaan: Jika bukan anggota (is_member === false) dan bukan akun high privilege (Admin / HRD)
           const isHighPriv = info.role_id === 1 || info.role_id === 3 || String(currentUser.username || '').toLowerCase() === 'admin';
@@ -1547,7 +1562,10 @@ function App() {
     if (!currentUser) return;
 
     if (activeTab === 'dashboard') {
-      fetchDashboardSummary();
+      const timer = setTimeout(() => {
+        fetchDashboardSummary();
+      }, 100);
+      return () => clearTimeout(timer);
     }
 
     if (activeTab === 'approval' || activeTab === 'disbursement' || activeTab === 'pengajuan' || isReportTab()) {
@@ -1561,7 +1579,55 @@ function App() {
         .catch(err => console.error("Error fetching all members:", err));
     }
 
-  }, [activeTab, currentUser, userInfo, roleId, realRoleName]);
+  }, [activeTab, currentUser?.username]);
+
+  // Idle Activity Listener for DEFAULT_IDLE_TIMEOUT_MINUTES & PIN_IDLE_TIMEOUT_MINUTES
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const getParamVal = (key, fallback) => {
+      const p = (parameters || []).find(item => item.key_name === key || item.KeyName === key);
+      return (p?.key_value || p?.KeyValue) || fallback;
+    };
+
+    const idleTimeoutMins = parseInt(getParamVal('DEFAULT_IDLE_TIMEOUT_MINUTES', '30')) || 30;
+    const pinIdleTimeoutMins = parseInt(getParamVal('PIN_IDLE_TIMEOUT_MINUTES', '15')) || 15;
+
+    let idleTimer = null;
+    let pinIdleTimer = null;
+
+    const resetIdleTimers = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      if (pinIdleTimer) clearTimeout(pinIdleTimer);
+
+      if (pinIdleTimeoutMins > 0) {
+        pinIdleTimer = setTimeout(() => {
+          setPendingMenuAuth({
+            title: 'PIN Re-Authentication (Background Idle Lock)',
+            path: activeTab,
+            isSubmitAction: false
+          });
+          setIsMenuAuthModalOpen(true);
+        }, pinIdleTimeoutMins * 60 * 1000);
+      }
+
+      if (idleTimeoutMins > 0) {
+        idleTimer = setTimeout(() => {
+          handleLogout("Sesi Anda telah di-logout otomatis karena tidak ada aktivitas (Idle Timeout).");
+        }, idleTimeoutMins * 60 * 1000);
+      }
+    };
+
+    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'];
+    events.forEach(ev => window.addEventListener(ev, resetIdleTimers));
+    resetIdleTimers();
+
+    return () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      if (pinIdleTimer) clearTimeout(pinIdleTimer);
+      events.forEach(ev => window.removeEventListener(ev, resetIdleTimers));
+    };
+  }, [currentUser, parameters, activeTab]);
 
   const handleProcessApproval = async (applicationNo, action) => {
     const labels = {
@@ -1742,8 +1808,9 @@ function App() {
         };
 
         const refNo = rowObj['NO_REFERENSI'] || rowObj['NO_REF'] || `LMS-PAY-202608-${i+1}`;
-        const rawEmpId = rowObj['EMPLOYEE_ID'] || rowObj['EMPLOYEE'] || (refNo.includes('-') ? refNo.split('-').pop() : '110102');
-        const empId = parseInt(rawEmpId) || 110102;
+        const rawMemberNo = rowObj['MEMBER_NO'] || rowObj['MEMBER'] || rowObj['NO_MEMBER'] || (refNo.includes('-') ? refNo.split('-').pop() : '200001');
+        const memberNo = parseInt(rawMemberNo) || 200001;
+        const rawEmpId = rowObj['EMPLOYEE_ID'] || rowObj['EMPLOYEE'] || rowObj['NIK_ADIRA'] || rowObj['NIK'] || String(memberNo);
         const period = rowObj['PERIODE'] || '2026-08';
         const status = rowObj['STATUS_POTONGAN'] || rowObj['STATUS'] || 'SUCCESS';
         
@@ -1764,8 +1831,9 @@ function App() {
 
         parsedData.push({
           refNo: refNo,
-          nik: rowObj['NIK_ADIRA'] || rowObj['NIK'] || '3171012345670001',
-          name: rowObj['NAMA_KARYAWAN'] || rowObj['NAMA'] || `Employee #${empId}`,
+          nik: String(rawEmpId),
+          memberNo: memberNo,
+          name: rowObj['NAMA_KARYAWAN'] || rowObj['NAMA'] || `Employee #${rawEmpId}`,
           period: period,
           amount: amount,
           deducted: deducted,
@@ -1778,7 +1846,7 @@ function App() {
 
         importPayload.push({
           ref_no: refNo,
-          employee_id: empId,
+          employee_id: memberNo > 0 ? memberNo : (parseInt(rawEmpId) || 200001),
           loan_no: loanNo,
           period: period,
           nominal_original: amount,
@@ -1800,7 +1868,20 @@ function App() {
           rows: importPayload
         });
         if (res.data && res.data.logs && res.data.logs.length > 0) {
-          setImportedRows(res.data.logs);
+          const normalizedLogs = res.data.logs.map(log => ({
+            ...log,
+            loanNo: log.loan_no,
+            refNo: log.ref_no,
+            memberNo: log.member_no,
+            nik: log.nik,
+            name: log.name,
+            period: log.period,
+            amount: log.amount,
+            deducted: log.deducted,
+            status: log.status,
+            keterangan: log.keterangan
+          }));
+          setImportedRows(normalizedLogs);
         }
         alert(`✅ Berhasil mengimpor file [${file.name}] dari folder komputer Anda!\n\n${res.data.message}`);
       } catch (err) {
@@ -1832,22 +1913,58 @@ function App() {
       console.error("Error fetching adjustments for print report:", e);
     }
 
+    // Only include adjustment records matching current displayed transactions
+    const activeLoanNos = new Set((displayList || []).map(i => String(i.loanNo || i.loan_no || i.refNo)));
+    const activeMemberNos = new Set((displayList || []).map(i => String(i.memberNo || i.member_no || i.employee_id || i.nik)));
+
+    const filteredAdjList = (adjList || []).filter(adj => 
+      activeLoanNos.has(String(adj.loan_no)) || 
+      activeLoanNos.has(String(adj.ref_no)) ||
+      activeMemberNos.has(String(adj.member_no))
+    );
+
     let adjRowsHtml = '';
-    if (adjList.length === 0) {
-      adjRowsHtml = `<tr><td colspan="6" style="text-align: center; color: #64748b; padding: 10px;">Belum ada record adjustment selisih pada periode ini.</td></tr>`;
-    } else {
-      adjList.forEach((adj, idx) => {
+    if (filteredAdjList.length > 0) {
+      filteredAdjList.forEach((adj, idx) => {
+        const empName = adj.employee_name || 'Anggota';
+        const memberNoLabel = adj.member_no ? `#${adj.member_no}` : '';
         adjRowsHtml += `
           <tr>
             <td style="padding: 6px 8px; text-align: center;">${idx + 1}</td>
             <td style="padding: 6px 8px;"><strong>${adj.ref_no || '-'}</strong></td>
-            <td style="padding: 6px 8px;">${adj.employee_name || '-'} (#${adj.member_no || ''})</td>
+            <td style="padding: 6px 8px;">${empName} ${memberNoLabel}</td>
             <td style="padding: 6px 8px;"><span style="background: #e0e7ff; color: #3730a3; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.75rem;">${adj.adjustment_type || '-'}</span></td>
             <td style="padding: 6px 8px; text-align: right;"><strong>Rp ${Math.round(adj.adjusted_amount || 0).toLocaleString('id-ID')}</strong></td>
             <td style="padding: 6px 8px; font-style: italic; color: #334155;">"${adj.notes || '-'}"</td>
           </tr>
         `;
       });
+    }
+
+    let adjSectionHtml = '';
+    if (filteredAdjList.length > 0) {
+      adjSectionHtml = `
+        <div style="margin-top: 24px; margin-bottom: 20px; page-break-inside: avoid;">
+          <h3 style="margin-top: 0; font-size: 0.95rem; color: #1e293b; border-bottom: 2px solid #6366f1; padding-bottom: 4px;">
+            📋 RIWAYAT ADJUSTMENT SELISIH PAYROLL (AUDIT TRAIL & HASIL KOREKSI UNTUK DITANDATANGANI)
+          </h3>
+          <table class="main-table">
+            <thead>
+              <tr style="background: #475569;">
+                <th style="text-align: center; width: 40px;">No</th>
+                <th>No. Referensi</th>
+                <th>Anggota</th>
+                <th>Tipe Adjustment</th>
+                <th style="text-align: right;">Nominal Adjusted</th>
+                <th>Keterangan User / Catatan Audit</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${adjRowsHtml}
+            </tbody>
+          </table>
+        </div>
+      `;
     }
 
     const reportWin = window.open('', '_blank');
@@ -1881,12 +1998,15 @@ function App() {
       }
 
       const refNoCol = item?.loanNo || item?.loan_no || item?.refNo || '-';
+      const nikVal = item?.nik || item?.employee_id || item?.employeeId || '-';
+      const anggotaVal = item?.memberNo || item?.member_no || '-';
+
       rowsHtml += `
         <tr style="border-bottom: 1px solid #cbd5e1;">
           <td style="padding: 6px 10px; text-align: center; white-space: nowrap;">${idx + 1}</td>
           <td style="padding: 6px 10px; white-space: nowrap; font-weight: bold;">${refNoCol}</td>
-          <td style="padding: 6px 10px; white-space: nowrap;">${item?.nik || '-'}</td>
-          <td style="padding: 6px 10px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${item?.name || '-'}</td>
+          <td style="padding: 6px 10px; white-space: nowrap;">${nikVal}</td>
+          <td style="padding: 6px 10px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${anggotaVal}</td>
           <td style="padding: 6px 10px; text-align: center; white-space: nowrap;">${item?.period || '2026-08'}</td>
           <td style="padding: 6px 10px; text-align: right; white-space: nowrap;">Rp ${tagihanHrd.toLocaleString('id-ID')}</td>
           <td style="padding: 6px 10px; text-align: right; white-space: nowrap; font-weight: bold; color: ${statusColor};">Rp ${terpotongHrd.toLocaleString('id-ID')}</td>
@@ -1954,8 +2074,8 @@ function App() {
             <tr>
               <th style="text-align: center;">No</th>
               <th>No. Ref / Loan No</th>
-              <th>NIK Adira</th>
-              <th>Anggota / Karyawan</th>
+              <th>NIK</th>
+              <th>Anggota</th>
               <th style="text-align: center;">Periode</th>
               <th style="text-align: right;">Tagihan LMS</th>
               <th style="text-align: right;">Potongan HRD</th>
@@ -1969,26 +2089,7 @@ function App() {
           </tbody>
         </table>
 
-        <div style="margin-top: 24px; margin-bottom: 20px; page-break-inside: avoid;">
-          <h3 style="margin-top: 0; font-size: 0.95rem; color: #1e293b; border-bottom: 2px solid #6366f1; padding-bottom: 4px;">
-            📋 RIWAYAT ADJUSTMENT SELISIH PAYROLL (AUDIT TRAIL & HASIL KOREKSI UNTUK DITANDATANGANI)
-          </h3>
-          <table class="main-table">
-            <thead>
-              <tr style="background: #475569;">
-                <th style="text-align: center; width: 40px;">No</th>
-                <th>No. Referensi</th>
-                <th>Anggota / Karyawan</th>
-                <th>Tipe Adjustment</th>
-                <th style="text-align: right;">Nominal Adjusted</th>
-                <th>Keterangan User / Catatan Audit</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${adjRowsHtml}
-            </tbody>
-          </table>
-        </div>
+        ${adjSectionHtml}
 
         <div class="signatures">
           <div class="sig-box">
@@ -2036,8 +2137,9 @@ function App() {
         loanNo: ps.loan_no,
         memberNo: ps.member_no,
         refNo: safeRef,
-        nik: ps.nik || `317101234567${String(ps.member_no || '1001').padStart(4, '0')}`,
-        name: `${empName} (#${ps.member_no || '1001'})`,
+        nik: ps.nik ? String(ps.nik) : String(ps.member_no || '-'),
+        memberNo: ps.member_no,
+        name: empName,
         period: safePeriod,
         amount: ps.total_installment || 0,
         deducted: ps.status === 'ADJUSTED' ? (ps.total_installment || 0) : paidAmt,
@@ -2220,8 +2322,8 @@ function App() {
             <thead>
               <tr>
                 <th style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>No. Ref</th>
-                <th style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>NIK Adira</th>
-                <th style={{ padding: '8px 10px', fontSize: '0.85rem', maxWidth: '180px' }}>Anggota / Karyawan</th>
+                <th style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>NIK</th>
+                <th style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Anggota</th>
                 <th style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Periode</th>
                 <th style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Nominal Tagihan</th>
                 <th style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Terpotong HRD</th>
@@ -2268,10 +2370,8 @@ function App() {
                   return (
                     <tr key={item?.id ? `sched-${item.id}` : `${item?.refNo || 'pay'}-${idx}`} style={{ borderBottom: '1px solid #e2e8f0' }}>
                       <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}><strong>{displayRefNo}</strong></td>
-                      <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{item?.nik || '-'}</td>
-                      <td style={{ padding: '8px 10px', fontSize: '0.85rem', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item?.name || ''}>
-                        {item?.name || '-'}
-                      </td>
+                      <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{item?.nik || item?.employee_id || '-'}</td>
+                      <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{item?.memberNo || item?.member_no || '-'}</td>
                       <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{item?.period || '-'}</td>
                       <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}><strong>Rp {tagihan.toLocaleString('id-ID')}</strong></td>
                       <td style={{ padding: '8px 10px', fontSize: '0.85rem', whiteSpace: 'nowrap', color: isFailed ? '#dc2626' : (item?.status === 'SUCCESS' ? '#047857' : '#b45309'), fontWeight: 600 }}>
@@ -2738,12 +2838,12 @@ function App() {
   const submitApplication = async (e) => {
     if (e && e.preventDefault) e.preventDefault();
 
-    const allAvailableMenus = (referenceData.menus && referenceData.menus.length > 0)
-      ? referenceData.menus
-      : defaultFallbackMenus;
+    const userMenus = userInfo?.menus || [];
+    const refMenus = referenceData?.menus || [];
+    const allAvailableMenus = userMenus.length > 0 ? userMenus : (refMenus.length > 0 ? refMenus : defaultFallbackMenus);
     const pengajuanMenu = allAvailableMenus.find(m => m.path === 'pengajuan');
 
-    if (pengajuanMenu && (pengajuanMenu.is_password || pengajuanMenu.IsPassword)) {
+    if (pengajuanMenu && isPasswordRequired(pengajuanMenu)) {
       setPendingMenuAuth({
         ...pengajuanMenu,
         title: 'Pengajuan Pinjaman',
@@ -2759,16 +2859,33 @@ function App() {
 
   const doSubmitApplication = async () => {
     try {
+      const activeMemberNo = form.member_no || userInfo?.member_no || currentUser?.member_no || currentUser?.employee_id;
+      if (!activeMemberNo) {
+        alert('❌ ID / Nomor Anggota tidak valid. Silakan login kembali.');
+        return;
+      }
+      const activeProductId = parseInt(form.product_id) || (products && products.length > 0 ? parseInt(products[0].id || products[0].ID) : 0);
+      if (!activeProductId || activeProductId <= 0) {
+        alert('❌ Silakan pilih Produk Pinjaman terlebih dahulu.');
+        return;
+      }
+
       await axios.post(`${getApiBaseUrl()}/api/applications`, {
-        member_no: parseInt(form.member_no),
-        product_id: parseInt(form.product_id),
+        member_no: parseInt(activeMemberNo),
+        product_id: activeProductId,
         requested_amount: parseFloat(form.requested_amount),
         tenor: parseInt(form.tenor)
       });
       alert('✅ Pengajuan berhasil dikirim!');
-      setForm({ ...form, product_id: '', requested_amount: '', tenor: '' });
+      setForm(prev => ({
+        ...prev,
+        product_id: String(activeProductId),
+        requested_amount: '',
+        tenor: prev.tenor || '1'
+      }));
       setSimulation(null);
       fetchApplications();
+      fetchDashboardSummary();
     } catch (error) {
       alert('Gagal mengirim pengajuan: ' + (error.response?.data?.error || error.message));
     }
@@ -2884,10 +3001,10 @@ function App() {
       // Cleanup legacy token from localStorage for security
       localStorage.removeItem('karisma_token');
       localStorage.removeItem('ewa_token');
-      setForm(prev => ({...prev, member_no: user.employee_id}));
-      // Fetch authenticated data ONLY when user session is valid
-      fetchReferenceData();
-      fetchApplications();
+      // Fetch authenticated applications data ONLY when user session is valid
+      if (activeTab === 'approval' || activeTab === 'disbursement' || activeTab === 'pengajuan' || isReportTab()) {
+        fetchApplications();
+      }
     } catch (err) {
       console.warn("verifySession error:", err);
       const storedToken = sessionStorage.getItem('lms_auth_token') || localStorage.getItem('lms_auth_token');
@@ -3559,6 +3676,33 @@ function App() {
                       ⚠️ {dateError}
                     </div>
                   )}
+
+                  {/* Compact Header Bar: AVAILABLE LIMIT & TOTAL HUTANG */}
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    background: '#f8fafc',
+                    border: '1px solid #cbd5e1',
+                    borderRadius: '12px',
+                    padding: '8px 16px',
+                    marginBottom: '14px',
+                    gap: '20px',
+                    width: 'fit-content'
+                  }}>
+                    <div>
+                      <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#475569', letterSpacing: '0.5px', textTransform: 'uppercase' }}>AVAILABLE LIMIT</div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#059669', marginTop: '2px' }}>
+                        Rp {Math.round(dashboardSummary?.available_limit || 0).toLocaleString('id-ID')}
+                      </div>
+                    </div>
+                    <div style={{ width: '1px', height: '32px', background: '#cbd5e1' }} />
+                    <div>
+                      <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#475569', letterSpacing: '0.5px', textTransform: 'uppercase' }}>TOTAL HUTANG</div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#dc2626', marginTop: '2px' }}>
+                        Rp {Math.round(dashboardSummary?.total_debt || 0).toLocaleString('id-ID')}
+                      </div>
+                    </div>
+                  </div>
 
                   <form onSubmit={submitApplication} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                     {/* 1. Produk (Baris 1) */}

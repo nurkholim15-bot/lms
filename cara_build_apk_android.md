@@ -19,7 +19,15 @@ npx cap sync android
 
 # 3. Pindah folder & kompilasi file APK baru
 cd android
+
+# Jika di Linux / WSL CLI (Ubuntu/Debian):
 ./gradlew assembleDebug
+
+# Jika di Windows Command Prompt (cmd.exe):
+gradlew.bat assembleDebug
+
+# Jika di Windows PowerShell:
+.\gradlew.bat assembleDebug
 ```
 
 📍 **Path File APK Hasil Build**:  

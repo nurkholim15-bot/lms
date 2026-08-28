@@ -50,7 +50,7 @@ func (b *BaseModel) BeforeUpdate(tx *gorm.DB) error {
 // BaseModel with Soft Delete for Master Tables & Audit Protection
 type MasterBaseModel struct {
 	BaseModel
-	DeletedAt   gorm.DeletedAt `gorm:"column:deleted_at;index;<-:create" json:"deleted_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"column:deleted_at;index" json:"deleted_at"`
 	DeletedUser *string        `gorm:"column:deleted_user" json:"deleted_user"`
 }
 

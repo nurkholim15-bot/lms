@@ -814,10 +814,32 @@ func (h *MasterDataHandler) Delete(c *gin.Context) {
 	case "role-menus":
 		err = h.db.Where("role_id = ? AND menu_id = ?", c.Query("role_id"), c.Query("menu_id")).Delete(&models.RoleMenu{}).Error
 	case "parameters":
+		currentUser := c.GetString("username")
+		if currentUser == "" {
+			currentUser = "admin"
+		}
+		var targetParam models.GlobalParameter
 		if parsedID, errP := strconv.ParseInt(id, 10, 64); errP == nil && parsedID > 0 {
-			err = h.db.Where("id = ?", parsedID).Delete(&models.GlobalParameter{}).Error
+			h.db.Where("id = ?", parsedID).First(&targetParam)
+			err = h.db.Model(&models.GlobalParameter{}).Where("id = ? AND deleted_at IS NULL", parsedID).Updates(map[string]interface{}{
+				"deleted_at":   time.Now(),
+				"updated_at":   time.Now(),
+				"deleted_user": currentUser,
+			}).Error
 		} else {
-			err = h.db.Where("key_name = ?", id).Delete(&models.GlobalParameter{}).Error
+			h.db.Where("key_name = ?", id).First(&targetParam)
+			err = h.db.Model(&models.GlobalParameter{}).Where("key_name = ?", id).Updates(map[string]interface{}{
+				"deleted_at":   time.Now(),
+				"updated_at":   time.Now(),
+				"deleted_user": currentUser,
+			}).Error
+		}
+		if err == nil {
+			if targetParam.KeyName != "" {
+				cache.ParameterCache.Delete(targetParam.KeyName)
+			} else if id != "" {
+				cache.ParameterCache.Delete(id)
+			}
 		}
 	case "users":
 		currentUser := c.GetString("username")
@@ -900,12 +922,17 @@ func (h *MasterDataHandler) GetUserInfo(c *gin.Context) {
 	var userRecord models.User
 	var errU error = gorm.ErrRecordNotFound
 
-	// Prioritaskan pencarian berdasarkan username unik terlebih dahulu
-	errU = h.db.Where("LOWER(username) = LOWER(?) AND deleted_at IS NULL", employeeIDStr).First(&userRecord).Error
-	if errU != nil {
+	// Prioritaskan pencarian RAM Cache IdentityCache terlebih dahulu (0ms SQL)
+	if uPtr, errC := cache.IdentityCache.GetUserByUsername(h.db, employeeIDStr); errC == nil && uPtr != nil {
+		userRecord = *uPtr
+		errU = nil
+	} else {
 		empIDNum, _ := strconv.ParseInt(employeeIDStr, 10, 64)
 		if empIDNum > 0 {
-			errU = h.db.Where("(id = ? OR member_no = ?) AND deleted_at IS NULL", empIDNum, empIDNum).First(&userRecord).Error
+			if uPtrID, errID := cache.IdentityCache.GetUserByID(h.db, empIDNum); errID == nil && uPtrID != nil {
+				userRecord = *uPtrID
+				errU = nil
+			}
 		}
 	}
 
@@ -937,7 +964,7 @@ func (h *MasterDataHandler) GetUserInfo(c *gin.Context) {
 
 	var emp models.Employee
 	if userRecord.MemberNo != nil && *userRecord.MemberNo > 0 {
-		_ = h.db.Where("employee_id = ? OR employee_id = (SELECT employee_id FROM lms_sch.members WHERE member_no = ? LIMIT 1)", *userRecord.MemberNo, *userRecord.MemberNo).First(&emp).Error
+		_ = h.db.Where("employee_id = (SELECT employee_id FROM lms_sch.members WHERE member_no = ? LIMIT 1)", *userRecord.MemberNo).First(&emp).Error
 	}
 
 	if roleID > 0 {
@@ -955,15 +982,15 @@ func (h *MasterDataHandler) GetUserInfo(c *gin.Context) {
 	var menus []models.Menu
 	if roleID == 1 {
 		h.db.Table("lms_sch.menus").
-			Select("menu_id, parent_id, title, icon, path, order_seq").
+			Select("menu_id, parent_id, title, icon, path, order_seq, is_password").
 			Where("deleted_at IS NULL").
 			Order("order_seq asc").
 			Scan(&menus)
 	} else if roleID > 0 {
 		h.db.Table("lms_sch.menus").
-			Select("lms_sch.menus.menu_id, lms_sch.menus.parent_id, lms_sch.menus.title, lms_sch.menus.icon, lms_sch.menus.path, lms_sch.menus.order_seq").
+			Select("lms_sch.menus.menu_id, lms_sch.menus.parent_id, lms_sch.menus.title, lms_sch.menus.icon, lms_sch.menus.path, lms_sch.menus.order_seq, lms_sch.menus.is_password").
 			Joins("JOIN lms_sch.role_menus ON lms_sch.menus.menu_id = lms_sch.role_menus.menu_id").
-			Where("lms_sch.role_menus.role_id = ? AND lms_sch.menus.deleted_at IS NULL", roleID).
+			Where("lms_sch.role_menus.role_id = ? AND lms_sch.menus.deleted_at IS NULL AND lms_sch.role_menus.deleted_at IS NULL", roleID).
 			Order("lms_sch.menus.order_seq asc").
 			Scan(&menus)
 	}
@@ -990,8 +1017,19 @@ func (h *MasterDataHandler) GetUserInfo(c *gin.Context) {
 		phoneStr = emp.PhoneNumber
 	}
 
+	var memNo int64 = 0
+	if userRecord.MemberNo != nil && *userRecord.MemberNo > 0 {
+		memNo = *userRecord.MemberNo
+	} else if emp.EmployeeID > 0 {
+		var m models.Member
+		if errM := h.db.Where("employee_id = ?", emp.EmployeeID).First(&m).Error; errM == nil {
+			memNo = m.MemberNo
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"employee_id":       employeeIDStr,
+		"member_no":         memNo,
 		"nik":               emp.EmployeeID,
 		"name":              name,
 		"role_id":           roleID,

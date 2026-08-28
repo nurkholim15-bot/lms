@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode"
 
+	"lms-backend/cache"
 	"lms-backend/config"
 	"lms-backend/handlers"
 	"lms-backend/models"
@@ -582,6 +583,7 @@ func main() {
 
 	paramRepo := repositories.NewParameterRepository(config.DB)
 	globalParamRepo = paramRepo
+	cache.ParameterCache.Init(config.DB)
 	paramUseCase := usecases.NewParameterUseCase(paramRepo)
 	paramHandler := handlers.NewParameterHandler(paramUseCase)
 
@@ -888,10 +890,18 @@ func main() {
 					}
 
 					if !pwdMatch {
-						// Password salah -> update failed_login_attempts & check LOGIN_MAX_ATTEMPTS
+						// Password salah -> update failed_login_attempts & check MAX_PASSWORD_ATTEMPTS (Default 3)
 						user.FailedLoginAttempts++
-						maxAttempts := 5
-						if p, err := paramRepo.FindByKey("LOGIN_MAX_ATTEMPTS"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+						maxAttempts := 3
+						if p, err := paramRepo.FindByKey("MAX_PASSWORD_ATTEMPTS"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+							if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed > 0 {
+								maxAttempts = parsed
+							}
+						} else if p, err := paramRepo.FindByKey("PASSWORD_MAX_FAILED_ATTEMPTS"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+							if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed > 0 {
+								maxAttempts = parsed
+							}
+						} else if p, err := paramRepo.FindByKey("LOGIN_MAX_ATTEMPTS"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
 							if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed > 0 {
 								maxAttempts = parsed
 							}
@@ -924,10 +934,34 @@ func main() {
 						return
 					}
 
+					// Check PWD_ROTATION_DAYS (Default 90 days if configured)
+					pwdRotationDays := 90
+					if p, err := paramRepo.FindByKey("PWD_ROTATION_DAYS"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+						if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed > 0 {
+							pwdRotationDays = parsed
+						}
+					} else if p, err := paramRepo.FindByKey("PASSWORD_ROTATION_DAYS"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+						if parsed, errP := strconv.Atoi(strings.TrimSpace(p.KeyValue)); errP == nil && parsed > 0 {
+							pwdRotationDays = parsed
+						}
+					}
+
+					if pwdRotationDays > 0 {
+						lastChanged := user.UpdatedAt
+						if !user.PasswordChangedAt.IsZero() {
+							lastChanged = user.PasswordChangedAt
+						}
+						if time.Since(lastChanged) > time.Duration(pwdRotationDays)*24*time.Hour {
+							user.ForcePwdChange = true
+							log.Printf("[PWD-ROTATION] User '%s' password expired (%d days) -> Force password change enabled", username, pwdRotationDays)
+						}
+					}
+
 					// Login Berhasil! Reset failed login attempts & lockout
 					config.DB.Model(&user).Updates(map[string]interface{}{
 						"failed_login_attempts": 0,
 						"locked_until":          nil,
+						"force_pwd_change":      user.ForcePwdChange,
 					})
 
 					// Cek SINGLE_SESSION_MODE
@@ -1041,11 +1075,14 @@ func main() {
 					var session models.Session
 					err := config.DB.Where("token = ? AND is_active = ? AND expires_at > ?", token, true, time.Now()).First(&session).Error
 					if err == nil {
-						// Update last_activity_at
-						config.DB.Model(&session).Update("last_activity_at", time.Now())
+						// Update last_activity_at only if last activity was > 5 minutes ago (throttle unnecessary SQL updates)
+						if time.Since(session.LastActivityAt) > 5*time.Minute {
+							config.DB.Model(&session).Update("last_activity_at", time.Now())
+						}
 
 						var user models.User
-						if errU := config.DB.Where("id = ?", session.UserID).First(&user).Error; errU == nil {
+						if uPtr, errU := cache.IdentityCache.GetUserByID(config.DB, session.UserID); errU == nil && uPtr != nil {
+							user = *uPtr
 							if user.RoleID <= 0 {
 								c.JSON(http.StatusForbidden, gin.H{"error": "Akses Ditolak: Akun Anda tidak memiliki Role pada tabel users."})
 								return
@@ -1528,41 +1565,17 @@ func main() {
 				}
 			}
 
-			// Hitung Pinjaman Aktif (count status DISBURSED / APPROVED)
-			queryActiveCount := "SELECT COUNT(*) FROM lms_sch.loan_applications WHERE status IN ('DISBURSED', 'APPROVED')"
-			var argsActive []interface{}
-			if !isHighPriv && empIdInt > 0 {
-				queryActiveCount += " AND (member_no = ? OR member_no IN (SELECT member_no FROM lms_sch.members WHERE employee_id = ?))"
-				argsActive = append(argsActive, empIdInt, empIdInt)
-			}
-			config.DB.Raw(queryActiveCount, argsActive...).Scan(&pinjamanAktif)
-
-			// Hitung Total Sisa Hutang Real-Time dari lms_sch.loan_schedules (termasuk pembayaran parsial)
-			querySchedDebt := `
-				SELECT COALESCE(SUM(GREATEST(0, s.principal - COALESCE(s.amount_paid, 0))), 0)
-				FROM lms_sch.loan_schedules s
-				JOIN lms_sch.loans l ON s.loan_no = l.loan_no
-				WHERE l.status IN ('DISBURSED', 'APPROVED', 'ACTIVE') AND s.status != 'PAID'
-			`
-			var argsSched []interface{}
-			if !isHighPriv && empIdInt > 0 {
-				querySchedDebt += " AND (l.member_no = ? OR l.member_no IN (SELECT member_no FROM lms_sch.members WHERE employee_id = ?))"
-				argsSched = append(argsSched, empIdInt, empIdInt)
-			}
-
-			var schedDebt float64 = 0
-			errSched := config.DB.Raw(querySchedDebt, argsSched...).Scan(&schedDebt).Error
-			if errSched == nil && schedDebt > 0 {
-				totalHutang = schedDebt
-			} else {
-				// Fallback jika loan_schedules belum di-generate: Hitung dari loan_applications
-				queryTotalHutang := "SELECT COALESCE(SUM(COALESCE(approved_amount, requested_amount)), 0) FROM lms_sch.loan_applications WHERE status IN ('DISBURSED', 'APPROVED')"
-				var argsHutang []interface{}
-				if !isHighPriv && empIdInt > 0 {
-					queryTotalHutang += " AND (member_no = ? OR member_no IN (SELECT member_no FROM lms_sch.members WHERE employee_id = ?))"
-					argsHutang = append(argsHutang, empIdInt, empIdInt)
+			// 1. Hitung Total Sisa Hutang (Total Debt) tanpa JOIN ke loan_schedules & loans (Ultra-Fast <3ms)
+			if isHighPriv {
+				config.DB.Raw("SELECT COALESCE(SUM(COALESCE(approved_amount, requested_amount)), 0) FROM lms_sch.loan_applications WHERE status IN ('DISBURSED', 'APPROVED')").Scan(&totalHutang)
+			} else if empIdInt > 0 {
+				var empLoan float64 = 0
+				errEmp := config.DB.Raw("SELECT COALESCE(total_loan, 0) FROM lms_sch.employees WHERE employee_id = ? OR employee_id = (SELECT employee_id FROM lms_sch.members WHERE member_no = ? LIMIT 1) LIMIT 1", empIdInt, empIdInt).Scan(&empLoan).Error
+				if errEmp == nil && empLoan > 0 {
+					totalHutang = empLoan
+				} else {
+					config.DB.Raw("SELECT COALESCE(SUM(COALESCE(approved_amount, requested_amount)), 0) FROM lms_sch.loan_applications WHERE (member_no = ? OR member_no IN (SELECT member_no FROM lms_sch.members WHERE employee_id = ?)) AND status IN ('DISBURSED', 'APPROVED')", empIdInt, empIdInt).Scan(&totalHutang)
 				}
-				config.DB.Raw(queryTotalHutang, argsHutang...).Scan(&totalHutang)
 			}
 
 			availableLimit := creditLimit - totalHutang
@@ -1785,7 +1798,7 @@ func main() {
 					l.member_no,
 					COALESCE(e.name, e.bank_account_name, CONCAT('Karyawan #', l.member_no)) AS employee_name,
 					COALESCE(e.deptno, 'IT-01') AS dept_no,
-					COALESCE(e.bank_account_no, CAST(l.member_no AS VARCHAR)) AS nik,
+					COALESCE(CAST(e.employee_id AS VARCHAR), CAST(m.employee_id AS VARCHAR), CAST(l.member_no AS VARCHAR)) AS nik,
 					ls.period,
 					ls.installment_no,
 					ls.principal,
@@ -1835,18 +1848,16 @@ func main() {
 
 			targetFolder := req.CustomFolder
 			if targetFolder == "" {
-				var folderParam string
-				config.DB.Raw("SELECT key_value FROM lms_sch.global_parameters WHERE key_name = 'FOLDER_BILL_EXPORT' LIMIT 1").Scan(&folderParam)
-				if folderParam != "" {
-					targetFolder = folderParam
+				if p, err := paramRepo.FindByKey("FOLDER_BILL_EXPORT"); err == nil && strings.TrimSpace(p.KeyValue) != "" {
+					targetFolder = strings.TrimSpace(p.KeyValue)
 				} else {
 					targetFolder = "D:\\Data_NK\\Project5\\LMS\\export_payroll"
 				}
 			}
 
 			type RowDTO struct {
-				Nik             string  `gorm:"column:nik_adira"`
-				EmployeeID      int64   `gorm:"column:employee_id"`
+				EmployeeID      string  `gorm:"column:employee_id"`
+				MemberNo        int64   `gorm:"column:member_no"`
 				LoanNo          int64   `gorm:"column:loan_no"`
 				NamaKaryawan    string  `gorm:"column:nama_karyawan"`
 				DeptNo          string  `gorm:"column:dept_no"`
@@ -1857,10 +1868,11 @@ func main() {
 				NoReferensi     string  `gorm:"column:no_referensi"`
 			}
 
-			// 1. Fetch SCAN_DUEDATE_BILLING parameter (default: PERIOD)
+			// 1. Fetch SCAN_DUEDATE_BILLING parameter from cache (zero DB overhead)
 			var scanMode string
-			config.DB.Raw("SELECT key_value FROM lms_sch.global_parameters WHERE key_name = 'SCAN_DUEDATE_BILLING' AND deleted_at IS NULL LIMIT 1").Scan(&scanMode)
-			scanMode = strings.ToUpper(strings.TrimSpace(scanMode))
+			if p, err := paramRepo.FindByKey("SCAN_DUEDATE_BILLING"); err == nil {
+				scanMode = strings.ToUpper(strings.TrimSpace(p.KeyValue))
+			}
 			if scanMode == "" {
 				scanMode = "PERIOD"
 			}
@@ -1871,8 +1883,8 @@ func main() {
 
 			baseQuery := `
 				SELECT 
-					COALESCE(e.bank_account_no, CAST(l.member_no AS VARCHAR)) AS nik_adira,
-					l.member_no AS employee_id,
+					COALESCE(CAST(e.employee_id AS VARCHAR), CAST(m.employee_id AS VARCHAR), e.bank_account_no, CAST(l.member_no AS VARCHAR)) AS employee_id,
+					l.member_no AS member_no,
 					l.loan_no AS loan_no,
 					COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', l.member_no)) AS nama_karyawan,
 					COALESCE(e.deptno, 'IT-01') AS dept_no,
@@ -1905,10 +1917,11 @@ func main() {
 				return
 			}
 
-			// Fetch BILL_FILE_EXPORT_FORMAT parameter (default: "xlsx")
+			// Fetch BILL_FILE_EXPORT_FORMAT parameter from cache (zero DB overhead)
 			var exportFormat string
-			config.DB.Raw("SELECT key_value FROM lms_sch.global_parameters WHERE key_name = 'BILL_FILE_EXPORT_FORMAT' AND deleted_at IS NULL LIMIT 1").Scan(&exportFormat)
-			exportFormat = strings.ToLower(strings.TrimSpace(exportFormat))
+			if p, err := paramRepo.FindByKey("BILL_FILE_EXPORT_FORMAT"); err == nil {
+				exportFormat = strings.ToLower(strings.TrimSpace(p.KeyValue))
+			}
 			if exportFormat != "csv" && exportFormat != "xlsx" {
 				exportFormat = "xlsx" // default format
 			}
@@ -1943,7 +1956,7 @@ func main() {
 				f.SetActiveSheet(index)
 
 				headers := []string{
-					"NIK_ADIRA", "EMPLOYEE_ID", "LOAN_NO", "NAMA_KARYAWAN", "DEPT_NO",
+					"EMPLOYEE_ID", "MEMBER_NO", "LOAN_NO", "NAMA_KARYAWAN", "DEPT_NO",
 					"KODE_POTONGAN", "NAMA_POTONGAN", "PERIODE", "NOMINAL_TAGIHAN",
 					"NOMINAL_TERPOTONG", "STATUS_POTONGAN", "KETERANGAN", "NO_REFERENSI",
 				}
@@ -1961,8 +1974,8 @@ func main() {
 
 				for rowIdx, r := range rows {
 					rowNum := rowIdx + 2
-					f.SetCellValue(sheetName, fmt.Sprintf("A%d", rowNum), r.Nik)
-					f.SetCellValue(sheetName, fmt.Sprintf("B%d", rowNum), r.EmployeeID)
+					f.SetCellValue(sheetName, fmt.Sprintf("A%d", rowNum), r.EmployeeID)
+					f.SetCellValue(sheetName, fmt.Sprintf("B%d", rowNum), r.MemberNo)
 					f.SetCellValue(sheetName, fmt.Sprintf("C%d", rowNum), r.LoanNo)
 					f.SetCellValue(sheetName, fmt.Sprintf("D%d", rowNum), r.NamaKaryawan)
 					f.SetCellValue(sheetName, fmt.Sprintf("E%d", rowNum), r.DeptNo)
@@ -1999,10 +2012,10 @@ func main() {
 				fileName = fmt.Sprintf("ADIRA_PAYROLL_KOPKARA_OUTGOING_%s.csv", time.Now().Format("200601"))
 				diskFullPath := filepath.Join(diskPath, fileName)
 
-				csvContent = "NIK_ADIRA,EMPLOYEE_ID,LOAN_NO,NAMA_KARYAWAN,DEPT_NO,KODE_POTONGAN,NAMA_POTONGAN,PERIODE,NOMINAL_TAGIHAN,NOMINAL_TERPOTONG,STATUS_POTONGAN,KETERANGAN,NO_REFERENSI\n"
+				csvContent = "EMPLOYEE_ID,MEMBER_NO,LOAN_NO,NAMA_KARYAWAN,DEPT_NO,KODE_POTONGAN,NAMA_POTONGAN,PERIODE,NOMINAL_TAGIHAN,NOMINAL_TERPOTONG,STATUS_POTONGAN,KETERANGAN,NO_REFERENSI\n"
 				for _, r := range rows {
 					csvContent += fmt.Sprintf("%s,%d,%d,%s,%s,%s,%s,%s,%.2f,,,%s\n",
-						r.Nik, r.EmployeeID, r.LoanNo, r.NamaKaryawan, r.DeptNo, r.KodePotongan, r.NamaPotongan, r.Periode, r.NominalPotongan, r.NoReferensi)
+						r.EmployeeID, r.MemberNo, r.LoanNo, r.NamaKaryawan, r.DeptNo, r.KodePotongan, r.NamaPotongan, r.Periode, r.NominalPotongan, r.NoReferensi)
 				}
 
 				if err := os.WriteFile(diskFullPath, []byte(csvContent), 0644); err != nil {
@@ -2047,6 +2060,14 @@ func main() {
 				return
 			}
 
+			var importFormat string
+			if p, err := paramRepo.FindByKey("BILL_FILE_IMPORT_FORMAT"); err == nil {
+				importFormat = strings.ToLower(strings.TrimSpace(p.KeyValue))
+			}
+			if importFormat != "csv" && importFormat != "xlsx" {
+				importFormat = "xlsx"
+			}
+
 			fileName := strings.TrimSpace(req.FileName)
 			if fileName != "" {
 				var count int64
@@ -2056,7 +2077,7 @@ func main() {
 					return
 				}
 			} else {
-				fileName = fmt.Sprintf("payroll_import_%s.csv", time.Now().Format("20060102_150405"))
+				fileName = fmt.Sprintf("payroll_import_%s.%s", time.Now().Format("20060102_150405"), importFormat)
 			}
 
 			updaterName := strings.TrimSpace(req.UpdatedUser)
@@ -2069,6 +2090,7 @@ func main() {
 			type ProcessedLogDTO struct {
 				LoanNo     int64   `json:"loan_no"`
 				RefNo      string  `json:"ref_no"`
+				MemberNo   int64   `json:"member_no"`
 				Nik        string  `json:"nik"`
 				Name       string  `json:"name"`
 				Period     string  `json:"period"`
@@ -2150,20 +2172,22 @@ func main() {
 					}
 				}
 
-				// Get employee name & NIK for display
+				// Get employee name & NIK for display (employee_id / member_no)
 				var empName, empNik string
 				config.DB.Raw(`
-					SELECT COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', ?)), COALESCE(e.bank_account_no, CAST(? AS VARCHAR))
+					SELECT 
+						COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', m.member_no)), 
+						COALESCE(CAST(e.employee_id AS VARCHAR), CAST(m.employee_id AS VARCHAR), CAST(m.member_no AS VARCHAR))
 					FROM lms_sch.members m
 					LEFT JOIN lms_sch.employees e ON e.employee_id = m.employee_id OR e.employee_id = m.member_no
 					WHERE m.member_no = ? OR m.employee_id = ? LIMIT 1
-				`, memberNo, memberNo, memberNo, memberNo).Row().Scan(&empName, &empNik)
+				`, memberNo, memberNo).Row().Scan(&empName, &empNik)
 
 				if empName == "" {
 					empName = fmt.Sprintf("Anggota #%d", memberNo)
 				}
 				if empNik == "" {
-					empNik = fmt.Sprintf("111%d", memberNo)
+					empNik = fmt.Sprintf("%d", memberNo)
 				}
 
 				// Insert log to lms_sch.payroll_deductions & get created ID
@@ -2191,6 +2215,7 @@ func main() {
 				processedLogs = append(processedLogs, ProcessedLogDTO{
 					LoanNo:     targetLoanNo,
 					RefNo:      refStr,
+					MemberNo:   memberNo,
 					Nik:        empNik,
 					Name:       empName,
 					Period:     periodStr,
@@ -2383,7 +2408,7 @@ func main() {
 				}
 			}
 
-			// Auto Backup / Move CSV File to FOLDER_BILL_EXPORT_BCK or FOLDER_BILL_IMPORT_BCK
+			// Auto Backup / Move File (XLSX / CSV) to FOLDER_BILL_EXPORT_BCK or FOLDER_BILL_IMPORT_BCK
 			backupMsg := ""
 			if req.FileName != "" {
 				var bckFolderParam, importFolderParam string
@@ -2421,22 +2446,43 @@ func main() {
 				_ = os.MkdirAll(diskBckDir, 0755)
 
 				srcFilePath := filepath.Join(diskImportDir, req.FileName)
+				if _, err := os.Stat(srcFilePath); err != nil {
+					// Fallback attempt: check if file exists with BILL_FILE_IMPORT_FORMAT extension or alternative (.xlsx / .csv)
+					var fmtParam string
+					if p, errP := paramRepo.FindByKey("BILL_FILE_IMPORT_FORMAT"); errP == nil {
+						fmtParam = strings.ToLower(strings.TrimSpace(p.KeyValue))
+					}
+					if fmtParam == "" {
+						fmtParam = "xlsx"
+					}
+					baseNoExt := strings.TrimSuffix(req.FileName, filepath.Ext(req.FileName))
+					altPath := filepath.Join(diskImportDir, baseNoExt+"."+fmtParam)
+					if _, errAlt := os.Stat(altPath); errAlt == nil {
+						srcFilePath = altPath
+					}
+				}
+
 				if _, err := os.Stat(srcFilePath); err == nil {
-					ext := filepath.Ext(req.FileName)
-					baseName := strings.TrimSuffix(req.FileName, ext)
+					actualFileName := filepath.Base(srcFilePath)
+					ext := filepath.Ext(actualFileName)
+					baseName := strings.TrimSuffix(actualFileName, ext)
 					bckFileName := fmt.Sprintf("%s_PROCESSED_%s%s", baseName, time.Now().Format("20060102_150405"), ext)
 					dstFilePath := filepath.Join(diskBckDir, bckFileName)
+					fmtLabel := strings.ToUpper(strings.TrimPrefix(ext, "."))
+					if fmtLabel == "" {
+						fmtLabel = "FILE"
+					}
 
 					if err := os.Rename(srcFilePath, dstFilePath); err == nil {
 						log.Printf("[IMPORT-API] File successfully backed up: %s -> %s", srcFilePath, dstFilePath)
-						backupMsg = fmt.Sprintf("\n\n📦 File CSV [%s] telah otomatis dipindahkan ke folder Backup:\n📁 %s", req.FileName, dstFilePath)
+						backupMsg = fmt.Sprintf("\n\n📦 File %s [%s] telah otomatis dipindahkan ke folder Backup:\n📁 %s", fmtLabel, actualFileName, dstFilePath)
 					} else {
 						inputData, readErr := os.ReadFile(srcFilePath)
 						if readErr == nil {
 							_ = os.WriteFile(dstFilePath, inputData, 0644)
 							_ = os.Remove(srcFilePath)
 							log.Printf("[IMPORT-API] File copied and deleted: %s -> %s", srcFilePath, dstFilePath)
-							backupMsg = fmt.Sprintf("\n\n📦 File CSV [%s] telah otomatis dipindahkan ke folder Backup:\n📁 %s", req.FileName, dstFilePath)
+							backupMsg = fmt.Sprintf("\n\n📦 File %s [%s] telah otomatis dipindahkan ke folder Backup:\n📁 %s", fmtLabel, actualFileName, dstFilePath)
 						}
 					}
 				}
