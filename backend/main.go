@@ -23,6 +23,7 @@ import (
 	"lms-backend/handlers"
 	"lms-backend/models"
 	"lms-backend/repositories"
+	"lms-backend/services"
 	"lms-backend/usecases"
 
 	"github.com/Knetic/govaluate"
@@ -1669,7 +1670,7 @@ func main() {
 			var args []interface{}
 			if q != "" {
 				likeStr := "%" + strings.ToLower(q) + "%"
-				whereClause = "WHERE LOWER(CAST(m.member_no AS VARCHAR)) LIKE ? OR LOWER(CAST(COALESCE(e.employee_id, m.employee_id) AS VARCHAR)) LIKE ? OR LOWER(COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', m.member_no))) LIKE ?"
+				whereClause = "WHERE LOWER(CAST(m.member_no AS VARCHAR)) LIKE ? OR LOWER(CAST(COALESCE(e.employee_id, m.employee_id) AS VARCHAR)) LIKE ? OR LOWER(COALESCE(e.name, CONCAT('Anggota #', m.member_no))) LIKE ?"
 				args = append(args, likeStr, likeStr, likeStr)
 			}
 
@@ -1677,7 +1678,7 @@ func main() {
 				SELECT 
 					m.member_no,
 					COALESCE(e.employee_id, m.employee_id) AS employee_id,
-					COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', m.member_no)) AS name
+					COALESCE(e.name, CONCAT('Anggota #', m.member_no)) AS name
 				FROM lms_sch.members m
 				LEFT JOIN lms_sch.employees e ON m.employee_id = e.employee_id
 				%s
@@ -1730,7 +1731,7 @@ func main() {
 				SELECT 
 					m.member_no,
 					COALESCE(e.employee_id, m.employee_id) AS employee_id,
-					COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', m.member_no)) AS name
+					COALESCE(e.name, CONCAT('Anggota #', m.member_no)) AS name
 				FROM lms_sch.members m
 				LEFT JOIN lms_sch.employees e ON m.employee_id = e.employee_id
 				ORDER BY m.member_no ASC;
@@ -1796,7 +1797,7 @@ func main() {
 					ls.loan_no,
 					l.application_no,
 					l.member_no,
-					COALESCE(e.name, e.bank_account_name, CONCAT('Karyawan #', l.member_no)) AS employee_name,
+					COALESCE(e.name, CONCAT('Karyawan #', l.member_no)) AS employee_name,
 					COALESCE(e.deptno, 'IT-01') AS dept_no,
 					COALESCE(CAST(e.employee_id AS VARCHAR), CAST(m.employee_id AS VARCHAR), CAST(l.member_no AS VARCHAR)) AS nik,
 					ls.period,
@@ -1886,7 +1887,7 @@ func main() {
 					COALESCE(CAST(e.employee_id AS VARCHAR), CAST(m.employee_id AS VARCHAR), e.bank_account_no, CAST(l.member_no AS VARCHAR)) AS employee_id,
 					l.member_no AS member_no,
 					l.loan_no AS loan_no,
-					COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', l.member_no)) AS nama_karyawan,
+					COALESCE(e.name, CONCAT('Anggota #', l.member_no)) AS nama_karyawan,
 					COALESCE(e.deptno, 'IT-01') AS dept_no,
 					'POT_KOPKARA' AS kode_potongan,
 					'Potongan Angsuran Kopkara' AS nama_potongan,
@@ -2036,6 +2037,126 @@ func main() {
 			}
 		})
 
+		recordCashBankTransactionHelper := func(db *gorm.DB, typeCode string, direction string, amount float64, refType string, refNo string, memberNo int64, description string, userStr string) error {
+			if amount <= 0 {
+				return nil
+			}
+
+			var defaultAccNo string
+			db.Raw("SELECT key_value FROM lms_sch.global_parameters WHERE key_name = 'DEFAULT_DISBURSEMENT_ACCOUNT_ID' LIMIT 1").Scan(&defaultAccNo)
+
+			var account models.CashBankAccount
+			var errFind error
+
+			if strings.TrimSpace(defaultAccNo) != "" {
+				errFind = db.Where("account_number = ? AND deleted_at IS NULL AND is_active = true", strings.TrimSpace(defaultAccNo)).First(&account).Error
+			}
+
+			if errFind != nil || account.AccountID == 0 {
+				if errFirst := db.Where("deleted_at IS NULL AND is_active = true").Order("account_id ASC").First(&account).Error; errFirst != nil {
+					log.Printf("[CASHBANK-WARNING] Rekening Operasional Kas/Bank Koperasi tidak ditemukan: %v", errFirst)
+					return nil
+				}
+			}
+
+			balanceBefore := account.CurrentBalance
+			var balanceAfter float64
+
+			if strings.ToUpper(direction) == "IN" {
+				balanceAfter = balanceBefore + amount
+			} else {
+				balanceAfter = balanceBefore - amount
+			}
+
+			now := time.Now()
+			if errUpd := db.Exec("UPDATE lms_sch.cashbank_accounts SET current_balance = ?, updated_at = ?, updated_user = ? WHERE account_id = ?", balanceAfter, now, userStr, account.AccountID).Error; errUpd != nil {
+				log.Printf("[CASHBANK-ERROR] Gagal update saldo cashbank_accounts: %v", errUpd)
+				return errUpd
+			}
+
+			txNo := fmt.Sprintf("CB-%s-%06d", now.Format("200601"), time.Now().UnixNano()%1000000)
+
+			var memNoPtr *int64
+			var empIdPtr *int64
+			if memberNo > 0 {
+				var m models.Member
+				if errM := db.Where("member_no = ? OR employee_id = ?", memberNo, memberNo).First(&m).Error; errM == nil {
+					memNoPtr = &m.MemberNo
+					if m.EmployeeID > 0 {
+						empIdPtr = &m.EmployeeID
+					}
+				} else {
+					memNoPtr = &memberNo
+				}
+			}
+
+			cbTrans := models.CashBankTransaction{
+				TransactionNo:   txNo,
+				TransactionDate: now,
+				BankCode:        account.BankCode,
+				BankAccountNo:   account.AccountNumber,
+				TypeCode:        typeCode,
+				Direction:       direction,
+				Amount:          amount,
+				BalanceBefore:   balanceBefore,
+				BalanceAfter:    balanceAfter,
+				ReferenceType:   refType,
+				ReferenceNo:     refNo,
+				MemberNo:        memNoPtr,
+				EmployeeID:      empIdPtr,
+				Description:     description,
+			}
+			cbTrans.CreatedAt = &now
+			cbTrans.CreatedUser = &userStr
+			cbTrans.UpdatedAt = &now
+			cbTrans.UpdatedUser = &userStr
+
+			if errCreate := db.Create(&cbTrans).Error; errCreate != nil {
+				log.Printf("[CASHBANK-ERROR] Gagal mencatat cashbank_transactions: %v", errCreate)
+				return errCreate
+			}
+
+			log.Printf("[CASHBANK-SUCCESS] Mutasi [%s %s] Ref %s memotong/tambah saldo Rekening %s (%s): Rp %.2f -> Rp %.2f (Tx: %s)",
+				typeCode, direction, refNo, account.AccountNumber, account.BankCode, balanceBefore, balanceAfter, txNo)
+
+			if memberNo > 0 && (typeCode == "RPMN" || typeCode == "RPIP") {
+				var emp models.Employee
+				var targetEmpID int64 = memberNo
+				if empIdPtr != nil && *empIdPtr > 0 {
+					targetEmpID = *empIdPtr
+				} else {
+					var m models.Member
+					if errM := db.Where("member_no = ? OR employee_id = ?", memberNo, memberNo).First(&m).Error; errM == nil && m.EmployeeID > 0 {
+						targetEmpID = m.EmployeeID
+					}
+				}
+				db.Where("employee_id = ? OR employee_id = ?", targetEmpID, memberNo).First(&emp)
+				if emp.EmployeeID > 0 {
+					amtStr := services.FormatIDR(amount)
+					waMsg := fmt.Sprintf("🔵 [PELUNASAN ANGSURAN DITERIMA]\n\nHalo %s,\nPembayaran angsuran pinjaman Anda sebesar %s (%s) telah berhasil diterima dan tercatat di sistem pada %s.\n\nTerima kasih,\nKopkara LMS EWA System",
+						emp.Name, amtStr, description, now.Format("02-01-2006 15:04"))
+					htmlMsg := fmt.Sprintf(`
+						<div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+							<h2 style="color: #3b82f6;">🔵 Pembayaran Angsuran Diterima</h2>
+							<p>Halo <b>%s</b>,</p>
+							<p>Pembayaran angsuran pinjaman Anda telah berhasil kami terima dengan rincian:</p>
+							<table style="width: 100%%; max-width: 500px; border-collapse: collapse; margin: 15px 0;">
+								<tr><td style="padding: 8px; border-bottom: 1px solid #ddd;">Tipe Pembayaran</td><td style="padding: 8px; border-bottom: 1px solid #ddd;"><b>%s</b></td></tr>
+								<tr><td style="padding: 8px; border-bottom: 1px solid #ddd;">Nominal Diterima</td><td style="padding: 8px; border-bottom: 1px solid #ddd; color: #3b82f6; font-weight: bold;">%s</td></tr>
+								<tr><td style="padding: 8px; border-bottom: 1px solid #ddd;">Referensi</td><td style="padding: 8px; border-bottom: 1px solid #ddd;">%s</td></tr>
+								<tr><td style="padding: 8px; border-bottom: 1px solid #ddd;">Waktu Transaksi</td><td style="padding: 8px; border-bottom: 1px solid #ddd;">%s</td></tr>
+							</table>
+							<p>Terima kasih atas pembayaran Anda.</p>
+						</div>
+					`, emp.Name, typeCode, amtStr, refNo, now.Format("02-01-2006 15:04"))
+
+					services.DispatchEventNotification("REPAYMENT", emp.PhoneNumber, emp.Email, fmt.Sprintf("Pembayaran Angsuran %s Diterima - Kopkara EWA", amtStr), waMsg, htmlMsg, db)
+				}
+			}
+
+			return nil
+		}
+
 		// Import Payroll Reconciliation & Update Database Endpoint
 		api.POST("/payroll/import", func(c *gin.Context) {
 			type ImportRow struct {
@@ -2176,7 +2297,7 @@ func main() {
 				var empName, empNik string
 				config.DB.Raw(`
 					SELECT 
-						COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', m.member_no)), 
+						COALESCE(e.name, CONCAT('Anggota #', m.member_no)), 
 						COALESCE(CAST(e.employee_id AS VARCHAR), CAST(m.employee_id AS VARCHAR), CAST(m.member_no AS VARCHAR))
 					FROM lms_sch.members m
 					LEFT JOIN lms_sch.employees e ON e.employee_id = m.employee_id OR e.employee_id = m.member_no
@@ -2224,6 +2345,12 @@ func main() {
 					Status:     logStatus,
 					Keterangan: logReason,
 				})
+
+				if finalDeducted > 0 && logStatus != "FAILED" {
+					refNoStr := fmt.Sprintf("PAY-%d-%s", targetLoanNo, periodStr)
+					descStr := fmt.Sprintf("Pelunasan Import Payroll [%s] - %s (NIK: %s) - Pinjaman #%d", fileName, empName, empNik, targetLoanNo)
+					_ = recordCashBankTransactionHelper(config.DB, "RPIP", "IN", finalDeducted, "PAYROLL_IMPORT", refNoStr, memberNo, descStr, updaterName)
+				}
 
 				// 1. Direct LOAN_NO Processing Branch (when CSV row explicitly specifies loan_no)
 				if row.LoanNo > 0 {
@@ -2639,6 +2766,12 @@ func main() {
 				}
 			}
 
+			if req.Nominal > 0 {
+				refNoStr := fmt.Sprintf("PAY-%d-%s", req.LoanNo, req.Period)
+				descStr := fmt.Sprintf("Pelunasan Manual [%s] - Ref: %s - %s", req.PaymentType, req.ReferenceNo, req.Notes)
+				_ = recordCashBankTransactionHelper(config.DB, "RPMN", "IN", req.Nominal, "REPAYMENT_MANUAL", refNoStr, req.MemberNo, descStr, updaterName)
+			}
+
 			c.JSON(http.StatusOK, gin.H{
 				"status":  "success",
 				"message": fmt.Sprintf("Berhasil memproses Pelunasan Manual [%s] sebesar Rp %.2f untuk Pinjaman #%d oleh User ID: %s", req.PaymentType, req.Nominal, req.LoanNo, updaterName),
@@ -2653,7 +2786,7 @@ func main() {
 					pd.id,
 					pd.loan_no,
 					COALESCE(l.member_no, 0) AS member_no,
-					COALESCE(e.name, e.bank_account_name, 'Karyawan') AS employee_name,
+					COALESCE(e.name, 'Karyawan') AS employee_name,
 					pd.period,
 					pd.nominal_original,
 					pd.nominal_deducted,
@@ -2677,6 +2810,103 @@ func main() {
 			var logs []models.LoanPayrollImportLog
 			config.DB.Raw("SELECT * FROM lms_sch.loan_payroll_import_logs ORDER BY id DESC LIMIT 100").Scan(&logs)
 			c.JSON(http.StatusOK, gin.H{"status": "success", "data": logs})
+		})
+
+		// GET Email Diagnostic & Test Endpoint
+		api.GET("/test-email", func(c *gin.Context) {
+			toEmail := c.DefaultQuery("to", "nkholim@yahoo.com")
+			smtpHost := cache.ParameterCache.Get("SMTP_HOST", "smtp.gmail.com", config.DB)
+			if envHost := strings.TrimSpace(os.Getenv("SMTP_HOST")); envHost != "" {
+				smtpHost = envHost
+			}
+
+			smtpPort := cache.ParameterCache.Get("SMTP_PORT", "587", config.DB)
+			if envPort := strings.TrimSpace(os.Getenv("SMTP_PORT")); envPort != "" {
+				smtpPort = envPort
+			}
+
+			smtpUser := strings.TrimSpace(os.Getenv("SMTP_USER"))
+			if smtpUser == "" {
+				smtpUser = strings.TrimSpace(os.Getenv("SMTP_USERNAME"))
+			}
+			if smtpUser == "" {
+				dbUser := cache.ParameterCache.Get("SMTP_USERNAME", "", config.DB)
+				if dbUser != "" && dbUser != "your-email@gmail.com" {
+					smtpUser = dbUser
+				}
+			}
+
+			smtpPass := strings.TrimSpace(os.Getenv("SMTP_PASSWORD"))
+			if smtpPass == "" {
+				smtpPass = strings.TrimSpace(os.Getenv("SMTP_PASS"))
+			}
+			if smtpPass == "" {
+				dbPass := cache.ParameterCache.Get("SMTP_PASSWORD", "", config.DB)
+				if dbPass != "" && !strings.HasPrefix(dbPass, "xxxx") {
+					smtpPass = dbPass
+				}
+			}
+
+			fromName := cache.ParameterCache.Get("SMTP_FROM_NAME", "Kopkara LMS System", config.DB)
+			if envName := strings.TrimSpace(os.Getenv("SMTP_FROM_NAME")); envName != "" {
+				fromName = envName
+			}
+
+			fromEmail := cache.ParameterCache.Get("SMTP_FROM_EMAIL", smtpUser, config.DB)
+			if envFrom := strings.TrimSpace(os.Getenv("SMTP_FROM_EMAIL")); envFrom != "" {
+				fromEmail = envFrom
+			}
+			if fromEmail == "" {
+				fromEmail = smtpUser
+			}
+
+			passMasked := ""
+			if len(smtpPass) > 4 {
+				passMasked = smtpPass[:2] + "****" + smtpPass[len(smtpPass)-2:]
+			} else if smtpPass != "" {
+				passMasked = "****"
+			}
+
+			log.Printf("[DIAGNOSTIC-TEST-EMAIL] Testing email to '%s' using Host: %s:%s | User: %s | PassLen: %d", toEmail, smtpHost, smtpPort, smtpUser, len(smtpPass))
+
+			subject := "🔍 Test Email Diagnostic Notifikasi LMS Kopkara"
+			htmlBody := fmt.Sprintf(`
+				<div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+					<h2 style="color: #3b82f6;">🟢 Test Email Notifikasi LMS Kopkara</h2>
+					<p>Email ini dikirim otomatis oleh sistem LMS Kopkara EWA untuk menguji koneksi SMTP Gmail.</p>
+					<ul>
+						<li><b>SMTP Host:</b> %s:%s</li>
+						<li><b>Pengirim:</b> %s (%s)</li>
+						<li><b>Penerima:</b> %s</li>
+						<li><b>Waktu Uji:</b> %s</li>
+					</ul>
+				</div>
+			`, smtpHost, smtpPort, fromName, fromEmail, toEmail, time.Now().Format("02-01-2006 15:04:05"))
+
+			err := services.SendEmailNotification(toEmail, subject, htmlBody, true, config.DB)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"status":      "FAILED",
+					"error":       err.Error(),
+					"to":          toEmail,
+					"host":        smtpHost,
+					"port":        smtpPort,
+					"user":        smtpUser,
+					"pass_len":    len(smtpPass),
+					"pass_masked": passMasked,
+					"hint":        "Periksa log terminal untuk rincian error SMTP. Jika Gmail, pastikan menggunakan 16-karakter App Password (bukan password normal Gmail).",
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "SUCCESS",
+				"message": fmt.Sprintf("Berhasil mengirim Email uji ke %s via %s:%s!", toEmail, smtpHost, smtpPort),
+				"to":      toEmail,
+				"host":    smtpHost,
+				"port":    smtpPort,
+				"user":    smtpUser,
+			})
 		})
 
 		// POST Payroll Adjustment Endpoint
@@ -2783,6 +3013,16 @@ func main() {
 				}
 			}
 
+			if adjVal > 0 {
+				typeCode := "ADJI"
+				dir := "IN"
+				if strings.Contains(strings.ToUpper(req.AdjustmentType), "OUT") || strings.Contains(strings.ToUpper(req.AdjustmentType), "REFUND") {
+					typeCode = "ADJO"
+					dir = "OUT"
+				}
+				_ = recordCashBankTransactionHelper(config.DB, typeCode, dir, adjVal, "ADJUSTMENT", req.RefNo, 0, fmt.Sprintf("Adjustment [%s] - Ref: %s - %s", req.AdjustmentType, req.RefNo, notesStr), updaterName)
+			}
+
 			c.JSON(http.StatusOK, gin.H{
 				"status":  "success",
 				"message": fmt.Sprintf("Adjustment [%s] berhasil disimpan dengan referensi %s: '%s'", req.AdjustmentType, req.RefNo, notesStr),
@@ -2833,7 +3073,7 @@ func main() {
 
 			config.DB.Raw(`
 				SELECT pa.id, pa.period, pa.loan_no, pa.ref_no, pa.adjustment_type, pa.original_amount, pa.deducted_amount, pa.adjusted_amount, pa.notes, pa.created_at, pa.created_user,
-				       COALESCE(e.name, e.bank_account_name, CONCAT('Anggota #', m.member_no), 'Anggota #110101') as employee_name,
+				       COALESCE(e.name, CONCAT('Anggota #', m.member_no), 'Anggota #110101') as employee_name,
 				       COALESCE(CAST(m.member_no AS VARCHAR), CAST(pa.loan_no AS VARCHAR), '110101') as member_no
 				FROM lms_sch.payroll_adjustments pa
 				LEFT JOIN lms_sch.payroll_deductions pd ON CAST(pa.ref_no AS VARCHAR) = CAST(pd.id AS VARCHAR)

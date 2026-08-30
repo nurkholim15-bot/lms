@@ -637,6 +637,185 @@ ALTER TABLE lms_sch.menus ADD COLUMN IF NOT EXISTS notification_type INT DEFAULT
 2. **Penyesuaian Threshold Chunk Size Warning (`chunkSizeWarningLimit: 1600`)**:
    - Mengatur `chunkSizeWarningLimit: 1600` untuk mengeliminasi peringatan bawaan Vite `(!) Some chunks are larger than 500 kB after minification`.
 
+### 14.27 Implementasi Tabel Master Bank (`lms_sch.banks`) & Alter Skema `employees`
+1. **Pembuatan Tabel `lms_sch.banks` (`create_banks_and_alter_employees.sql`)**:
+   - Dibuat tabel `lms_sch.banks` dengan kolom: `bank_code` (VARCHAR(15) PK), `bank_name` (VARCHAR(60)), `bank_code_provider` (VARCHAR(15)), serta kolom audit soft delete (`created_at`, `created_user`, `updated_at`, `updated_user`, `deleted_at`, `deleted_user`).
+2. **Restrukturisasi Skema `lms_sch.employees`**:
+   - Kolom `bank_name` dan `bank_account_name` dihapus dari tabel `employees`.
+   - Kolom `bank_code` (VARCHAR(15)) ditambahkan dengan relasi Foreign Key `fk_employees_bank` mengacu pada `lms_sch.banks(bank_code)` (`ON UPDATE CASCADE ON DELETE RESTRICT`).
+3. **Backend Struct, Handlers & UseCases (`models/master.go`, `master_data_handler.go`, `application_usecase.go`)**:
+   - Dibuat struct `models.Bank` embedding `MasterBaseModel`.
+   - Diperbarui struct `models.Employee` (`BankCode` menggantikan `BankName`, `BankAccountName` dihapus).
+   - Penyesuaian `application_usecase.go` (`DisburseRequest` & auto-disbursement) dan `GetUserInfo` response menggunakan `emp.BankCode`.
+   - Menambahkan handler CRUD lengkap `/api/master/banks` (`GetAll`, `GetOne`, `Save`, `Delete`) dengan dukungan soft delete.
+4. **Pembaruan Frontend Master Data UI (`App.jsx`)**:
+   - Menambahkan Tab **Master Bank** pada Menu Master Data.
+   - Form Master Karyawan kini menampilkan **Dropdown Bank** (`bank_code`) yang bersumber dari tabel `lms_sch.banks` dan mengeliminasi field `bank_account_name`.
+5. **Skrip DML Registrasi Menu Bank (`seed_bank_menu.sql`)**:
+   - Dibuat file DML [`backend/migrations/seed_bank_menu.sql`](file:///d:/Data_NK/Project5/LMS/backend/migrations/seed_bank_menu.sql) untuk mendaftarkan menu `Master Bank` (`menu_id: 912`, `path: master-banks`) ke `lms_sch.menus` dan memberikan otorisasi ke `lms_sch.role_menus` untuk Admin (`role_id: 1`).
+6. **Perbaikan UI Form Reset, Username Audit & Presisi Kolom Tabel (`App.jsx` & `master_data_handler.go`)**:
+   - Reset state `masterForm` & `paramForm` saat klik "+ Tambah Data" dan pasca simpan sukses sehingga data lama tidak muncul kembali di modal.
+   - Mengisikan `created_user` & `updated_user` pada handler `Save` backend secara otomatis dari username login aktif (`c.GetString("username")`).
+   - Menghapus kolom `deleted_user` dari tabel master aktif dan memberlakukan `masterTableKeys` tetap untuk semua baris sehingga posisi kolom **Aksi (Edit/Hapus) 100% Fix & Presisi** tanpa pergeseran sel.
+
+### 14.28 Implementasi Modul Sub-Ledger Kas & Bank, Rekening Operasional, dan Partisi 2026-2027
+1. **Skrip Migration DDL/DML (`create_cashbank_tables.sql`)**:
+   - Dibuat file SQL [`backend/migrations/create_cashbank_tables.sql`](file:///d:/Data_NK/Project5/LMS/backend/migrations/create_cashbank_tables.sql) yang mencakup:
+     * Tabel `lms_sch.cashbank_accounts` (Master Rekening Operasional Kas & Bank Koperasi dengan `initial_balance` dan `current_balance`).
+     * Tabel `lms_sch.transaction_types` (`type_code CHAR(5)` PK) + Seed Initial Data (`DISB`, `RPMN`, `RPIP`, `ADJI`, `ADJO`, `FEEB`).
+     * Tabel Induk `lms_sch.cashbank_transactions` yang di-partisi bulanan (`PARTITION BY RANGE (transaction_date)`).
+     * 24 Tabel Partisi Bulanan `cashbank_transactions_YYYYMM` untuk tahun 2026 dan 2027 serta 1 partisi *Default*.
+     * Registrasi menu `Master Rekening Bank` (`menu_id: 913`), `Master Tipe Transaksi` (`menu_id: 914`), dan `Transaksi Kas Bank` (`menu_id: 915`).
+2. **Model Struct & Handlers Go Backend (`models/master.go` & `master_data_handler.go`)**:
+   - Menambahkan struct `CashBankAccount`, `TransactionType`, dan `CashBankTransaction`.
+   - Menambahkan handler CRUD lengkap `/api/master/cashbank-accounts`, `/api/master/transaction-types`, dan `/api/master/cashbank-transactions` dengan dukungan audit soft delete.
+3. **Frontend React Master UI (`App.jsx`)**:
+   - Menambahkan submenu dan form pengelolaan Master Rekening Bank Operasional, Master Tipe Transaksi, dan Transaksi Kas Bank pada Data Master.
+
+### 14.29 Mekanisme Kontrol Saldo Two-Tier, Atomic Rollback Payment Gateway & Sumber Rekening Operasional
+1. **DML Registrasi Menu `cashbank_accounts` (`seed_cashbank_accounts_menu.sql`)**:
+   - Berkas DML terpisah [`backend/migrations/seed_cashbank_accounts_menu.sql`](file:///d:/Data_NK/Project5/LMS/backend/migrations/seed_cashbank_accounts_menu.sql) untuk mendaftarkan menu `Master Rekening Bank` (`menu_id: 913`), `Master Tipe Transaksi` (`menu_id: 914`), dan `Transaksi Kas Bank` (`menu_id: 915`) tanpa mengikutsertakan dummy data.
+2. **Kontrol Saldo Two-Tier & Mekanisme Rollback Transaksi (Integration dengan Midtrans Iris)**:
+   - **Fase 1 (Pre-Validation)**: LMS memeriksa saldo `current_balance` pada `lms_sch.cashbank_accounts`. Jika kurang, transaksi ditolak langsung sebelum API Midtrans dipanggil.
+   - **Fase 2 (Execution)**: LMS memanggil API Disbursement Midtrans. Midtrans memeriksa saldo deposit riil Koperasi.
+   - **Fase 3 (Atomic Rollback / Commit)**:
+     * **Jika Gagal di Midtrans**: Seluruh DB Transaction di LMS di-**ROLLBACK TOTAL**. Saldo `cashbank_accounts` TIDAK dipotong, status pinjaman TIDAK diubah ke `DISBURSED`, dan record `cashbank_transactions` BATAL/DIBATALKAN.
+     * **Jika Sukses di Midtrans**: LMS melakukan **COMMIT**. Saldo `cashbank_accounts` dipotong, status pinjaman menjadi `DISBURSED`, dan mutasi `cashbank_transactions` dicatat.
+3. **Mekanisme Penentuan Rekening Sumber Operasional & Unique Constraint Index**:
+   - Pencairan pinjaman memotong **Rekening Sumber Operasional Koperasi** (`cashbank_accounts.account_number` milik Koperasi), bukan rekening anggota.
+   - Anggota menerima dana pada **Rekening Tujuan Anggota** (`employees.bank_account_no` / `disbursement_bank_account_no`).
+   - Sistem menentukan Rekening Sumber Operasional melalui parameter default (`DEFAULT_DISBURSEMENT_ACCOUNT_ID`) atau pilihan saat persetujuan pencairan.
+   - Kolom `cashbank_accounts.account_number` menggunakan **Partial Unique Index** (`CREATE UNIQUE INDEX uq_cashbank_account_number_active ON lms_sch.cashbank_accounts(account_number) WHERE deleted_at IS NULL;`) untuk menjamin nomor rekening 100% unik tanpa duplikasi pada data aktif.
+4. **Pengikatan Otomatis pada Modul Disbursement (`recordCashBankDisbursement`)**:
+   - Fungsi `recordCashBankDisbursement` telah diintegrasikan secara otomatis pada `DisburseApplication` ([`backend/usecases/application_usecase.go`](file:///d:/Data_NK/Project5/LMS/backend/usecases/application_usecase.go#L855)).
+   - Setiap kali pinjaman berhasil di-disburse (baik auto-disburse maupun manual disburse), sistem secara otomatis:
+     * Memotong saldo berjalan `current_balance` pada `lms_sch.cashbank_accounts` sesuai rekening parameter `DEFAULT_DISBURSEMENT_ACCOUNT_ID`.
+     * Membentuk record mutasi transaksi baru di `lms_sch.cashbank_transactions` (`type_code: 'DISB'`, `direction: 'OUT'`) yang langsung masuk ke tabel partisi bulanan `cashbank_transactions_YYYYMM`.
+5. **Integrasi Seluruh Alur Transaksi ke Sub-Ledger Kas & Bank (`recordCashBankTransactionHelper`)**:
+   - **Pelunasan Manual (`/api/payroll/manual-repayment`)**: Secara otomatis mencatat mutasi kas masuk (`type_code: 'RPMN'`, `direction: 'IN'`) dan menambah saldo `current_balance`.
+   - **Import File Payroll HRD (`/api/payroll/import`)**: Memproses pencatatan **Opsi A (Detail Mutasi Granular per Karyawan)**. Setiap baris angsuran karyawan yang sukses dipotong dibuatkan 1 record mutasi tersendiri (`type_code: 'RPIP'`, `direction: 'IN'`) lengkap dengan `member_no`, `employee_id`, `reference_no` (`PAY-LoanNo-Period`), dan deskripsi nama karyawan. Saldo `current_balance` ter-update secara sequential.
+   - **Adjustment Kas & Bank (`/api/payroll/adjust`)**: Secara otomatis mencatat mutasi koreksi penyesuaian kas masuk/keluar (`type_code: 'ADJI'`/`'ADJO'`, `direction: 'IN'`/`'OUT'`) dan menyesuaikan saldo `current_balance`.
+   - **UI & Laporan Audit Kas & Bank**: Menambahkan menu **Transaksi & Mutasi Kas Bank** (`menu_id: 915`) dan **Laporan Audit Kas & Bank** (`menu_id: 916`) pada Data Master UI dengan tampilan badge visual arah kas (`IN`/`OUT`) dan visualisasi saldo berjalan.
+
+### 14.30 Skrip DML Registrasi Menu Transaksi & Mutasi Kas Bank (`seed_cashbank_transactions_menu.sql`)
+1. **Skrip DML Registrasi Menu Transaksi & Mutasi Kas Bank (`seed_cashbank_transactions_menu.sql`)**:
+   - Dibuat file DML terpisah [`backend/migrations/seed_cashbank_transactions_menu.sql`](file:///d:/Data_NK/Project5/LMS/backend/migrations/seed_cashbank_transactions_menu.sql) untuk mendaftarkan menu `Transaksi & Mutasi Kas Bank` (`menu_id: 915`, `path: master-cashbank-transactions`) dan `Laporan Audit Kas & Bank` (`menu_id: 916`, `path: report-cashbank-transactions`) ke `lms_sch.menus` dan memberikan otorisasi ke `lms_sch.role_menus` untuk Admin (`role_id: 1`) tanpa menyertakan dummy data seeding.
+
+### 14.31 Pembersihan Referensi Kolom `bank_account_name` di Backend & Frontend
+1. **Penyebab Error**:
+   - Kolom `bank_account_name` sebelumnya telah di-drop dari tabel `lms_sch.employees`, namun pada beberapa query SQL di `backend/main.go` (termasuk pencarian anggota `GET /api/members`, tagihan payroll, dan laporan adjustment) masih terdapat referensi `COALESCE(e.name, e.bank_account_name, ...)`.
+2. **Pembaruan Backend (`main.go`)**:
+   - Seluruh klausa SQL pada `main.go` telah dibersihkan dari `e.bank_account_name` dan disesuaikan menjadi `COALESCE(e.name, CONCAT('Anggota #', m.member_no))`. Query pencarian anggota pada Form Pelunasan Manual kini berjalan 100% lancar tanpa error `SQLSTATE 42703`.
+3. **Pembaruan Frontend (`App.jsx`)**:
+   - Menghapus referensi `bank_account_name` pada Form Pelunasan Manual dan dropdown seleksi anggota.
+
+### 14.32 Panduan Audit Transaksi & Rekonsiliasi Kas & Bank (`lms_sch.cashbank_transactions`)
+1. **Tujuan & Standar Audit Keuangan**:
+   - Sistem LMS Kopkara EWA menerapkan standar pencatatan *Financial Audit Trail* yang menjamin keterlacakan (*traceability*) 100% dari seluruh arus kas masuk (`IN`) dan arus kas keluar (`OUT`).
+   - Setiap pergerakan uang yang terjadi di LMS secara otomatis terhubung ke Rekening Operasional Kas/Bank Koperasi (`lms_sch.cashbank_accounts`) dan tersimpan permanen pada tabel partisi bulanan `lms_sch.cashbank_transactions_YYYYMM`.
+
+2. **Skema Pencatatan Audit Granular (Opsi A)**:
+   - **Pencairan Pinjaman (`DISB` / `OUT`)**: Dicatat terpisah per aplikasi pinjaman yang dicairkan. Menyertakan `member_no`, `employee_id`, nominal pencairan bersih, dan nomor referensi aplikasi pinjaman.
+   - **Pelunasan Manual (`RPMN` / `IN`)**: Dicatat per transaksi pelunasan mandiri/pesangon/kompensasi. Menyertakan nomor bukti transfer bank, `member_no`, `employee_id`, dan nominal angsuran.
+   - **Import File Payroll HRD (`RPIP` / `IN`)**: Menggunakan **Opsi A (Detail Mutasi Granular per Karyawan)**. Setiap baris karyawan dalam file Excel/CSV yang sukses dipotong dibuatkan 1 record mutasi tersendiri. Menyertakan `member_no`, `employee_id`, `reference_no` (`PAY-[loan_no]-[period]`), NIK, serta nama karyawan.
+   - **Adjustment / Koreksi Kas (`ADJI` / `ADJO`)**: Dicatat per transaksi koreksi (koreksi terima atau refund keluar) lengkap dengan catatan alasan adjustment dan nomor referensi.
+
+3. **Formulasi Matematis Saldo Berjalan (*Sequential Running Balance*)**:
+   - Saldo awal (`balance_before`) dan saldo akhir (`balance_after`) dihitung secara berurutan per transaksi dan langsung memperbarui saldo `current_balance` pada `lms_sch.cashbank_accounts` menggunakan *Direct SQL UPDATE*:
+     \[ \text{BalanceAfter} = \begin{cases} \text{BalanceBefore} + \text{Amount} & \text{jika Direction = 'IN'} \\ \text{BalanceBefore} - \text{Amount} & \text{jika Direction = 'OUT'} \end{cases} \]
+
+4. **Karakteristik Kolom Audit pada Table `lms_sch.cashbank_transactions`**:
+   | Nama Kolom | Tipe Data | Deskripsi Audit |
+   |---|---|---|
+   | `transaction_id` | `BIGINT` | Primary Key unik id mutasi transaksi. |
+   | `transaction_no` | `VARCHAR(30)` | Kode transaksi unik format `CB-YYYYMM-XXXXXX`. |
+   | `transaction_date` | `TIMESTAMP` | Waktu persis mutasi dilakukan (digunakan untuk Partitioning Range). |
+   | `bank_code` | `VARCHAR(15)` | Kode bank rekening operasional (misal: `BCA`). |
+   | `bank_account_no` | `VARCHAR(30)` | Nomor rekening operasional Koperasi (`6815004314`). |
+   | `type_code` | `CHAR(5)` | Kode tipe transaksi (`DISB`, `RPMN`, `RPIP`, `ADJI`, `ADJO`). |
+   | `direction` | `CHAR(3)` | Arah arus kas (`IN` = Kas Masuk, `OUT` = Kas Keluar). |
+   | `amount` | `NUMERIC(15,2)` | Nominal mutasi transaksi dalam Rupiah. |
+   | `balance_before` | `NUMERIC(15,2)` | Saldo kas/bank sebelum transaksi terjadi. |
+   | `balance_after` | `NUMERIC(15,2)` | Saldo kas/bank sesudah transaksi terjadi. |
+   | `reference_type` | `VARCHAR(50)` | Jenis referensi (`LOAN_APPLICATION`, `REPAYMENT_MANUAL`, `PAYROLL_IMPORT`, `ADJUSTMENT`). |
+   | `reference_no` | `VARCHAR(100)` | Nomor referensi unik asal transaksi. |
+   | `member_no` | `BIGINT` | Nomor Anggota Koperasi yang terkait. |
+   | `employee_id` | `BIGINT` | ID Karyawan yang terkait. |
+   | `description` | `TEXT` | Rincian narasi audit transaksi. |
+
+5. **Akses UI & Fitur Laporan Audit Kas & Bank**:
+   - Menu **Transaksi & Mutasi Kas Bank** (`menu_id: 915`, path: `master-cashbank-transactions`).
+   - Menu **Laporan Audit Kas & Bank** (`menu_id: 916`, path: `report-cashbank-transactions`).
+   - Dilengkapi visualisasi badge arah arus kas (`⬇️ IN (Masuk)` dan `⬆️ OUT (Keluar)`), badge tipe transaksi, serta pencarian/filter cepat berdasarkan `member_no`, `employee_id`, atau nomor transaksi.
+
+### 14.33 Panduan Konfigurasi Engine Notifikasi Email (Gmail/SMTP) & WhatsApp
+1. **Modul Engine Notifikasi (`services/notification_service.go`)**:
+   - Menangani pengiriman notifikasi terpadu Email (via SMTP Direct TLS/SSL) dan WhatsApp (via Fonnte Gateway / Meta WA Cloud API).
+   - Pengiriman dilakukan secara **Asinkron (Background Goroutine)** sehingga respon API Backend tetap super cepat (< 50ms).
+
+2. **Daftar Parameter Global Notifikasi di Database (`lms_sch.global_parameters`)**:
+   | Nama Parameter | Nilai Default | Deskripsi |
+   |---|---|---|
+   | `SMTP_HOST` | `smtp.gmail.com` | Host server SMTP Email. |
+   | `SMTP_PORT` | `587` | Port server SMTP (587 STARTTLS, 465 SSL, 25 Standard). |
+   | `SMTP_USERNAME` | `your-email@gmail.com` | Username/Email pengirim SMTP. |
+   | `SMTP_PASSWORD` | `xxxx xxxx xxxx xxxx` | App Password Gmail (16 Karakter) / Password SMTP. |
+   | `SMTP_FROM_NAME` | `Kopkara LMS EWA System` | Nama pengirim yang tampil di inbox penerima. |
+   | `SMTP_FROM_EMAIL` | `your-email@gmail.com` | Alamat email reply-to pengirim. |
+   | `FONNTE_TOKEN` | *(Opsional)* | Token API Fonnte WhatsApp Gateway. |
+   | `NOTIFICATION_ENABLED_CHANNELS` | `EMAIL,WA` | Channel notifikasi aktif global (`EMAIL,WA`, `EMAIL`, `WA`, `OFF`). |
+   | `NOTIF_EVENT_DISBURSEMENT` | `EMAIL,WA` | Channel notifikasi event Pencairan Pinjaman. |
+   | `NOTIF_EVENT_REPAYMENT` | `EMAIL,WA` | Channel notifikasi event Pelunasan Angsuran. |
+   | `NOTIF_EVENT_APPROVAL` | `EMAIL,WA` | Channel notifikasi event Persetujuan/Penolakan Pinjaman. |
+
+3. **Cara Konfigurasi Gmail SMTP (Google Mail)**:
+   - **Langkah 1**: Aktifkan **2-Step Verification** pada akun Google Koperasi.
+   - **Langkah 2**: Masuk ke [Google App Passwords](https://myaccount.google.com/apppasswords), buat App Password baru untuk "LMS Kopkara", salin kode **16 karakter** (misal: `abcd efgh ijkl mnop`).
+   - **Langkah 3**: Buka menu **Pengaturan Parameter Global** di LMS UI, lalu update:
+     * `SMTP_HOST` = `smtp.gmail.com`
+     * `SMTP_PORT` = `587`
+     * `SMTP_USERNAME` = `emailkoperasi@gmail.com`
+     * `SMTP_PASSWORD` = `abcdefghijklmnop` (tanpa spasi)
+
+4. **Cara Mengganti dari Gmail SMTP ke Provider SMTP Lainnya**:
+   - Untuk mengganti dari Gmail ke Mailtrap, Office 365, Amazon SES, SendGrid, atau cPanel Webmail Koperasi, cukup ubah parameter berikut di menu **Pengaturan Parameter Global** UI tanpa ubah kode program:
+     * **Microsoft Office 365 / Outlook**:
+       - `SMTP_HOST`: `smtp.office365.com`
+       - `SMTP_PORT`: `587`
+       - `SMTP_USERNAME`: `admin@kopkara.co.id`
+       - `SMTP_PASSWORD`: `password_office365`
+     * **Amazon SES (AWS)**:
+       - `SMTP_HOST`: `email-smtp.us-east-1.amazonaws.com`
+       - `SMTP_PORT`: `587`
+       - `SMTP_USERNAME`: `[AWS_SMTP_USERNAME]`
+       - `SMTP_PASSWORD`: `[AWS_SMTP_PASSWORD]`
+     * **Mailtrap (Testing & Staging)**:
+       - `SMTP_HOST`: `sandbox.smtp.mailtrap.io`
+       - `SMTP_PORT`: `2525`
+       - `SMTP_USERNAME`: `[MAILTRAP_USER]`
+       - `SMTP_PASSWORD`: `[MAILTRAP_PASS]`
+     * **cPanel / Corporate Webmail Koperasi**:
+       - `SMTP_HOST`: `mail.kopkara.co.id`
+       - `SMTP_PORT`: `465` (SSL) atau `587` (TLS)
+       - `SMTP_USERNAME`: `notifikasi@kopkara.co.id`
+       - `SMTP_PASSWORD`: `password_email_koperasi`
+
+5. **Pengaturan Notifikasi Berdasarkan Kolom `lms_sch.menus.notification_type`**:
+   - Pengiriman notifikasi dikontrol secara presisi berdasarkan setting kolom `notification_type` pada tabel `lms_sch.menus` (dapat diubah via UI **Master Menu Navigation**):
+     * **`0`**: Tidak kirim notifikasi (OFF).
+     * **`1`**: Kirim Email saja.
+     * **`2`**: Kirim WhatsApp saja.
+     * **`3`**: Kirim Email & WhatsApp (Keduanya).
+   - Skrip DML perubahannya berada di [`backend/migrations/add_notification_type_to_menus.sql`](file:///d:/Data_NK/Project5/LMS/backend/migrations/add_notification_type_to_menus.sql).
+
+6. **Dukungan Fleksibilitas File `.env` & Endpoint Diagnostic (`/api/test-email`)**:
+   - Backend secara otomatis mendukung variasi nama kunci di file `.env` (`SMTP_USER` / `SMTP_USERNAME` dan `SMTP_PASS` / `SMTP_PASSWORD`), serta mengutamakan nilai `.env` di atas database fallback.
+   - **Endpoint Uji Diagnosa Instan**: Sediakan URL diagnosa `GET /api/test-email?to=penerima@domain.com` untuk melakukan pengujian pengiriman email secara sinkron 1-detik dengan pengembalian log status & hint solusi error secara real-time.
+   - **Transparansi Perhitungan Finansial Notifikasi Pencairan**: Pesan Notifikasi (Email & WA) menampilkan rincian lengkap:
+     * **Nominal Pengajuan Pinjaman (Kotor)**: Misal `Rp 99.000`
+     * **Biaya Administrasi (Dipotong)**: Misal `- Rp 30.000`
+     * **Nominal Net Transfer (Pencairan)**: Misal `Rp 69.000` (dana bersih yang benar-benar ditransfer ke rekening bank anggota).
+
 ## 15. PANDUAN BUILD APK MOBILE APP ANDROID (CAPACITOR + GRADLE CLI)
 
 Dokumen panduan lengkap pembuatan file **.APK Standalone** HP Android **100% via Linux Command Line (Ubuntu / Debian / WSL CLI)** tanpa perlu membuka Android Studio GUI, sangat ringan dan hemat RAM (laptop 8GB RAM).

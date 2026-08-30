@@ -106,6 +106,54 @@ func (h *MasterDataHandler) GetAll(c *gin.Context) {
 		if totalPages < 1 { totalPages = 1 }
 		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
 
+	case "banks":
+		var data []models.Bank
+		bankQuery := h.db.Model(&models.Bank{}).Where("deleted_at IS NULL")
+		if q != "" {
+			bankQuery = bankQuery.Where("(LOWER(bank_code) LIKE ? OR LOWER(bank_name) LIKE ? OR LOWER(bank_code_provider) LIKE ?)", likeStr, likeStr, likeStr)
+		}
+		bankQuery.Count(&totalRecords)
+		bankQuery.Order("bank_code ASC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
+	case "cashbank-accounts":
+		var data []models.CashBankAccount
+		accQuery := h.db.Model(&models.CashBankAccount{}).Where("deleted_at IS NULL")
+		if q != "" {
+			accQuery = accQuery.Where("(LOWER(account_number) LIKE ? OR LOWER(account_name) LIKE ? OR LOWER(bank_code) LIKE ?)", likeStr, likeStr, likeStr)
+		}
+		accQuery.Count(&totalRecords)
+		accQuery.Order("account_id ASC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
+	case "transaction-types":
+		var data []models.TransactionType
+		typeQuery := h.db.Model(&models.TransactionType{}).Where("deleted_at IS NULL")
+		if q != "" {
+			typeQuery = typeQuery.Where("(LOWER(type_code) LIKE ? OR LOWER(type_name) LIKE ? OR LOWER(direction) LIKE ?)", likeStr, likeStr, likeStr)
+		}
+		typeQuery.Count(&totalRecords)
+		typeQuery.Order("type_code ASC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
+	case "cashbank-transactions":
+		var data []models.CashBankTransaction
+		cbQuery := h.db.Model(&models.CashBankTransaction{}).Where("deleted_at IS NULL")
+		if q != "" {
+			cbQuery = cbQuery.Where("(LOWER(transaction_no) LIKE ? OR LOWER(bank_code) LIKE ? OR LOWER(type_code) LIKE ? OR LOWER(reference_no) LIKE ?)", likeStr, likeStr, likeStr, likeStr)
+		}
+		cbQuery.Count(&totalRecords)
+		cbQuery.Order("transaction_date DESC").Limit(limit).Offset(offset).Find(&data)
+		totalPages := int((totalRecords + int64(limit) - 1) / int64(limit))
+		if totalPages < 1 { totalPages = 1 }
+		c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total_records": totalRecords, "total_pages": totalPages})
+
 	case "employees":
 		var data []models.Employee
 		empQuery := h.db.Model(&models.Employee{}).Where("deleted_at IS NULL")
@@ -238,6 +286,12 @@ func (h *MasterDataHandler) GetAll(c *gin.Context) {
 
 func (h *MasterDataHandler) Save(c *gin.Context) {
 	table := c.Param("table")
+	currentUser := c.GetString("username")
+	if currentUser == "" {
+		currentUser = "admin"
+	}
+	now := time.Now()
+
 	switch table {
 	case "departments":
 		var data models.Department
@@ -250,11 +304,17 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 			h.db.Model(&models.Department{}).Where("deptno = ?", data.DeptNo).Count(&count)
 		}
 		if count > 0 {
+			data.UpdatedUser = &currentUser
+			data.UpdatedAt = &now
 			if err := h.db.Model(&models.Department{}).Where("deptno = ?", data.DeptNo).Updates(&data).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
 		} else {
+			data.CreatedUser = &currentUser
+			data.UpdatedUser = &currentUser
+			data.CreatedAt = &now
+			data.UpdatedAt = &now
 			if err := h.db.Create(&data).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
@@ -273,11 +333,17 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 			h.db.Model(&models.EmployeeStatus{}).Where("status_code = ?", data.StatusCode).Count(&count)
 		}
 		if count > 0 {
+			data.UpdatedUser = &currentUser
+			data.UpdatedAt = &now
 			if err := h.db.Model(&models.EmployeeStatus{}).Where("status_code = ?", data.StatusCode).Updates(&data).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
 		} else {
+			data.CreatedUser = &currentUser
+			data.UpdatedUser = &currentUser
+			data.CreatedAt = &now
+			data.UpdatedAt = &now
 			if err := h.db.Create(&data).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
@@ -296,11 +362,17 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 			h.db.Model(&models.KopkaraStatus{}).Where("status_code = ?", data.StatusCode).Count(&count)
 		}
 		if count > 0 {
+			data.UpdatedUser = &currentUser
+			data.UpdatedAt = &now
 			if err := h.db.Model(&models.KopkaraStatus{}).Where("status_code = ?", data.StatusCode).Updates(&data).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
 		} else {
+			data.CreatedUser = &currentUser
+			data.UpdatedUser = &currentUser
+			data.CreatedAt = &now
+			data.UpdatedAt = &now
 			if err := h.db.Create(&data).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
@@ -319,11 +391,142 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 			h.db.Model(&models.EmployeeCategory{}).Where("category_code = ?", data.CategoryCode).Count(&count)
 		}
 		if count > 0 {
+			data.UpdatedUser = &currentUser
+			data.UpdatedAt = &now
 			if err := h.db.Model(&models.EmployeeCategory{}).Where("category_code = ?", data.CategoryCode).Updates(&data).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
 		} else {
+			data.CreatedUser = &currentUser
+			data.UpdatedUser = &currentUser
+			data.CreatedAt = &now
+			data.UpdatedAt = &now
+			if err := h.db.Create(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"data": data})
+
+	case "banks":
+		var data models.Bank
+		if err := c.ShouldBindJSON(&data); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var count int64
+		if data.BankCode != "" {
+			h.db.Model(&models.Bank{}).Where("bank_code = ?", data.BankCode).Count(&count)
+		}
+		if count > 0 {
+			data.UpdatedUser = &currentUser
+			data.UpdatedAt = &now
+			if err := h.db.Model(&models.Bank{}).Where("bank_code = ?", data.BankCode).Updates(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			data.CreatedUser = &currentUser
+			data.UpdatedUser = &currentUser
+			data.CreatedAt = &now
+			data.UpdatedAt = &now
+			if err := h.db.Create(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"data": data})
+
+	case "cashbank-accounts":
+		var data models.CashBankAccount
+		if err := c.ShouldBindJSON(&data); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var count int64
+		if data.AccountID > 0 {
+			h.db.Model(&models.CashBankAccount{}).Where("account_id = ?", data.AccountID).Count(&count)
+		}
+		if count > 0 {
+			data.UpdatedUser = &currentUser
+			data.UpdatedAt = &now
+			if err := h.db.Model(&models.CashBankAccount{}).Where("account_id = ?", data.AccountID).Updates(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			data.CreatedUser = &currentUser
+			data.UpdatedUser = &currentUser
+			data.CreatedAt = &now
+			data.UpdatedAt = &now
+			if data.CurrentBalance == 0 && data.InitialBalance > 0 {
+				data.CurrentBalance = data.InitialBalance
+			}
+			if err := h.db.Create(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"data": data})
+
+	case "transaction-types":
+		var data models.TransactionType
+		if err := c.ShouldBindJSON(&data); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var count int64
+		if data.TypeCode != "" {
+			h.db.Model(&models.TransactionType{}).Where("type_code = ?", data.TypeCode).Count(&count)
+		}
+		if count > 0 {
+			data.UpdatedUser = &currentUser
+			data.UpdatedAt = &now
+			if err := h.db.Model(&models.TransactionType{}).Where("type_code = ?", data.TypeCode).Updates(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			data.CreatedUser = &currentUser
+			data.UpdatedUser = &currentUser
+			data.CreatedAt = &now
+			data.UpdatedAt = &now
+			if err := h.db.Create(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"data": data})
+
+	case "cashbank-transactions":
+		var data models.CashBankTransaction
+		if err := c.ShouldBindJSON(&data); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var count int64
+		if data.TransactionID > 0 {
+			h.db.Model(&models.CashBankTransaction{}).Where("transaction_id = ?", data.TransactionID).Count(&count)
+		}
+		if count > 0 {
+			data.UpdatedUser = &currentUser
+			data.UpdatedAt = &now
+			if err := h.db.Model(&models.CashBankTransaction{}).Where("transaction_id = ?", data.TransactionID).Updates(&data).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			data.CreatedUser = &currentUser
+			data.UpdatedUser = &currentUser
+			data.CreatedAt = &now
+			data.UpdatedAt = &now
+			if data.TransactionDate.IsZero() {
+				data.TransactionDate = now
+			}
+			if data.TransactionNo == "" {
+				data.TransactionNo = fmt.Sprintf("CB-%s-%05d", time.Now().Format("200601"), time.Now().Unix()%100000)
+			}
 			if err := h.db.Create(&data).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
@@ -342,11 +545,17 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 			h.db.Model(&models.Employee{}).Where("employee_id = ?", data.EmployeeID).Count(&count)
 		}
 		if count > 0 {
+			data.UpdatedUser = &currentUser
+			data.UpdatedAt = &now
 			if err := h.db.Model(&models.Employee{}).Where("employee_id = ?", data.EmployeeID).Updates(&data).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
 		} else {
+			data.CreatedUser = &currentUser
+			data.UpdatedUser = &currentUser
+			data.CreatedAt = &now
+			data.UpdatedAt = &now
 			if err := h.db.Create(&data).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
@@ -488,6 +697,10 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 				menu.NotificationType = int(v)
 			case int:
 				menu.NotificationType = v
+			case string:
+				if parsed, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+					menu.NotificationType = parsed
+				}
 			}
 		}
 		if oVal, ok := req["order"]; ok && oVal != nil {
@@ -511,7 +724,7 @@ func (h *MasterDataHandler) Save(c *gin.Context) {
 			h.db.Model(&models.Menu{}).Where("menu_id = ?", menu.MenuID).Count(&count)
 		}
 		if count > 0 {
-			if err := h.db.Model(&models.Menu{}).Where("menu_id = ?", menu.MenuID).Updates(&menu).Error; err != nil {
+			if err := h.db.Model(&models.Menu{}).Where("menu_id = ?", menu.MenuID).Select("parent_id", "title", "icon", "path", "order_seq", "is_password", "notification_type", "updated_at", "updated_user").Updates(&menu).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
@@ -803,6 +1016,46 @@ func (h *MasterDataHandler) Delete(c *gin.Context) {
 		err = h.db.Where("status_code = ?", id).Delete(&models.KopkaraStatus{}).Error
 	case "employee-categories":
 		err = h.db.Where("category_code = ?", id).Delete(&models.EmployeeCategory{}).Error
+	case "banks":
+		currentUser := c.GetString("username")
+		if currentUser == "" {
+			currentUser = "admin"
+		}
+		err = h.db.Model(&models.Bank{}).Where("bank_code = ? AND deleted_at IS NULL", id).Updates(map[string]interface{}{
+			"deleted_at":   time.Now(),
+			"updated_at":   time.Now(),
+			"deleted_user": currentUser,
+		}).Error
+	case "cashbank-accounts":
+		currentUser := c.GetString("username")
+		if currentUser == "" {
+			currentUser = "admin"
+		}
+		err = h.db.Model(&models.CashBankAccount{}).Where("account_id = ? AND deleted_at IS NULL", id).Updates(map[string]interface{}{
+			"deleted_at":   time.Now(),
+			"updated_at":   time.Now(),
+			"deleted_user": currentUser,
+		}).Error
+	case "transaction-types":
+		currentUser := c.GetString("username")
+		if currentUser == "" {
+			currentUser = "admin"
+		}
+		err = h.db.Model(&models.TransactionType{}).Where("type_code = ? AND deleted_at IS NULL", id).Updates(map[string]interface{}{
+			"deleted_at":   time.Now(),
+			"updated_at":   time.Now(),
+			"deleted_user": currentUser,
+		}).Error
+	case "cashbank-transactions":
+		currentUser := c.GetString("username")
+		if currentUser == "" {
+			currentUser = "admin"
+		}
+		err = h.db.Model(&models.CashBankTransaction{}).Where("transaction_id = ? AND deleted_at IS NULL", id).Updates(map[string]interface{}{
+			"deleted_at":   time.Now(),
+			"updated_at":   time.Now(),
+			"deleted_user": currentUser,
+		}).Error
 	case "employees":
 		err = h.db.Where("employee_id = ?", id).Delete(&models.Employee{}).Error
 	case "members":
@@ -1037,9 +1290,8 @@ func (h *MasterDataHandler) GetUserInfo(c *gin.Context) {
 		"is_member":         isMember,
 		"no_ktp":            ktpStr,
 		"phone_number":      phoneStr,
-		"bank_name":         emp.BankName,
+		"bank_code":         emp.BankCode,
 		"bank_account_no":   emp.BankAccountNo,
-		"bank_account_name": emp.BankAccountName,
 		"menus":             menus,
 	})
 }

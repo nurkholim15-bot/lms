@@ -1,5 +1,9 @@
 package models
 
+import (
+	"time"
+)
+
 // GlobalParameters represents lms_sch.global_parameters
 type GlobalParameter struct {
 	ID          int64  `gorm:"primaryKey;column:id;autoIncrement:true" json:"id"`
@@ -26,21 +30,86 @@ func (EmployeeCategory) TableName() string {
 	return "lms_sch.employee_categories"
 }
 
+// Bank represents lms_sch.banks
+type Bank struct {
+	BankCode         string `gorm:"primaryKey;column:bank_code" json:"bank_code"`
+	BankName         string `gorm:"column:bank_name" json:"bank_name"`
+	BankCodeProvider string `gorm:"column:bank_code_provider" json:"bank_code_provider"`
+	MasterBaseModel
+}
+
+func (Bank) TableName() string {
+	return "lms_sch.banks"
+}
+
+// CashBankAccount represents lms_sch.cashbank_accounts
+type CashBankAccount struct {
+	AccountID      int64   `gorm:"primaryKey;column:account_id;autoIncrement:true" json:"account_id"`
+	AccountNumber  string  `gorm:"column:account_number" json:"account_number"`
+	AccountName    string  `gorm:"column:account_name" json:"account_name"`
+	BankCode       string  `gorm:"column:bank_code" json:"bank_code"`
+	Currency       string  `gorm:"column:currency" json:"currency"`
+	InitialBalance float64 `gorm:"column:initial_balance" json:"initial_balance"`
+	CurrentBalance float64 `gorm:"column:current_balance" json:"current_balance"`
+	IsActive       bool    `gorm:"column:is_active" json:"is_active"`
+	MasterBaseModel
+}
+
+func (CashBankAccount) TableName() string {
+	return "lms_sch.cashbank_accounts"
+}
+
+// TransactionType represents lms_sch.transaction_types
+type TransactionType struct {
+	TypeCode    string `gorm:"primaryKey;column:type_code" json:"type_code"`
+	TypeName    string `gorm:"column:type_name" json:"type_name"`
+	Direction   string `gorm:"column:direction" json:"direction"`
+	Description string `gorm:"column:description" json:"description"`
+	MasterBaseModel
+}
+
+func (TransactionType) TableName() string {
+	return "lms_sch.transaction_types"
+}
+
+// CashBankTransaction represents lms_sch.cashbank_transactions
+type CashBankTransaction struct {
+	TransactionID   int64     `gorm:"primaryKey;column:transaction_id;autoIncrement:true" json:"transaction_id"`
+	TransactionNo   string    `gorm:"column:transaction_no" json:"transaction_no"`
+	TransactionDate time.Time `gorm:"column:transaction_date" json:"transaction_date"`
+	BankCode        string    `gorm:"column:bank_code" json:"bank_code"`
+	BankAccountNo   string    `gorm:"column:bank_account_no" json:"bank_account_no"`
+	TypeCode        string    `gorm:"column:type_code" json:"type_code"`
+	Direction       string    `gorm:"column:direction" json:"direction"`
+	Amount          float64   `gorm:"column:amount" json:"amount"`
+	BalanceBefore   float64   `gorm:"column:balance_before" json:"balance_before"`
+	BalanceAfter    float64   `gorm:"column:balance_after" json:"balance_after"`
+	ReferenceType   string    `gorm:"column:reference_type" json:"reference_type"`
+	ReferenceNo     string    `gorm:"column:reference_no" json:"reference_no"`
+	MemberNo        *int64    `gorm:"column:member_no" json:"member_no,omitempty"`
+	EmployeeID      *int64    `gorm:"column:employee_id" json:"employee_id,omitempty"`
+	Description     string    `gorm:"column:description" json:"description"`
+	MasterBaseModel
+}
+
+func (CashBankTransaction) TableName() string {
+	return "lms_sch.cashbank_transactions"
+}
+
 // Employee represents lms_sch.employees
 type Employee struct {
-	EmployeeID      int64   `gorm:"primaryKey;column:employee_id;autoIncrement:false" json:"employee_id"`
-	Name            string  `gorm:"column:name" json:"name"`
-	EmployeeStatus  string  `gorm:"column:employee_status" json:"employee_status"` // renamed from work_status
-	DeptNo          string  `gorm:"column:deptno" json:"deptno"`
-	CategoryCode    string  `gorm:"column:category_code" json:"category_code"`
-	Salary          float64 `gorm:"column:salary" json:"salary"`
-	TotalLoan       float64 `gorm:"column:total_loan" json:"total_loan"`
-	NoKTP           string  `gorm:"column:no_ktp" json:"no_ktp,omitempty"`
-	PhoneNumber     string  `gorm:"column:phone_number" json:"phone_number,omitempty"`
-	Email           string  `gorm:"column:email" json:"email,omitempty"`
-	BankName        string  `gorm:"column:bank_name" json:"bank_name,omitempty"`
-	BankAccountNo   string  `gorm:"column:bank_account_no" json:"bank_account_no,omitempty"`
-	BankAccountName string  `gorm:"column:bank_account_name" json:"bank_account_name,omitempty"`
+	EmployeeID     int64   `gorm:"primaryKey;column:employee_id;autoIncrement:false" json:"employee_id"`
+	Name           string  `gorm:"column:name" json:"name"`
+	EmployeeStatus string  `gorm:"column:employee_status" json:"employee_status"` // renamed from work_status
+	DeptNo         string  `gorm:"column:deptno" json:"deptno"`
+	CategoryCode   string  `gorm:"column:category_code" json:"category_code"`
+	Salary         float64 `gorm:"column:salary" json:"salary"`
+	TotalLoan      float64 `gorm:"column:total_loan" json:"total_loan"`
+	NoKTP          string  `gorm:"column:no_ktp" json:"no_ktp,omitempty"`
+	PhoneNumber    string  `gorm:"column:phone_number" json:"phone_number,omitempty"`
+	Email          string  `gorm:"column:email" json:"email,omitempty"`
+	BankCode       string  `gorm:"column:bank_code" json:"bank_code,omitempty"`
+	BankAccountNo  string  `gorm:"column:bank_account_no" json:"bank_account_no,omitempty"`
 	MasterBaseModel
 }
 

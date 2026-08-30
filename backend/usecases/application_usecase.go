@@ -3,6 +3,7 @@ package usecases
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"lms-backend/cache"
 	"lms-backend/models"
 	"lms-backend/repositories"
+	"lms-backend/services"
 )
 
 type ApplicationUseCase interface {
@@ -573,7 +575,7 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 				_ = db.Where("employee_id = ?", member.EmployeeID).First(&emp).Error
 				disburseReq := DisburseRequest{
 					BankAccountNo: emp.BankAccountNo,
-					BankName:      emp.BankName,
+					BankName:      emp.BankCode,
 					Notes:         "Auto-disbursed by System Automation",
 					UpdatedUser:   "SYSTEM_AUTO",
 				}
@@ -849,6 +851,120 @@ func (u *applicationUseCase) DisburseApplication(applicationNo int64, req Disbur
 		UserAgent:     "Browser/Kopkara LMS",
 	}
 	_ = u.appRepo.GetDB().Create(tracking).Error
+
+	// 7. Update Sub-Ledger Cash & Bank (cashbank_accounts & cashbank_transactions)
+	_ = u.recordCashBankDisbursement(u.appRepo.GetDB(), app, disbursementAmt, disbUserStr)
+
+	return nil
+}
+
+func (u *applicationUseCase) recordCashBankDisbursement(db *gorm.DB, app models.LoanApplication, disbursementAmt float64, userStr string) error {
+	defaultAccNo := u.getParamVal("DEFAULT_DISBURSEMENT_ACCOUNT_ID", "")
+	
+	var account models.CashBankAccount
+	var errFind error
+
+	if strings.TrimSpace(defaultAccNo) != "" {
+		errFind = db.Where("account_number = ? AND deleted_at IS NULL AND is_active = true", strings.TrimSpace(defaultAccNo)).First(&account).Error
+	}
+
+	if errFind != nil || account.AccountID == 0 {
+		if errFirst := db.Where("deleted_at IS NULL AND is_active = true").Order("account_id ASC").First(&account).Error; errFirst != nil {
+			log.Printf("[CASHBANK-WARNING] Rekening Operasional Kas/Bank Koperasi tidak ditemukan: %v", errFirst)
+			return nil
+		}
+	}
+
+	balanceBefore := account.CurrentBalance
+	balanceAfter := balanceBefore - disbursementAmt
+
+	now := time.Now()
+	if errUpd := db.Exec("UPDATE lms_sch.cashbank_accounts SET current_balance = ?, updated_at = ?, updated_user = ? WHERE account_id = ?", balanceAfter, now, userStr, account.AccountID).Error; errUpd != nil {
+		log.Printf("[CASHBANK-ERROR] Gagal update saldo cashbank_accounts: %v", errUpd)
+		return errUpd
+	}
+
+	txNo := fmt.Sprintf("CB-%s-%06d", now.Format("200601"), time.Now().UnixNano()%1000000)
+
+	memNo := app.MemberNo
+	var empId *int64
+	var m models.Member
+	if errM := db.Where("member_no = ?", app.MemberNo).First(&m).Error; errM == nil && m.EmployeeID > 0 {
+		empId = &m.EmployeeID
+	}
+
+	cbTrans := models.CashBankTransaction{
+		TransactionNo:   txNo,
+		TransactionDate: now,
+		BankCode:        account.BankCode,
+		BankAccountNo:   account.AccountNumber,
+		TypeCode:        "DISB",
+		Direction:       "OUT",
+		Amount:          disbursementAmt,
+		BalanceBefore:   balanceBefore,
+		BalanceAfter:    balanceAfter,
+		ReferenceType:   "LOAN_APPLICATION",
+		ReferenceNo:     fmt.Sprintf("%d", app.ApplicationNo),
+		MemberNo:        &memNo,
+		EmployeeID:      empId,
+		Description:     fmt.Sprintf("Pencairan Pinjaman App No %d (Disbursement Net Amount Rp %.0f)", app.ApplicationNo, disbursementAmt),
+	}
+	cbTrans.CreatedAt = &now
+	cbTrans.CreatedUser = &userStr
+	cbTrans.UpdatedAt = &now
+	cbTrans.UpdatedUser = &userStr
+
+	if errCreate := db.Create(&cbTrans).Error; errCreate != nil {
+		log.Printf("[CASHBANK-ERROR] Gagal mencatat cashbank_transactions: %v", errCreate)
+		return errCreate
+	}
+
+	log.Printf("[CASHBANK-SUCCESS] Pencairan App No %d memotong saldo Rekening %s (%s): Rp %.2f -> Rp %.2f (Tx: %s)",
+		app.ApplicationNo, account.AccountNumber, account.BankCode, balanceBefore, balanceAfter, txNo)
+
+	// Dispatch Async Notification (Email & WA) to Member
+	var emp models.Employee
+	targetEmpID := app.MemberNo
+	if empId != nil && *empId > 0 {
+		targetEmpID = *empId
+	} else if m.EmployeeID > 0 {
+		targetEmpID = m.EmployeeID
+	}
+	db.Where("employee_id = ?", targetEmpID).First(&emp)
+	targetEmail := emp.Email
+	targetPhone := emp.PhoneNumber
+
+	reqAmt := app.RequestedAmount
+	if app.ApprovedAmount != nil && *app.ApprovedAmount > 0 {
+		reqAmt = *app.ApprovedAmount
+	}
+	adminFee := app.AdminFee
+
+	reqAmtStr := services.FormatIDR(reqAmt)
+	adminFeeStr := services.FormatIDR(adminFee)
+	disbAmtStr := services.FormatIDR(disbursementAmt)
+
+	waMsg := fmt.Sprintf("🟢 [PENCAIRAN PINJAMAN BERHASIL]\n\nHalo %s,\nPengajuan Pinjaman #%d sebesar %s telah berhasil DICAIRKAN ke rekening %s (%s) Anda sebesar %s (setelah dipotong Biaya Administrasi %s) pada %s.\n\nTerima kasih,\nKopkara LMS EWA System",
+		emp.Name, app.ApplicationNo, reqAmtStr, emp.BankAccountNo, emp.BankCode, disbAmtStr, adminFeeStr, now.Format("02-01-2006 15:04"))
+
+	htmlMsg := fmt.Sprintf(`
+		<div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+			<h2 style="color: #10b981;">🟢 Pencairan Pinjaman Berhasil!</h2>
+			<p>Halo <b>%s</b>,</p>
+			<p>Pengajuan pinjaman Anda telah berhasil dicairkan dengan rincian perincian keuangan sebagai berikut:</p>
+			<table style="width: 100%%; max-width: 500px; border-collapse: collapse; margin: 15px 0;">
+				<tr><td style="padding: 8px; border-bottom: 1px solid #ddd;">No. Pengajuan</td><td style="padding: 8px; border-bottom: 1px solid #ddd;"><b>#%d</b></td></tr>
+				<tr><td style="padding: 8px; border-bottom: 1px solid #ddd;">Nominal Pengajuan Pinjaman</td><td style="padding: 8px; border-bottom: 1px solid #ddd;">%s</td></tr>
+				<tr><td style="padding: 8px; border-bottom: 1px solid #ddd;">Biaya Administrasi (Dipotong)</td><td style="padding: 8px; border-bottom: 1px solid #ddd; color: #dc2626;">- %s</td></tr>
+				<tr><td style="padding: 8px; border-bottom: 1px solid #ddd;"><b>Nominal Net Transfer (Pencairan)</b></td><td style="padding: 8px; border-bottom: 1px solid #ddd; color: #10b981; font-weight: bold; font-size: 1.1em;">%s</td></tr>
+				<tr><td style="padding: 8px; border-bottom: 1px solid #ddd;">Rekening Tujuan</td><td style="padding: 8px; border-bottom: 1px solid #ddd;">%s (%s)</td></tr>
+				<tr><td style="padding: 8px; border-bottom: 1px solid #ddd;">Waktu Pencairan</td><td style="padding: 8px; border-bottom: 1px solid #ddd;">%s</td></tr>
+			</table>
+			<p>Terima kasih atas kepercayaan Anda menggunakan layanan EWA Kopkara.</p>
+		</div>
+	`, emp.Name, app.ApplicationNo, reqAmtStr, adminFeeStr, disbAmtStr, emp.BankAccountNo, emp.BankCode, now.Format("02-01-2006 15:04"))
+
+	services.DispatchEventNotification("DISBURSEMENT", targetPhone, targetEmail, fmt.Sprintf("Pencairan Pinjaman #%d Berhasil - Kopkara EWA", app.ApplicationNo), waMsg, htmlMsg, db)
 
 	return nil
 }

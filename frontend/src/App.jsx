@@ -1350,7 +1350,12 @@ function App() {
     { menu_id: 908, parent_id: 9, title: 'Master Department', icon: '🏢', path: 'master-departments', roles: ['admin'], order_seq: 908 },
     { menu_id: 909, parent_id: 9, title: 'Master Status Karyawan', icon: '📊', path: 'master-employee-statuses', roles: ['admin'], order_seq: 909 },
     { menu_id: 910, parent_id: 9, title: 'Master Status Kopkara', icon: '🏷️', path: 'master-kopkara-statuses', roles: ['admin'], order_seq: 910 },
-    { menu_id: 911, parent_id: 9, title: 'Master Kategori Karyawan', icon: '📁', path: 'master-employee-categories', roles: ['admin'], order_seq: 911 }
+    { menu_id: 911, parent_id: 9, title: 'Master Kategori Karyawan', icon: '📁', path: 'master-employee-categories', roles: ['admin'], order_seq: 911 },
+    { menu_id: 912, parent_id: 9, title: 'Master Bank', icon: '🏦', path: 'master-banks', roles: ['admin'], order_seq: 912 },
+    { menu_id: 913, parent_id: 9, title: 'Master Rekening Bank', icon: '💳', path: 'master-cashbank-accounts', roles: ['admin'], order_seq: 913 },
+    { menu_id: 914, parent_id: 9, title: 'Master Tipe Transaksi Kas/Bank', icon: '🏷️', path: 'master-transaction-types', roles: ['admin'], order_seq: 914 },
+    { menu_id: 915, parent_id: 9, title: 'Transaksi & Mutasi Kas Bank', icon: '💸', path: 'master-cashbank-transactions', roles: ['admin'], order_seq: 915 },
+    { menu_id: 916, parent_id: 9, title: 'Laporan Audit Kas & Bank', icon: '📊', path: 'report-cashbank-transactions', roles: ['admin'], order_seq: 916 }
   ].filter(m => {
     if (roleId === 1 || String(realRoleName).toLowerCase() === 'admin') return true;
     if (roleId === 3 || String(realRoleName).toLowerCase() === 'hrd') return m.roles.includes('hrd');
@@ -2765,7 +2770,7 @@ function App() {
 
   const fetchReferenceData = async () => {
     try {
-      const [deptRes, empStatusRes, kopkaraStatusRes, empCatRes, empRes, memRes, roleRes, menuRes, roleMenuRes] = await Promise.all([
+      const [deptRes, empStatusRes, kopkaraStatusRes, empCatRes, empRes, memRes, roleRes, menuRes, roleMenuRes, bankRes, cbAccRes, transTypeRes] = await Promise.all([
         axios.get(`${getApiBaseUrl()}/api/master/departments?limit=1000`),
         axios.get(`${getApiBaseUrl()}/api/master/employee-statuses?limit=1000`),
         axios.get(`${getApiBaseUrl()}/api/master/kopkara-statuses?limit=1000`),
@@ -2774,7 +2779,10 @@ function App() {
         axios.get(`${getApiBaseUrl()}/api/master/members?limit=1000`),
         axios.get(`${getApiBaseUrl()}/api/master/roles?limit=1000`),
         axios.get(`${getApiBaseUrl()}/api/master/menus?limit=1000`),
-        axios.get(`${getApiBaseUrl()}/api/master/role-menus?limit=1000`)
+        axios.get(`${getApiBaseUrl()}/api/master/role-menus?limit=1000`),
+        axios.get(`${getApiBaseUrl()}/api/master/banks?limit=1000`),
+        axios.get(`${getApiBaseUrl()}/api/master/cashbank-accounts?limit=1000`),
+        axios.get(`${getApiBaseUrl()}/api/master/transaction-types?limit=1000`)
       ]);
       setReferenceData({
         departments: deptRes.data.data || [],
@@ -2785,7 +2793,10 @@ function App() {
         members: memRes.data.data || [],
         roles: roleRes.data.data || [],
         menus: menuRes.data.data || [],
-        role_menus: roleMenuRes.data.data || []
+        role_menus: roleMenuRes.data.data || [],
+        banks: bankRes.data.data || [],
+        cashbankAccounts: cbAccRes.data.data || [],
+        transactionTypes: transTypeRes.data.data || []
       });
     } catch (error) {
       console.error('Error fetching reference data:', error);
@@ -3063,6 +3074,11 @@ function App() {
     if (tab === 'employee-statuses') return 'Master Status Karyawan';
     if (tab === 'kopkara-statuses') return 'Master Status Kopkara';
     if (tab === 'employee-categories') return 'Master Kategori Karyawan';
+    if (tab === 'banks') return 'Master Bank';
+    if (tab === 'cashbank-accounts') return 'Master Rekening Bank Operasional';
+    if (tab === 'transaction-types') return 'Master Tipe Transaksi Kas & Bank';
+    if (tab === 'cashbank-transactions') return 'Transaksi & Mutasi Kas Bank';
+    if (tab === 'report-cashbank-transactions') return 'Laporan Audit Kas & Bank';
     if (tab === 'employees') return 'Master Data Karyawan';
     if (tab === 'members') return 'Master Anggota Kopkara';
     if (tab === 'roles') return 'Master Role Sistem';
@@ -3077,6 +3093,10 @@ function App() {
     if (tab === 'departments') return 'deptno';
     if (tab === 'employee-statuses' || tab === 'kopkara-statuses') return 'status_code';
     if (tab === 'employee-categories') return 'category_code';
+    if (tab === 'banks') return 'bank_code';
+    if (tab === 'cashbank-accounts') return 'account_id';
+    if (tab === 'transaction-types') return 'type_code';
+    if (tab === 'cashbank-transactions') return 'transaction_id';
     if (tab === 'employees') return 'employee_id';
     if (tab === 'members') return 'member_no';
     if (tab === 'roles') return 'role_id';
@@ -3166,6 +3186,7 @@ function App() {
       setIsMasterModalOpen(false);
       setIsEditMasterMode(false);
       setMasterForm({});
+      setParamForm({});
       alert('Data berhasil disimpan!');
       fetchMasterData(masterTab);
     } catch (error) {
@@ -4639,7 +4660,7 @@ function App() {
 
                 <div style={{ padding: '12px 16px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
                   <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>8. Nama Pemilik Rekening Bank</div>
-                  <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>{userInfo?.bank_account_name || userInfo?.name || currentUser?.name || 'NUR KHOLIM'}</div>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>{userInfo?.name || currentUser?.name || 'NUR KHOLIM'}</div>
                 </div>
               </div>
 
@@ -4907,6 +4928,7 @@ function App() {
                         type="button"
                         onClick={() => {
                           setMasterForm({});
+                          setParamForm({});
                           setIsEditMasterMode(false);
                           fetchReferenceData();
                           if (masterTab === 'users') {
@@ -5168,152 +5190,186 @@ function App() {
                           </span>
                         </div>
 
-                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '600px' }}>
-                          <thead>
-                            <tr style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff' }}>
-                              {(() => {
-                                let keys = [];
-                                if (masterDataList.length > 0) {
-                                  keys = Object.keys(masterDataList[0]).filter(k => 
-                                    k !== 'CreatedAt' && k !== 'UpdatedAt' && k !== 'DeletedAt' && k !== 'CreatedUser' &&
-                                    k.toLowerCase() !== 'updated_at' && k.toLowerCase() !== 'deleted_at' &&
-                                    k.toLowerCase() !== 'updated_user' && k.toLowerCase() !== 'updateduser'
-                                  );
-                                }
-                                return (
-                                  <>
-                                    {keys.map(k => {
-                                      let label = k;
-                                      if (masterTab === 'departments') {
-                                        if (k.toLowerCase() === 'deptno') label = 'Deptno';
-                                        if (k.toLowerCase() === 'dept_name') label = 'Dept Name';
-                                      }
-                                      return <th key={k} style={{ padding: '10px 12px', textAlign: k.toLowerCase().includes('id') || k.toLowerCase().includes('no') ? 'center' : 'left', fontSize: '0.85rem' }}>{label}</th>;
-                                    })}
-                                    <th style={{ padding: '10px 12px', textAlign: 'center', fontSize: '0.85rem' }}>Aksi</th>
-                                  </>
-                                );
-                              })()}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {masterDataList.map((row, idx) => {
-                              const pkField = getPrimaryKeyKey(masterTab);
-                              const pkValue = getFieldValue(row, pkField) || row['ID'] || row['id'];
-                              const keys = Object.keys(row).filter(k => 
+                        {(() => {
+                          const masterTableKeys = masterDataList.length > 0 
+                            ? Object.keys(masterDataList[0]).filter(k => 
                                 k !== 'CreatedAt' && k !== 'UpdatedAt' && k !== 'DeletedAt' && k !== 'CreatedUser' &&
                                 k.toLowerCase() !== 'updated_at' && k.toLowerCase() !== 'deleted_at' &&
-                                k.toLowerCase() !== 'updated_user' && k.toLowerCase() !== 'updateduser'
-                              );
+                                k.toLowerCase() !== 'updated_user' && k.toLowerCase() !== 'updateduser' &&
+                                k.toLowerCase() !== 'deleted_user' && k.toLowerCase() !== 'deleteduser'
+                              )
+                            : [];
 
-                              return (
-                                <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0', background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
-                                  {keys.map(k => {
-                                    const isSalaryField = k.toLowerCase() === 'salary' || k.toLowerCase() === 'max_limit' || k.toLowerCase().includes('nominal') || k.toLowerCase().includes('amount');
-                                    const rawVal = row[k];
-                                    let formattedVal = String(rawVal ?? '');
-
-                                    if (k.toLowerCase() === 'failed_login_attempts') {
-                                      return (
-                                        <td key={k} style={{ padding: '6px 8px', textAlign: 'center', fontSize: '0.875rem', width: '90px' }}>
-                                          {rawVal ?? 0}
-                                        </td>
-                                      );
+                          return (
+                            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '600px' }}>
+                              <thead>
+                                <tr style={{ background: 'var(--header-bg, #0B2545)', color: '#ffffff' }}>
+                                  {masterTableKeys.map(k => {
+                                    let label = k;
+                                    if (masterTab === 'departments') {
+                                      if (k.toLowerCase() === 'deptno') label = 'Deptno';
+                                      if (k.toLowerCase() === 'dept_name') label = 'Dept Name';
                                     }
+                                    return <th key={k} style={{ padding: '10px 12px', textAlign: k.toLowerCase().includes('id') || k.toLowerCase().includes('no') ? 'center' : 'left', fontSize: '0.85rem' }}>{label}</th>;
+                                  })}
+                                  <th style={{ padding: '10px 12px', textAlign: 'center', fontSize: '0.85rem', width: '130px' }}>Aksi</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {masterDataList.map((row, idx) => {
+                                  const pkField = getPrimaryKeyKey(masterTab);
+                                  const pkValue = getFieldValue(row, pkField) || row['ID'] || row['id'];
 
-                                    if (masterTab === 'menus' && k.toLowerCase() === 'parent_id') {
-                                      const parentMenu = (referenceData.menus || []).find(m => String(m.menu_id) === String(rawVal));
-                                      const parentText = parentMenu ? `${parentMenu.title} (${parentMenu.menu_id})` : (rawVal ? String(rawVal) : '-');
-                                      return (
-                                        <td key={k} style={{ padding: '6px 12px', color: '#334155', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
-                                          {parentText}
-                                        </td>
-                                      );
-                                    }
+                                  return (
+                                    <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0', background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
+                                      {masterTableKeys.map(k => {
+                                        const isSalaryField = k.toLowerCase() === 'salary' || k.toLowerCase() === 'max_limit' || k.toLowerCase().includes('nominal') || k.toLowerCase().includes('amount');
+                                        const rawVal = row[k];
+                                        let formattedVal = (rawVal !== null && rawVal !== undefined && rawVal !== '') ? String(rawVal) : '-';
 
-                                    if (masterTab === 'users' && k.toLowerCase() === 'role') {
-                                      const rVal = String(rawVal || '').toLowerCase();
-                                      const bg = rVal === 'admin' ? '#dbeafe' : rVal === 'hrd' ? '#f3e8ff' : '#d1fae5';
-                                      const fg = rVal === 'admin' ? '#1e40af' : rVal === 'hrd' ? '#6b21a8' : '#065f46';
-                                      return (
-                                        <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
-                                          <span style={{ background: bg, color: fg, padding: '3px 10px', borderRadius: '12px', fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase' }}>
-                                            {rawVal}
-                                          </span>
-                                        </td>
-                                      );
-                                    }
+                                        if (k.toLowerCase() === 'failed_login_attempts') {
+                                          return (
+                                            <td key={k} style={{ padding: '6px 8px', textAlign: 'center', fontSize: '0.875rem', width: '90px' }}>
+                                              {rawVal ?? 0}
+                                            </td>
+                                          );
+                                        }
 
-                                    if (masterTab === 'users' && (k.toLowerCase() === 'locked_until' || k.toLowerCase() === 'failed_login_attempts')) {
-                                      const isLocked = (row.locked_until && new Date(row.locked_until) > new Date()) || row.failed_login_attempts >= 5;
-                                      if (k.toLowerCase() === 'locked_until') {
+                                        if (masterTab === 'menus' && k.toLowerCase() === 'parent_id') {
+                                          const parentMenu = (referenceData.menus || []).find(m => String(m.menu_id) === String(rawVal));
+                                          const parentText = parentMenu ? `${parentMenu.title} (${parentMenu.menu_id})` : (rawVal ? String(rawVal) : '-');
+                                          return (
+                                            <td key={k} style={{ padding: '6px 12px', color: '#334155', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
+                                              {parentText}
+                                            </td>
+                                          );
+                                        }
+
+                                        if (k.toLowerCase() === 'direction') {
+                                          const isIn = String(rawVal).toUpperCase() === 'IN';
+                                          return (
+                                            <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
+                                              <span style={{ background: isIn ? '#d1fae5' : '#fee2e2', color: isIn ? '#065f46' : '#991b1b', padding: '3px 8px', borderRadius: '12px', fontWeight: 700, fontSize: '0.75rem' }}>
+                                                {isIn ? '⬇️ IN (Masuk)' : '⬆️ OUT (Keluar)'}
+                                              </span>
+                                            </td>
+                                          );
+                                        }
+
+                                        if (k.toLowerCase() === 'notification_type') {
+                                          const nType = parseInt(rawVal) || 0;
+                                          let bg = '#f1f5f9', fg = '#64748b', label = '🚫 0 - OFF';
+                                          if (nType === 1) { bg = '#dbeafe'; fg = '#1e40af'; label = '📧 1 - Email'; }
+                                          else if (nType === 2) { bg = '#d1fae5'; fg = '#065f46'; label = '💬 2 - WA'; }
+                                          else if (nType === 3) { bg = '#f3e8ff'; fg = '#6b21a8'; label = '⚡ 3 - Email & WA'; }
+                                          return (
+                                            <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
+                                              <span style={{ background: bg, color: fg, padding: '3px 10px', borderRadius: '12px', fontWeight: 700, fontSize: '0.75rem' }}>
+                                                {label}
+                                              </span>
+                                            </td>
+                                          );
+                                        }
+
+                                        if (k.toLowerCase() === 'type_code') {
+                                          const code = String(rawVal).toUpperCase();
+                                          const bg = code === 'DISB' ? '#fee2e2' : code === 'RPMN' ? '#d1fae5' : code === 'RPIP' ? '#dbeafe' : '#f3e8ff';
+                                          const fg = code === 'DISB' ? '#991b1b' : code === 'RPMN' ? '#065f46' : code === 'RPIP' ? '#1e40af' : '#6b21a8';
+                                          return (
+                                            <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
+                                              <span style={{ background: bg, color: fg, padding: '3px 8px', borderRadius: '4px', fontWeight: 700, fontSize: '0.75rem' }}>
+                                                {rawVal}
+                                              </span>
+                                            </td>
+                                          );
+                                        }
+
+                                        if (masterTab === 'users' && k.toLowerCase() === 'role') {
+                                          const rVal = String(rawVal || '').toLowerCase();
+                                          const bg = rVal === 'admin' ? '#dbeafe' : rVal === 'hrd' ? '#f3e8ff' : '#d1fae5';
+                                          const fg = rVal === 'admin' ? '#1e40af' : rVal === 'hrd' ? '#6b21a8' : '#065f46';
+                                          return (
+                                            <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
+                                              <span style={{ background: bg, color: fg, padding: '3px 10px', borderRadius: '12px', fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase' }}>
+                                                {rawVal || '-'}
+                                              </span>
+                                            </td>
+                                          );
+                                        }
+
+                                        if (masterTab === 'users' && (k.toLowerCase() === 'locked_until' || k.toLowerCase() === 'failed_login_attempts')) {
+                                          const isLocked = (row.locked_until && new Date(row.locked_until) > new Date()) || row.failed_login_attempts >= 5;
+                                          if (k.toLowerCase() === 'locked_until') {
+                                            return (
+                                              <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
+                                                {isLocked ? (
+                                                  <span style={{ background: '#fee2e2', color: '#991b1b', padding: '3px 8px', borderRadius: '12px', fontWeight: 600, fontSize: '0.75rem' }}>
+                                                    🔒 Locked
+                                                  </span>
+                                                ) : (
+                                                  <span style={{ background: '#d1fae5', color: '#065f46', padding: '3px 8px', borderRadius: '12px', fontWeight: 600, fontSize: '0.75rem' }}>
+                                                    ● Normal
+                                                  </span>
+                                                )}
+                                              </td>
+                                            );
+                                          }
+                                        }
+
+                                        if (typeof rawVal === 'boolean') {
+                                          formattedVal = rawVal ? 'Ya' : 'Tidak';
+                                        } else if (isSalaryField && rawVal !== null && rawVal !== undefined && rawVal !== '') {
+                                          const num = Number(rawVal);
+                                          formattedVal = !isNaN(num) ? `Rp ${Math.round(num).toLocaleString('id-ID')}` : String(rawVal);
+                                        } else if (typeof rawVal === 'object' && rawVal !== null) {
+                                          formattedVal = JSON.stringify(rawVal);
+                                        }
+
                                         return (
-                                          <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
-                                            {isLocked ? (
-                                              <span style={{ background: '#fee2e2', color: '#991b1b', padding: '3px 8px', borderRadius: '12px', fontWeight: 600, fontSize: '0.75rem' }}>
-                                                🔒 Locked
-                                              </span>
-                                            ) : (
-                                              <span style={{ background: '#d1fae5', color: '#065f46', padding: '3px 8px', borderRadius: '12px', fontWeight: 600, fontSize: '0.75rem' }}>
-                                                ● Normal
-                                              </span>
-                                            )}
+                                          <td key={k} style={{ padding: '6px 12px', color: '#334155', fontSize: '0.875rem', whiteSpace: 'nowrap', fontWeight: isSalaryField ? 600 : 400 }}>
+                                            {formattedVal}
                                           </td>
                                         );
-                                      }
-                                    }
-
-                                    if (typeof rawVal === 'boolean') {
-                                      formattedVal = rawVal ? 'Ya' : 'Tidak';
-                                    } else if (isSalaryField && rawVal !== null && rawVal !== undefined && rawVal !== '') {
-                                      const num = Number(rawVal);
-                                      formattedVal = !isNaN(num) ? `Rp ${Math.round(num).toLocaleString('id-ID')}` : String(rawVal);
-                                    } else if (typeof rawVal === 'object' && rawVal !== null) {
-                                      formattedVal = JSON.stringify(rawVal);
-                                    }
-
-                                    return (
-                                      <td key={k} style={{ padding: '6px 12px', color: '#334155', fontSize: '0.875rem', whiteSpace: 'nowrap', fontWeight: isSalaryField ? 600 : 400 }}>
-                                        {formattedVal}
+                                      })}
+                                      <td style={{ padding: '6px 12px', textAlign: 'center', whiteSpace: 'nowrap', width: '130px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', flexWrap: 'nowrap' }}>
+                                          <button 
+                                            type="button"
+                                            onClick={() => {
+                                              setMasterForm(row);
+                                              setParamForm(row);
+                                              setIsEditMasterMode(true);
+                                              fetchReferenceData();
+                                              if (masterTab === 'users') {
+                                                setMemberSelectSearchQuery('');
+                                                setMemberSelectPage(1);
+                                                fetchPaginatedMembersForSelect('', 1);
+                                              }
+                                              setIsMasterModalOpen(true);
+                                            }} 
+                                            style={{ padding: '4px 10px', background: '#e0f2fe', color: '#0369a1', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                                          >
+                                            Edit
+                                          </button>
+                                          <button 
+                                            type="button"
+                                            onClick={() => deleteMasterData(pkField, pkValue)} 
+                                            style={{ padding: '4px 10px', background: '#fee2e2', color: '#b91c1c', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                                          >
+                                            Hapus
+                                          </button>
+                                        </div>
                                       </td>
-                                    );
-                                  })}
-                                  <td style={{ padding: '6px 12px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', flexWrap: 'nowrap' }}>
-                                      <button 
-                                        type="button"
-                                        onClick={() => {
-                                          setMasterForm(row);
-                                          setIsEditMasterMode(true);
-                                          fetchReferenceData();
-                                          if (masterTab === 'users') {
-                                            setMemberSelectSearchQuery('');
-                                            setMemberSelectPage(1);
-                                            fetchPaginatedMembersForSelect('', 1);
-                                          }
-                                          setIsMasterModalOpen(true);
-                                        }} 
-                                        style={{ padding: '4px 10px', background: '#e0f2fe', color: '#0369a1', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
-                                      >
-                                        Edit
-                                      </button>
-                                      <button 
-                                        type="button"
-                                        onClick={() => deleteMasterData(pkField, pkValue)} 
-                                        style={{ padding: '4px 10px', background: '#fee2e2', color: '#b91c1c', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
-                                      >
-                                        Hapus
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                            {masterDataList.length === 0 && (
-                              <tr><td colSpan="100%" style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>Belum ada data ditemukan di database.</td></tr>
-                            )}
-                          </tbody>
-                        </table>
+                                    </tr>
+                                  );
+                                })}
+                                {masterDataList.length === 0 && (
+                                  <tr><td colSpan="100%" style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>Belum ada data ditemukan di database.</td></tr>
+                                )}
+                              </tbody>
+                            </table>
+                          );
+                        })()}
                       </div>
                     )}
 
@@ -5418,23 +5474,51 @@ function App() {
                           if (masterTab === 'departments') fields = [{k:'deptno', l:'Dept No', type: 'text'}, {k:'dept_name', l:'Dept Name'}];
                           else if (masterTab === 'employee-statuses' || masterTab === 'kopkara-statuses') fields = [{k:'status_code', l:'Status Code'}, {k:'description', l:'Description'}];
                           else if (masterTab === 'employee-categories') fields = [{k:'category_code', l:'Category Code'}, {k:'description', l:'Description'}, {k:'max_limit', l:'Max Limit (IDR)', type:'idr'}, {k:'is_eligible', l:'Is Eligible (Check for Yes)', type:'checkbox'}];
+                          else if (masterTab === 'banks') fields = [
+                            {k:'bank_code', l:'Kode Bank (misal: BCA, MANDIRI)'}, 
+                            {k:'bank_name', l:'Nama Bank (misal: Bank Central Asia)'}, 
+                            {k:'bank_code_provider', l:'Kode Provider Bank (misal: 014)'}
+                          ];
+                          else if (masterTab === 'cashbank-accounts') fields = [
+                            {k:'account_number', l:'Nomor Rekening Bank (Contoh: 1234567890)'},
+                            {k:'account_name', l:'Nama Atas Nama Rekening (Contoh: Koperasi Kopkara EWA)'},
+                            {k:'bank_code', l:'Bank Operasional', type:'select', options: (referenceData.banks || []).map(b => ({val: b.bank_code, label: `${b.bank_code} - ${b.bank_name}`}))},
+                            {k:'currency', l:'Mata Uang (Default: IDR)'},
+                            {k:'initial_balance', l:'Saldo Awal Pembukaan (IDR)', type:'idr'},
+                            {k:'is_active', l:'Status Aktif (Centang jika Aktif)', type:'checkbox'}
+                          ];
+                          else if (masterTab === 'transaction-types') fields = [
+                            {k:'type_code', l:'Kode Tipe Transaksi (misal: DISB, RPMN, RPIP)'},
+                            {k:'type_name', l:'Nama Tipe Transaksi'},
+                            {k:'direction', l:'Arah Arus Kas', type:'select', options: [{val: 'IN', label: 'IN - Kas Masuk'}, {val: 'OUT', label: 'OUT - Kas Keluar'}]},
+                            {k:'description', l:'Keterangan', type:'textarea'}
+                          ];
+                          else if (masterTab === 'cashbank-transactions') fields = [
+                            {k:'bank_code', l:'Bank Operasional', type:'select', options: (referenceData.banks || []).map(b => ({val: b.bank_code, label: `${b.bank_code} - ${b.bank_name}`}))},
+                            {k:'bank_account_no', l:'Nomor Rekening Operasional'},
+                            {k:'type_code', l:'Tipe Transaksi', type:'select', options: (referenceData.transactionTypes || []).map(t => ({val: t.type_code, label: `${t.type_code} - ${t.type_name} (${t.direction})`}))},
+                            {k:'direction', l:'Arah Arus Kas', type:'select', options: [{val: 'IN', label: 'IN - Kas Masuk'}, {val: 'OUT', label: 'OUT - Kas Keluar'}]},
+                            {k:'amount', l:'Nominal Transaksi (IDR)', type:'idr'},
+                            {k:'reference_type', l:'Tipe Referensi', type:'select', options: [{val: 'LOAN_APPLICATION', label: 'LOAN_APPLICATION'}, {val: 'REPAYMENT_MANUAL', label: 'REPAYMENT_MANUAL'}, {val: 'PAYROLL_IMPORT', label: 'PAYROLL_IMPORT'}, {val: 'ADJUSTMENT', label: 'ADJUSTMENT'}]},
+                            {k:'reference_no', l:'Nomor Referensi (App No / Ref No)'},
+                            {k:'description', l:'Deskripsi / Keterangan', type:'textarea'}
+                          ];
                           else if (masterTab === 'employees') fields = [
                             {k:'employee_id', l:'Employee ID (Number)', type:'number'}, 
                             {k:'name', l:'Name'}, 
                             {k:'employee_status', l:'Employee Status', type:'select', options: referenceData.employeeStatuses.map(d => ({val: d.status_code, label: d.description}))}, 
                             {k:'deptno', l:'Department', type:'select', options: referenceData.departments.map(d => ({val: d.deptno, label: d.dept_name}))}, 
                             {k:'category_code', l:'Category', type:'select', options: referenceData.employeeCategories.map(d => ({val: d.category_code, label: d.description}))},
-                            {k:'salary', l:'Salary (IDR)', type:'idr'}
+                            {k:'salary', l:'Salary (IDR)', type:'idr'},
+                            {k:'bank_code', l:'Bank Transfer', type:'select', options: (referenceData.banks || []).map(b => ({val: b.bank_code, label: `${b.bank_code} - ${b.bank_name}`}))},
+                            {k:'bank_account_no', l:'No. Rekening Bank'}
                           ];
                           else if (masterTab === 'members') {
                             fields = [
                               {k:'member_no', l:'Member No (Number)', type:'number'}, 
                               {k:'employee_id', l:'Employee', type:'select', options: (referenceData.employees || []).map(d => ({val: d.employee_id, label: `${d.employee_id} - ${d.name || ''}`}))}, 
                               {k:'kopkara_status', l:'Kopkara Status', type:'select', options: (referenceData.kopkaraStatuses || []).map(d => ({val: d.status_code, label: d.description ? `${d.status_code} - ${d.description}` : d.status_code}))}, 
-                              {k:'join_date', l:'Join Date (YYYY-MM-DD)', type:'date'},
-                              {k:'bank_name', l:'Nama Bank (Contoh: BCA, Mandiri)'},
-                              {k:'bank_account_no', l:'No. Rekening Bank'},
-                              {k:'bank_account_name', l:'Nama Pemilik Rekening'}
+                              {k:'join_date', l:'Join Date (YYYY-MM-DD)', type:'date'}
                             ];
                           }
                           else if (masterTab === 'roles') fields = [
@@ -5448,10 +5532,11 @@ function App() {
                             {k:'path', l:'Router Path'},
                             {k:'order', l:'Display Order', type:'number'},
                             {k:'is_password', l:'Require Password for This Menu', type:'checkbox'},
-                            {k:'notification_type', l:'Require Notification', type:'select', options: [
-                              {val: 0, label: '0 - Tidak Kirim Notifikasi (Default)'},
-                              {val: 1, label: '1 - Kirim Notifikasi Email'},
-                              {val: 2, label: '2 - Kirim Notifikasi Email & WhatsApp'}
+                            {k:'notification_type', l:'Tipe Notifikasi Otomatis Menu', type:'select', options: [
+                              {val: 0, label: '0 - Tidak Kirim Notifikasi (OFF)'},
+                              {val: 1, label: '1 - Kirim Email Saja'},
+                              {val: 2, label: '2 - Kirim WhatsApp Saja'},
+                              {val: 3, label: '3 - Kirim Email & WhatsApp (Keduanya)'}
                             ]}
                           ];
                           else if (masterTab === 'role-menus') fields = [
@@ -5478,7 +5563,7 @@ function App() {
                               {val: '', label: '-- Tidak Terkait Member (Non-Anggota) --'},
                               ...((referenceData.members || []).map(m => ({
                                 val: m.member_no, 
-                                label: `No. ${m.member_no}${m.bank_account_name ? ' - ' + m.bank_account_name : ''}`
+                                label: `No. ${m.member_no}${m.name ? ' - ' + m.name : ''}`
                               })))
                             ]},
                             {k:'password', l: isEditMode ? 'New Password (Kosongkan jika tidak diubah)' : 'Password', type:'password'},
