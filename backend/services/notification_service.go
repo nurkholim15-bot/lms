@@ -272,9 +272,19 @@ func SendWhatsAppNotification(phoneNumber string, messageText string, db *gorm.D
 	return fmt.Errorf("Kredensial WhatsApp belum dikonfigurasi")
 }
 
+// DispatchInAppNotification disabled - table user_notifications removed
+func DispatchInAppNotification(userID int64, title string, message string, category string, refType string, refNo string, actionURL string, db *gorm.DB) error {
+	return nil
+}
+
 // DispatchMenuNotification checks lms_sch.menus.notification_type for the given menu path/id
-// notification_type: 0 = OFF/None, 1 = Email Only, 2 = WhatsApp Only, 3 = Email & WhatsApp
+// notification_type: 0 = OFF, 1 = Email Only, 2 = WA Only, 3 = Email & WA, 4 = FCM Push Only, 5 = Email + WA + FCM Push
 func DispatchMenuNotification(menuPath string, targetPhone string, targetEmail string, subject string, messageText string, htmlBody string, db *gorm.DB) {
+	DispatchMenuNotificationWithUser(menuPath, 0, targetPhone, targetEmail, subject, messageText, htmlBody, db)
+}
+
+// DispatchMenuNotificationWithUser supports optional targetUserID for FCM Push notifications
+func DispatchMenuNotificationWithUser(menuPath string, targetUserID int64, targetPhone string, targetEmail string, subject string, messageText string, htmlBody string, db *gorm.DB) {
 	menuPath = strings.TrimSpace(strings.ToLower(menuPath))
 
 	var notifType int = -1
@@ -292,7 +302,7 @@ func DispatchMenuNotification(menuPath string, targetPhone string, targetEmail s
 		return
 	}
 
-	var sendEmail, sendWA bool
+	var sendEmail, sendWA, sendFCM bool
 
 	if notifType >= 0 {
 		switch notifType {
@@ -301,28 +311,42 @@ func DispatchMenuNotification(menuPath string, targetPhone string, targetEmail s
 			return
 		case 1:
 			sendEmail = true
-			sendWA = false
 			log.Printf("[NOTIF-CONFIG] Menu '%s' notification_type = 1 (EMAIL ONLY)", menuPath)
 		case 2:
-			sendEmail = false
 			sendWA = true
 			log.Printf("[NOTIF-CONFIG] Menu '%s' notification_type = 2 (WHATSAPP ONLY)", menuPath)
 		case 3:
 			sendEmail = true
 			sendWA = true
 			log.Printf("[NOTIF-CONFIG] Menu '%s' notification_type = 3 (EMAIL & WHATSAPP)", menuPath)
+		case 4:
+			sendFCM = true
+			log.Printf("[NOTIF-CONFIG] Menu '%s' notification_type = 4 (FCM PUSH ONLY)", menuPath)
+		case 5:
+			sendEmail = true
+			sendWA = true
+			sendFCM = true
+			log.Printf("[NOTIF-CONFIG] Menu '%s' notification_type = 5 (FULL MULTICHANNEL: EMAIL, WA & FCM PUSH)", menuPath)
 		default:
 			sendEmail = strings.Contains(masterChannels, "EMAIL")
 			sendWA = strings.Contains(masterChannels, "WA")
+			sendFCM = strings.Contains(masterChannels, "FCM")
 		}
 	} else {
 		// Fallback to global parameter
 		sendEmail = strings.Contains(masterChannels, "EMAIL")
 		sendWA = strings.Contains(masterChannels, "WA")
+		sendFCM = strings.Contains(masterChannels, "FCM")
 	}
 
 	// Execute asynchronously in background goroutine so backend APIs remain lightning fast (<50ms)
 	go func() {
+		if sendFCM && targetUserID > 0 {
+			if err := SendFCMPushNotification(targetUserID, subject, messageText, menuPath, db); err != nil {
+				log.Printf("❌ [ASYNC-FCM-FAILED] Menu '%s' to User %d: %v", menuPath, targetUserID, err)
+			}
+		}
+
 		if sendEmail && strings.TrimSpace(targetEmail) != "" {
 			bodyToSend := htmlBody
 			if bodyToSend == "" {
@@ -339,6 +363,11 @@ func DispatchMenuNotification(menuPath string, targetPhone string, targetEmail s
 			}
 		}
 	}()
+}
+
+// SendFCMPushNotification disabled completely
+func SendFCMPushNotification(userID int64, title string, bodyText string, actionURL string, db *gorm.DB) error {
+	return nil
 }
 
 // DispatchEventNotification is alias wrapper for DispatchMenuNotification

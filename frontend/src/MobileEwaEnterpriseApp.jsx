@@ -63,12 +63,6 @@ export default function MobileEwaEnterpriseApp({ currentUser, onLogout, defaultA
           setLoanForm(prev => ({ ...prev, product_id: prodRes.data[0].id }));
         }
       }
-
-      // Fetch my loans
-      const loanRes = await axios.get(`${activeApiUrl}/api/applications`);
-      if (Array.isArray(loanRes.data)) {
-        setMyLoans(loanRes.data);
-      }
     } catch (err) {
       console.log('Error fetching mobile data:', err);
     } finally {

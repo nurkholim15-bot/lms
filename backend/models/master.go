@@ -235,3 +235,36 @@ type RoleMenu struct {
 func (RoleMenu) TableName() string {
 	return "lms_sch.role_menus"
 }
+
+// UserNotification represents lms_sch.user_notifications
+type UserNotification struct {
+	ID            int64      `gorm:"primaryKey;column:id;autoIncrement:true" json:"id"`
+	UserID        int64      `gorm:"column:user_id" json:"user_id"`
+	Title         string     `gorm:"column:title" json:"title"`
+	Message       string     `gorm:"column:message" json:"message"`
+	Category      string     `gorm:"column:category" json:"category"`
+	ReferenceType string     `gorm:"column:reference_type" json:"reference_type"`
+	ReferenceNo   string     `gorm:"column:reference_no" json:"reference_no"`
+	ActionURL     string     `gorm:"column:action_url" json:"action_url"`
+	IsRead        bool       `gorm:"column:is_read" json:"is_read"`
+	ReadAt        *time.Time `gorm:"column:read_at" json:"read_at"`
+	MasterBaseModel
+}
+
+func (UserNotification) TableName() string {
+	return "lms_sch.user_notifications"
+}
+
+// UserDeviceToken represents lms_sch.user_device_tokens
+type UserDeviceToken struct {
+	ID          int64  `gorm:"primaryKey;column:id;autoIncrement:true" json:"id"`
+	UserID      int64  `gorm:"column:user_id" json:"user_id"`
+	FCMToken    string `gorm:"column:fcm_token" json:"fcm_token"`
+	DeviceModel string `gorm:"column:device_model" json:"device_model"`
+	DeviceOS    string `gorm:"column:device_os" json:"device_os"`
+	MasterBaseModel
+}
+
+func (UserDeviceToken) TableName() string {
+	return "lms_sch.user_device_tokens"
+}

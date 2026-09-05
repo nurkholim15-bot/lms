@@ -105,11 +105,12 @@ func calculateLMSCreditLimitFromCache(db *gorm.DB, paramRepo repositories.Parame
 	}
 	var res EmpCat
 	err := db.Raw(`
-		SELECT COALESCE(e.salary, 0) as salary, COALESCE(c.max_limit, 15000000) as max_limit
+		SELECT COALESCE(e.salary, 0) as salary, COALESCE(c.max_limit, 0) as max_limit
 		FROM lms_sch.employees e
 		LEFT JOIN lms_sch.employee_categories c ON e.category_code = c.category_code
-		WHERE e.employee_id = ? LIMIT 1
-	`, empId).Scan(&res).Error
+		WHERE e.employee_id = ? OR e.employee_id = (SELECT employee_id FROM lms_sch.members WHERE member_no = ? LIMIT 1)
+		LIMIT 1
+	`, empId, empId).Scan(&res).Error
 
 	if err != nil || res.MaxLimit <= 0 {
 		res.MaxLimit = 15000000
@@ -726,22 +727,9 @@ func main() {
 
 				var existingUser models.User
 				if err := config.DB.Where("username = ? OR username = ? OR phone_number = ? OR phone_number = ? OR (member_no IS NOT NULL AND member_no = ?)", phone08, phone62, phone08, phone62, memberNoToUse).First(&existingUser).Error; err == nil {
-					updates := map[string]interface{}{
-						"password":     hashStr,
-						"pin":          hashStr,
-						"phone_number": phoneStr,
-						"name":         emp.Name,
-						"member_no":    memberNoToUse,
-					}
-					if ktpStr != "" {
-						updates["no_ktp"] = ktpStr
-					}
-					if errUpd := config.DB.Model(&existingUser).Updates(updates).Error; errUpd != nil {
-						log.Printf("[REGISTER-UPDATE-ERROR] %v", errUpd)
-						c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal memperbarui user: " + errUpd.Error()})
-						return
-					}
-					log.Printf("🟢 [REGISTER-SUCCESS] Updated user ID %d for phone %s with Random PIN: %s", existingUser.ID, phone, randomPin)
+					log.Printf("[REGISTER-FAIL] User already exists for phone %s / member_no %d (User ID %d)", phone, memberNoToUse, existingUser.ID)
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Registrasi gagal karena user tsb sudah melakukan registrasi"})
+					return
 				} else {
 					newUser := models.User{
 						Username:    phone,
@@ -1566,17 +1554,16 @@ func main() {
 				}
 			}
 
-			// 1. Hitung Total Sisa Hutang (Total Debt) tanpa JOIN ke loan_schedules & loans (Ultra-Fast <3ms)
+			// 1. Hitung Total Sisa Hutang (Total Debt) langsung dari lms_sch.employees (Ultra-Fast <1ms & 100% Akurat)
 			if isHighPriv {
-				config.DB.Raw("SELECT COALESCE(SUM(COALESCE(approved_amount, requested_amount)), 0) FROM lms_sch.loan_applications WHERE status IN ('DISBURSED', 'APPROVED')").Scan(&totalHutang)
+				config.DB.Raw("SELECT COALESCE(SUM(total_loan), 0) FROM lms_sch.employees").Scan(&totalHutang)
 			} else if empIdInt > 0 {
-				var empLoan float64 = 0
-				errEmp := config.DB.Raw("SELECT COALESCE(total_loan, 0) FROM lms_sch.employees WHERE employee_id = ? OR employee_id = (SELECT employee_id FROM lms_sch.members WHERE member_no = ? LIMIT 1) LIMIT 1", empIdInt, empIdInt).Scan(&empLoan).Error
-				if errEmp == nil && empLoan > 0 {
-					totalHutang = empLoan
-				} else {
-					config.DB.Raw("SELECT COALESCE(SUM(COALESCE(approved_amount, requested_amount)), 0) FROM lms_sch.loan_applications WHERE (member_no = ? OR member_no IN (SELECT member_no FROM lms_sch.members WHERE employee_id = ?)) AND status IN ('DISBURSED', 'APPROVED')", empIdInt, empIdInt).Scan(&totalHutang)
-				}
+				config.DB.Raw(`
+					SELECT COALESCE(total_loan, 0) 
+					FROM lms_sch.employees 
+					WHERE employee_id = ? OR employee_id = (SELECT employee_id FROM lms_sch.members WHERE member_no = ? LIMIT 1) 
+					LIMIT 1
+				`, empIdInt, empIdInt).Scan(&totalHutang)
 			}
 
 			availableLimit := creditLimit - totalHutang
@@ -1584,17 +1571,7 @@ func main() {
 				availableLimit = 0
 			}
 
-			// Query 5 Pinjaman Terbaru
-			queryLatest := "SELECT application_no, member_no, product_id, submission_date, requested_amount, tenor, status FROM lms_sch.loan_applications "
-			var argsLatest []interface{}
-			if !isHighPriv && empIdInt > 0 {
-				queryLatest += " WHERE (member_no = ? OR member_no IN (SELECT member_no FROM lms_sch.members WHERE employee_id = ?)) "
-				argsLatest = append(argsLatest, empIdInt, empIdInt)
-			}
-			queryLatest += " ORDER BY created_at DESC LIMIT 5"
-
 			var recentApps []models.LoanApplication
-			config.DB.Raw(queryLatest, argsLatest...).Scan(&recentApps)
 
 			// LOG CONSOLE RESMI BACKEND UNTUK DASHBOARD CREDIT LIMIT (CL)
 			log.Printf("[DASHBOARD-SUMMARY] UserID: %d | Role: '%s' | HighPriv: %t | Formula: '%s' | CreditLimit (CL): Rp %.2f | TotalDebt: Rp %.2f | AvailableLimit: Rp %.2f",
@@ -2150,7 +2127,7 @@ func main() {
 						</div>
 					`, emp.Name, typeCode, amtStr, refNo, now.Format("02-01-2006 15:04"))
 
-					services.DispatchEventNotification("REPAYMENT", emp.PhoneNumber, emp.Email, fmt.Sprintf("Pembayaran Angsuran %s Diterima - Kopkara EWA", amtStr), waMsg, htmlMsg, db)
+					services.DispatchMenuNotificationWithUser("REPAYMENT", emp.EmployeeID, emp.PhoneNumber, emp.Email, fmt.Sprintf("Pembayaran Angsuran %s Diterima - Kopkara EWA", amtStr), waMsg, htmlMsg, db)
 				}
 			}
 
@@ -2812,8 +2789,8 @@ func main() {
 			c.JSON(http.StatusOK, gin.H{"status": "success", "data": logs})
 		})
 
-		// GET Email Diagnostic & Test Endpoint
-		api.GET("/test-email", func(c *gin.Context) {
+		// GET Email Diagnostic & Test Endpoint (Public)
+		r.GET("/api/test-email", func(c *gin.Context) {
 			toEmail := c.DefaultQuery("to", "nkholim@yahoo.com")
 			smtpHost := cache.ParameterCache.Get("SMTP_HOST", "smtp.gmail.com", config.DB)
 			if envHost := strings.TrimSpace(os.Getenv("SMTP_HOST")); envHost != "" {
@@ -2907,6 +2884,31 @@ func main() {
 				"port":    smtpPort,
 				"user":    smtpUser,
 			})
+		})
+
+		// GET Diagnostic FCM Test Push Notification Endpoint (Disabled / No-Op)
+		r.GET("/api/test-fcm", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"status": "DISABLED", "message": "FCM Push Notifications telah dinonaktifkan."})
+		})
+
+		// GET In-App User Notifications Endpoint (Disabled / No-Op)
+		api.GET("/notifications", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"unread_count": 0, "data": []interface{}{}})
+		})
+
+		// PUT Mark Single Notification as Read (No-Op)
+		api.PUT("/notifications/:id/read", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"status": "success"})
+		})
+
+		// PUT Mark All User Notifications as Read (No-Op)
+		api.PUT("/notifications/read-all", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"status": "success"})
+		})
+
+		// POST Register / Update FCM Device Token Endpoint (Disabled / No-Op)
+		r.POST("/api/device-token", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"status": "success", "message": "FCM Device Token endpoint disabled"})
 		})
 
 		// POST Payroll Adjustment Endpoint

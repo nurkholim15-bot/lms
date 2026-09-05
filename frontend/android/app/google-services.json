@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "582289329906",
+    "project_id": "lms-kopkara-ewa",
+    "storage_bucket": "lms-kopkara-ewa.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:582289329906:android:f9ca44d73554636b5eca6b",
+        "android_client_info": {
+          "package_name": "com.kopkara.ewa.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDUCQJBR5ZOpKuyLrtS4WnXQk2h3LRXsmE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

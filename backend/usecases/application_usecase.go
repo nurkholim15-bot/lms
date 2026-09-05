@@ -175,7 +175,7 @@ func (u *applicationUseCase) getProductCached(productID int64) (models.LoanProdu
 	return product, nil
 }
 
-func (u *applicationUseCase) runSimulation(req SubmitApplicationRequest, product models.LoanProduct, existingMember ...*models.Member) (SimulationResult, error) {
+func (u *applicationUseCase) runSimulation(req SubmitApplicationRequest, product models.LoanProduct, isSubmit bool, existingMember ...*models.Member) (SimulationResult, error) {
 	db := u.appRepo.GetDB()
 
 	var member models.Member
@@ -190,10 +190,12 @@ func (u *applicationUseCase) runSimulation(req SubmitApplicationRequest, product
 	}
 
 	var employee models.Employee
-	if ePtr, errE := cache.IdentityCache.GetEmployeeByID(db, member.EmployeeID); errE == nil && ePtr != nil {
-		employee = *ePtr
-	} else {
-		employee = models.Employee{EmployeeID: member.EmployeeID, Salary: 8000000, CategoryCode: "PERMANENT"}
+	if errE := db.Where("employee_id = ?", member.EmployeeID).First(&employee).Error; errE != nil {
+		if ePtr, errCache := cache.IdentityCache.GetEmployeeByID(db, member.EmployeeID); errCache == nil && ePtr != nil {
+			employee = *ePtr
+		} else {
+			employee = models.Employee{EmployeeID: member.EmployeeID, Salary: 8000000, CategoryCode: "PERMANENT"}
+		}
 	}
 
 	var category models.EmployeeCategory
@@ -240,7 +242,7 @@ func (u *applicationUseCase) runSimulation(req SubmitApplicationRequest, product
 				newAppTotalLoan := req.RequestedAmount + (req.RequestedAmount * (interestRate / 100.0) * float64(req.Tenor))
 				cumulativeExposure := employee.TotalLoan + newAppTotalLoan
 
-				if cumulativeExposure > limitVal {
+				if isSubmit && cumulativeExposure > limitVal {
 					availableLimit := limitVal - employee.TotalLoan
 					if availableLimit < 0 {
 						availableLimit = 0
@@ -297,7 +299,7 @@ func (u *applicationUseCase) SimulateApplication(req SubmitApplicationRequest) (
 	if err != nil {
 		return SimulationResult{}, errors.New("product not found")
 	}
-	return u.runSimulation(req, product)
+	return u.runSimulation(req, product, false)
 }
 
 func (u *applicationUseCase) IsHighPrivilegeRole(roleId string) bool {
@@ -486,7 +488,7 @@ func (u *applicationUseCase) SubmitApplication(req SubmitApplicationRequest) (*m
 	}
 
 	// 4. Run Simulation & get Breakdown (Credit Limit Validation)
-	simResult, err := u.runSimulation(req, product, &member)
+	simResult, err := u.runSimulation(req, product, true, &member)
 	if err != nil {
 		u.writeSubmitLoanLog("RC_SUBMIT_LOAN_CREDIT_LIMIT", "13", member.EmployeeID, req.ProductID, now, req.RequestedAmount, req.Tenor, "REJECTED_CREDIT_LIMIT", 0, req.CreatedUser)
 		return nil, err
@@ -964,7 +966,7 @@ func (u *applicationUseCase) recordCashBankDisbursement(db *gorm.DB, app models.
 		</div>
 	`, emp.Name, app.ApplicationNo, reqAmtStr, adminFeeStr, disbAmtStr, emp.BankAccountNo, emp.BankCode, now.Format("02-01-2006 15:04"))
 
-	services.DispatchEventNotification("DISBURSEMENT", targetPhone, targetEmail, fmt.Sprintf("Pencairan Pinjaman #%d Berhasil - Kopkara EWA", app.ApplicationNo), waMsg, htmlMsg, db)
+	services.DispatchMenuNotificationWithUser("DISBURSEMENT", targetEmpID, targetPhone, targetEmail, fmt.Sprintf("Pencairan Pinjaman #%d Berhasil - Kopkara EWA", app.ApplicationNo), waMsg, htmlMsg, db)
 
 	return nil
 }

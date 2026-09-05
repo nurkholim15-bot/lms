@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import * as XLSX from 'xlsx'
+import { Capacitor } from '@capacitor/core'
 import MobileEwaEnterpriseApp from './MobileEwaEnterpriseApp'
 
 const getApiBaseUrl = () => {
@@ -1018,6 +1019,109 @@ function App() {
   const [trackingModalOpen, setTrackingModalOpen] = useState(false);
   const [trackingList, setTrackingList] = useState([]);
   const [trackingAppNo, setTrackingAppNo] = useState(null);
+
+  // In-App Notification Hook & Polling
+  const [inAppNotifs, setInAppNotifs] = useState([]);
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+  const [showNotifPopover, setShowNotifPopover] = useState(false);
+
+  useEffect(() => {
+    if (currentUser) {
+
+      // Register Capacitor Android FCM Push Notifications if running in native app
+      const isNative = typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+      if (isNative) {
+        try {
+          const PushNotifications = window.Capacitor.Plugins ? window.Capacitor.Plugins['PushNotifications'] : null;
+          if (PushNotifications) {
+            // 1. Clear previous listeners to avoid duplicates
+            if (PushNotifications.removeAllListeners) {
+              PushNotifications.removeAllListeners();
+            }
+
+            // 2. Attach registration listener FIRST so no token event is missed
+            PushNotifications.addListener('registration', token => {
+              const empId = Number(currentUser?.employee_id || 0);
+              const memNo = Number(currentUser?.member_no || 0);
+              const uId = empId || memNo;
+              if (uId > 0 && token?.value) {
+                axios.post(`${getApiBaseUrl()}/api/device-token`, {
+                  user_id: uId,
+                  fcm_token: token.value,
+                  device_os: 'ANDROID'
+                });
+                if (memNo > 0 && empId > 0 && empId !== memNo) {
+                  axios.post(`${getApiBaseUrl()}/api/device-token`, {
+                    user_id: memNo,
+                    fcm_token: token.value,
+                    device_os: 'ANDROID'
+                  });
+                }
+              }
+            });
+
+            PushNotifications.addListener('registrationError', err => {
+              console.error('FCM Registration error:', err);
+            });
+
+            PushNotifications.addListener('pushNotificationReceived', notification => {
+              console.log('FCM Notification Received in Foreground:', notification);
+            });
+
+            PushNotifications.addListener('pushNotificationActionPerformed', notification => {
+              const actionUrl = notification.notification?.data?.action_url;
+              if (actionUrl) {
+                setActiveTab(actionUrl);
+              }
+            });
+
+            // 3. Create High Priority Android Channel for Banner Pop-Up & Sound
+            if (PushNotifications.createChannel) {
+              PushNotifications.createChannel({
+                id: 'fcm_default_channel',
+                name: 'Kopkara LMS Notifications',
+                description: 'Notifikasi Pencairan & Transaksi LMS',
+                importance: 5,
+                visibility: 1,
+                sound: 'default',
+                vibration: true
+              });
+            }
+
+            // 4. Request Permission & Trigger Native FCM Register
+            PushNotifications.requestPermissions().then(result => {
+              if (result.receive === 'granted') {
+                PushNotifications.register();
+              }
+            });
+          }
+        } catch (err) {
+          console.log("Capacitor PushNotifications init skipped:", err);
+        }
+      }
+    }
+  }, [currentUser]);
+
+  const markNotifRead = async (notif) => {
+    try {
+      await axios.put(`${getApiBaseUrl()}/api/notifications/${notif.id}/read`);
+      setInAppNotifs(prev => prev.map(n => n.id === notif.id ? { ...n, is_read: true } : n));
+      setUnreadNotifCount(prev => Math.max(0, prev - 1));
+      if (notif.action_url) {
+        setActiveTab(notif.action_url);
+        setShowNotifPopover(false);
+      }
+    } catch (err) {}
+  };
+
+  const markAllNotifsRead = async () => {
+    try {
+      const uId = currentUser?.employee_id || currentUser?.member_no || currentUser?.username || '';
+      await axios.put(`${getApiBaseUrl()}/api/notifications/read-all?user_id=${encodeURIComponent(uId)}`);
+      setInAppNotifs(prev => prev.map(n => ({ ...n, is_read: true })));
+      setUnreadNotifCount(0);
+    } catch (err) {}
+  };
   const [manualForm, setManualForm] = useState({
     loan_no: '',
     member_no: '',
@@ -1485,17 +1589,19 @@ function App() {
 
   const isReportTab = (tabPath) => {
     const p = String(tabPath || activeTab || '').toLowerCase();
+    if (p === 'pengajuan' || p === 'loan-application') return false;
     const title = String((visibleMenus || []).find(m => m.path === (tabPath || activeTab))?.title || '').toLowerCase();
     return p === 'report-loan-applications' || 
            p === 'report-applications' || 
            p === 'laporan-pengajuan-pinjaman' || 
            p === 'laporan-pengajuan' || 
-           p.includes('report-loan') || 
-           p.includes('laporan-pengajuan') || 
-           title.includes('laporan pengajuan');
+           p.includes('report-') || 
+           p.includes('laporan-') || 
+           title.includes('laporan');
   };
 
   const fetchApplications = async (targetYear, targetMonth, filterMemberNo, limit, offset) => {
+    if (activeTab === 'pengajuan' || activeTab === 'loan-application') return;
     try {
       const isReport = isReportTab();
       const yr = targetYear || (activeTab === 'disbursement' ? disbursementMonthFilter.year : (activeTab === 'pinjaman' ? loanMonthFilter.year : (isReport ? reportMonthFilter.year : approvalMonthFilter.year))) || '2026';
@@ -1573,15 +1679,23 @@ function App() {
       return () => clearTimeout(timer);
     }
 
-    if (activeTab === 'approval' || activeTab === 'disbursement' || activeTab === 'pengajuan' || isReportTab()) {
+    if (activeTab === 'approval' || activeTab === 'disbursement' || isReportTab()) {
       fetchApplications();
     }
 
     if (activeTab === 'pengajuan' || activeTab === 'master') {
       fetchProducts();
-      axios.get(`${getApiBaseUrl()}/api/members/all`)
-        .then(res => setAllMembers(res.data.data || []))
-        .catch(err => console.error("Error fetching all members:", err));
+      const isHighPrivUser = Boolean(
+        roleId === 1 || roleId === 3 || 
+        realRoleName?.toLowerCase() === 'admin' || 
+        realRoleName?.toLowerCase() === 'hrd' ||
+        currentUser?.role_id === 1 || currentUser?.role_id === 3
+      );
+      if (isHighPrivUser) {
+        axios.get(`${getApiBaseUrl()}/api/members/all`)
+          .then(res => setAllMembers(res.data.data || []))
+          .catch(err => console.error("Error fetching all members:", err));
+      }
     }
 
   }, [activeTab, currentUser?.username]);
@@ -3013,7 +3127,7 @@ function App() {
       localStorage.removeItem('karisma_token');
       localStorage.removeItem('ewa_token');
       // Fetch authenticated applications data ONLY when user session is valid
-      if (activeTab === 'approval' || activeTab === 'disbursement' || activeTab === 'pengajuan' || isReportTab()) {
+      if (activeTab === 'approval' || activeTab === 'disbursement' || isReportTab()) {
         fetchApplications();
       }
     } catch (err) {
@@ -3527,11 +3641,13 @@ function App() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
             {(() => {
               const displayName = userInfo?.name || currentUser?.name || 'User';
+
               return (
                 <>
                   <span style={{ fontWeight: 500, color: '#ffffff', fontSize: '0.85rem' }}>
                     {displayName} - <span style={{ textTransform: 'capitalize' }}>{realRoleName}</span>
                   </span>
+
                   <button
                     type="button"
                     onClick={() => handleLogout()}
@@ -3571,12 +3687,12 @@ function App() {
               {/* Header-2: Compact Shopee-style Horizontal Summary Bar (Fits 1 Screen) */}
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
+                gridTemplateColumns: 'repeat(2, 1fr)',
                 gap: '6px',
-                marginBottom: '12px',
                 background: 'white',
-                padding: '8px 10px',
                 borderRadius: '14px',
+                padding: '10px 12px',
+                marginBottom: '12px',
                 boxShadow: '0 2px 8px rgba(0,0,0,0.04)'
               }}>
                 <div style={{ borderRight: '1px solid #f1f5f9', paddingRight: '4px' }}>
@@ -3584,25 +3700,16 @@ function App() {
                     AVAILABLE LIMIT
                   </div>
                   <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#059669', marginTop: '2px', whiteSpace: 'nowrap' }}>
-                    Rp {dashboardSummary.available_limit ? dashboardSummary.available_limit.toLocaleString('id-ID') : '0'}
-                  </div>
-                </div>
-
-                <div style={{ borderRight: '1px solid #f1f5f9', paddingRight: '4px', paddingLeft: '4px' }}>
-                  <div style={{ fontSize: '0.6rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    TOTAL HUTANG
-                  </div>
-                  <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#dc2626', marginTop: '2px', whiteSpace: 'nowrap' }}>
-                    Rp {dashboardSummary.total_debt ? dashboardSummary.total_debt.toLocaleString('id-ID') : '0'}
+                    {Math.floor(dashboardSummary.available_limit || 0).toLocaleString('id-ID')}
                   </div>
                 </div>
 
                 <div style={{ paddingLeft: '4px' }}>
                   <div style={{ fontSize: '0.6rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    PINJAMAN AKTIF
+                    TOTAL HUTANG
                   </div>
-                  <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#2563eb', marginTop: '2px' }}>
-                    {dashboardSummary.active_loans || 0}
+                  <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#dc2626', marginTop: '2px', whiteSpace: 'nowrap' }}>
+                    {Math.floor(dashboardSummary.total_debt || 0).toLocaleString('id-ID')}
                   </div>
                 </div>
               </div>
@@ -3712,15 +3819,15 @@ function App() {
                   }}>
                     <div>
                       <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#475569', letterSpacing: '0.5px', textTransform: 'uppercase' }}>AVAILABLE LIMIT</div>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#059669', marginTop: '2px' }}>
-                        Rp {Math.round(dashboardSummary?.available_limit || 0).toLocaleString('id-ID')}
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#059669', marginTop: '2px', whiteSpace: 'nowrap' }}>
+                        {Math.floor(dashboardSummary?.available_limit || 0).toLocaleString('id-ID')}
                       </div>
                     </div>
                     <div style={{ width: '1px', height: '32px', background: '#cbd5e1' }} />
                     <div>
                       <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#475569', letterSpacing: '0.5px', textTransform: 'uppercase' }}>TOTAL HUTANG</div>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#dc2626', marginTop: '2px' }}>
-                        Rp {Math.round(dashboardSummary?.total_debt || 0).toLocaleString('id-ID')}
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#dc2626', marginTop: '2px', whiteSpace: 'nowrap' }}>
+                        {Math.floor(dashboardSummary?.total_debt || 0).toLocaleString('id-ID')}
                       </div>
                     </div>
                   </div>
@@ -3992,17 +4099,9 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {!hasSearchedLoans ? (
+                  {(!hasSearchedLoans || applications.length === 0) ? (
                     <tr>
-                      <td colSpan="7" style={{ textAlign: 'center', padding: '36px 16px', color: '#475569', fontSize: '0.9rem' }}>
-                        🔍 Silakan pilih periode & klik tombol <strong>"Cari Pinjaman"</strong> untuk menampilkan data.
-                      </td>
-                    </tr>
-                  ) : applications.length === 0 ? (
-                    <tr>
-                      <td colSpan="7" style={{ textAlign: 'center', padding: '24px 16px', color: '#dc2626', fontWeight: 600, backgroundColor: '#fef2f2', borderBottom: '1px solid #fecaca' }}>
-                        ⚠️ Data pinjaman tidak ditemukan (Periode {loanMonthFilter.year}-{loanMonthFilter.month})
-                      </td>
+                      <td colSpan="7" style={{ height: '40px' }}></td>
                     </tr>
                   ) : (
                     (() => {
@@ -4944,6 +5043,15 @@ function App() {
                       </button>
                     )}
 
+                    {/* Tombol Cetak PDF Laporan */}
+                    <button
+                      type="button"
+                      onClick={() => window.print()}
+                      style={{ padding: '8px 18px', background: '#0284c7', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      📄 Cetak PDF
+                    </button>
+
                     {/* Tombol ✕ Tutup (mengikuti BUTTON_CLOSED_BG dan font putih) */}
                     <button
                       type="button"
@@ -5223,7 +5331,8 @@ function App() {
                                   return (
                                     <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0', background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
                                       {masterTableKeys.map(k => {
-                                        const isSalaryField = k.toLowerCase() === 'salary' || k.toLowerCase() === 'max_limit' || k.toLowerCase().includes('nominal') || k.toLowerCase().includes('amount');
+                                        const isSalaryField = k.toLowerCase() === 'salary' || k.toLowerCase() === 'max_limit' || k.toLowerCase().includes('nominal') || k.toLowerCase().includes('amount') || k.toLowerCase().includes('balance');
+                                        const isDateField = k.toLowerCase().includes('date') || k.toLowerCase().includes('created_at') || k.toLowerCase().includes('updated_at');
                                         const rawVal = row[k];
                                         let formattedVal = (rawVal !== null && rawVal !== undefined && rawVal !== '') ? String(rawVal) : '-';
 
@@ -5262,6 +5371,8 @@ function App() {
                                           if (nType === 1) { bg = '#dbeafe'; fg = '#1e40af'; label = '📧 1 - Email'; }
                                           else if (nType === 2) { bg = '#d1fae5'; fg = '#065f46'; label = '💬 2 - WA'; }
                                           else if (nType === 3) { bg = '#f3e8ff'; fg = '#6b21a8'; label = '⚡ 3 - Email & WA'; }
+                                          else if (nType === 4) { bg = '#fef3c7'; fg = '#92400e'; label = '🔔 4 - In-App LMS'; }
+                                          else if (nType === 5) { bg = '#fce7f3'; fg = '#9d174d'; label = '🌟 5 - Full Multichannel'; }
                                           return (
                                             <td key={k} style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>
                                               <span style={{ background: bg, color: fg, padding: '3px 10px', borderRadius: '12px', fontWeight: 700, fontSize: '0.75rem' }}>
@@ -5318,6 +5429,18 @@ function App() {
 
                                         if (typeof rawVal === 'boolean') {
                                           formattedVal = rawVal ? 'Ya' : 'Tidak';
+                                        } else if (isDateField && rawVal && String(rawVal).length > 5) {
+                                          const d = new Date(rawVal);
+                                          if (!isNaN(d.getTime())) {
+                                            const day = String(d.getDate()).padStart(2, '0');
+                                            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agt', 'Sep', 'Okt', 'Nov', 'Des'];
+                                            const month = months[d.getMonth()];
+                                            const year = d.getFullYear();
+                                            const hours = String(d.getHours()).padStart(2, '0');
+                                            const mins = String(d.getMinutes()).padStart(2, '0');
+                                            const secs = String(d.getSeconds()).padStart(2, '0');
+                                            formattedVal = `${day}-${month}-${year} ${hours}:${mins}:${secs}`;
+                                          }
                                         } else if (isSalaryField && rawVal !== null && rawVal !== undefined && rawVal !== '') {
                                           const num = Number(rawVal);
                                           formattedVal = !isNaN(num) ? `Rp ${Math.round(num).toLocaleString('id-ID')}` : String(rawVal);
@@ -5536,7 +5659,9 @@ function App() {
                               {val: 0, label: '0 - Tidak Kirim Notifikasi (OFF)'},
                               {val: 1, label: '1 - Kirim Email Saja'},
                               {val: 2, label: '2 - Kirim WhatsApp Saja'},
-                              {val: 3, label: '3 - Kirim Email & WhatsApp (Keduanya)'}
+                              {val: 3, label: '3 - Kirim Email & WhatsApp'},
+                              {val: 4, label: '4 - Kirim In-App LMS Saja (Lonceng & Mobile)'},
+                              {val: 5, label: '5 - Kirim Semua Channel (Email, WA & In-App LMS)'}
                             ]}
                           ];
                           else if (masterTab === 'role-menus') fields = [
